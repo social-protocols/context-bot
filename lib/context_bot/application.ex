@@ -10,8 +10,6 @@ defmodule ContextBot.Application do
     children = [
       ContextBotWeb.Telemetry,
       ContextBot.Repo,
-      {Ecto.Migrator,
-       repos: Application.fetch_env!(:context_bot, :ecto_repos), skip: skip_migrations?()},
       {DNSCluster, query: Application.get_env(:context_bot, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: ContextBot.PubSub},
       # Start a worker by calling: ContextBot.Worker.start_link(arg)
@@ -32,10 +30,5 @@ defmodule ContextBot.Application do
   def config_change(changed, _new, removed) do
     ContextBotWeb.Endpoint.config_change(changed, removed)
     :ok
-  end
-
-  defp skip_migrations? do
-    # By default, sqlite migrations are run when using a release
-    System.get_env("RELEASE_NAME") == nil
   end
 end

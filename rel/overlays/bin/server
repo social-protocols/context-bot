@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+/app/bin/migrate
+PHX_SERVER=true exec /app/bin/context_bot start
