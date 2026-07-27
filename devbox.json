@@ -1,0 +1,28 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/main/.schema/devbox.schema.json",
+  "packages": {
+    "github:NixOS/nixpkgs/nixpkgs-unstable#beam28Packages.elixir_1_20": {
+      "disable_plugin": true
+    },
+    "github:NixOS/nixpkgs/nixpkgs-unstable#beam28Packages.erlang": {},
+    "sqlite": "latest",
+    "just": "latest",
+    "flyctl": "latest",
+    "bitwarden-cli": "latest",
+    "docker-client": "latest",
+    "git": "latest",
+    "jq": "latest",
+    "curl": "latest",
+    "shellcheck": "latest",
+    "shfmt": "latest"
+  },
+  "shell": {
+    "init_hook": [
+      "export SSL_CERT_FILE=\"${NIX_SSL_CERT_FILE}\"",
+      "export HEX_CACERTS_PATH=\"${NIX_SSL_CERT_FILE}\"",
+      "mix local.hex --if-missing --force",
+      "mix local.rebar --if-missing --force",
+      "if [ -f mix.exs ]; then mix deps.get; fi"
+    ]
+  }
+}
