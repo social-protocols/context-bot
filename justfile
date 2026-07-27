@@ -24,20 +24,20 @@ test path="":
       mix test "{{path}}"
     else
       mix test
-      # Task 4: bash test/secrets_test.sh
+      bash test/secrets_test.sh
     fi
 
 format:
     mix format
-    # Task 4: shfmt -w secrets.sh test/secrets_test.sh
+    shfmt -w secrets.sh test/secrets_test.sh
 
 format-check:
     mix format --check-formatted
-    # Task 4: shfmt -d secrets.sh test/secrets_test.sh
+    shfmt -d secrets.sh test/secrets_test.sh
 
 lint:
     mix credo --strict
-    # Task 4: shellcheck secrets.sh test/secrets_test.sh
+    shellcheck secrets.sh test/secrets_test.sh
 
 typecheck:
     mix dialyzer
