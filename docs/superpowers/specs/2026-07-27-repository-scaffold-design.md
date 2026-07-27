@@ -46,7 +46,8 @@ The entire `data/` directory is ignored by Git.
 - `just`
 - `flyctl`
 - `bitwarden-cli@latest`
-- Git, `jq`, `curl`, and `shellcheck`
+- Docker CLI
+- Git, `jq`, `curl`, `shellcheck`, and `shfmt`
 
 The Devbox shell installs Hex and Rebar non-interactively and fetches the dependencies from `mix.lock`. These operations are idempotent, so entering an existing environment is fast.
 
@@ -56,7 +57,7 @@ The Devbox shell installs Hex and Rebar non-interactively and fetches the depend
 direnv exec . just check
 ```
 
-No development command should depend on globally installed Elixir, Erlang, SQLite, Fly, or Bitwarden tools.
+No development command should depend on globally installed Elixir, Erlang, SQLite, Fly, Bitwarden, or Docker client tools. A host Docker daemon is still required for local image builds.
 
 ## Command Interface
 
@@ -104,8 +105,8 @@ The deployment uses a conventional multi-stage Docker build:
 
 1. A Hex Elixir/Erlang Debian image installs build dependencies and creates an OTP release.
 2. A minimal Debian runtime image contains the release and SQLite runtime libraries.
-3. The release runs as an unprivileged user.
-4. A release command runs Ecto migrations before the application update.
+3. A small entrypoint ensures the mounted `/data` directory is writable, then drops from root to the unprivileged release user.
+4. The server wrapper runs Ecto migrations after the volume is mounted and before Phoenix starts. With one MVP Machine, migrations are serialized by construction.
 
 `fly.toml` defines:
 
@@ -116,6 +117,8 @@ The deployment uses a conventional multi-stage Docker build:
 - A volume named `context_bot_data` mounted at `/data`, with 14-day snapshot retention.
 - A `GET /health` service check.
 - One shared-CPU, 1 GB Machine for the MVP.
+
+The Fly configuration does not use `release_command` for SQLite migrations. A Fly release command runs in a temporary Machine rather than the already-mounted application Machine, so it is not the durability boundary for the volume-backed database.
 
 The README makes the single-volume tradeoff explicit: Fly volumes are local to one host and do not provide built-in replication. ATProto publication is the long-term durability boundary; SQLite only protects work that has not completed that publication flow.
 
