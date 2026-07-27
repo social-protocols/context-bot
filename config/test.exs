@@ -1,14 +1,17 @@
 import Config
 
+partition = System.get_env("MIX_TEST_PARTITION")
+database_name = "context_bot_test#{partition}.db"
+
 # Configure your database
 #
 # The MIX_TEST_PARTITION environment variable can be used
 # to provide built-in test partitioning in CI environment.
 # Run `mix help test` for more information.
 config :context_bot, ContextBot.Repo,
-  database: Path.expand("../context_bot_test.db", __DIR__),
-  pool_size: 5,
-  pool: Ecto.Adapters.SQL.Sandbox
+  database: Path.expand("../data/#{database_name}", __DIR__),
+  pool: Ecto.Adapters.SQL.Sandbox,
+  pool_size: System.schedulers_online() * 2
 
 # We don't run a server during test. If one is required,
 # you can enable the server option below.

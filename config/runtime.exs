@@ -26,10 +26,7 @@ config :context_bot, ContextBotWeb.Endpoint,
 if config_env() == :prod do
   database_path =
     System.get_env("DATABASE_PATH") ||
-      raise """
-      environment variable DATABASE_PATH is missing.
-      For example: /etc/context_bot/context_bot.db
-      """
+      raise "environment variable DATABASE_PATH is missing"
 
   config :context_bot, ContextBot.Repo,
     database: database_path,
