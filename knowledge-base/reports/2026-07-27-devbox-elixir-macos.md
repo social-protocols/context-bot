@@ -1,6 +1,6 @@
 # Devbox Elixir setup on macOS
 
-**Date:** 2026-07-27  
+**Date:** 2026-07-27
 **TL;DR:** Devbox 0.16's built-in Elixir plugin referenced a removed macOS Nix attribute. Using explicit nixpkgs flake packages with the plugin disabled resolved Elixir/OTP, and exporting Nix's CA bundle fixed Erlang HTTPS discovery.
 
 ## Context
