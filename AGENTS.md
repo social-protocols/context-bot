@@ -2,6 +2,8 @@
 
 Guidance for any coding agent (Claude Code, Codex, Cursor, etc.) working in this repository. `CLAUDE.md` points here.
 
+Always-on context: see `knowledge-base/learnings.md` for distilled facts and constraints from prior investigations.
+
 ## Project scope
 
 Context Bot is an on-demand Bluesky / ATProto context bot. A user directly mentions it in a public thread and asks for context; the eventual bot retrieves the thread, requests Claude analysis with server-side research, publishes an ATProto audit trail, and replies concisely.
