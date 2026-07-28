@@ -49,7 +49,7 @@ The service listens on `http://localhost:4000`; `GET /health` returns `{"status"
 
 Development uses the ignored `data/context_bot_dev.db`; tests create partition-aware files under `data/`; Fly uses `/data/context_bot.db` on `context_bot_data`.
 
-SQLite is operational state and a future outbox/cache. It is not the intended canonical audit trail. Successfully published ATProto records are expected to become the source of truth.
+The approved MVP design stores exact intended ATProto records and blobs in SQLite with their locally calculated CIDs, then asynchronously converges that state to the bot's PDS. Setting `SYNC_TO_ATPROTO=false` will retain the complete intended graph without publishing records/blobs or mutating profile, reply, or notification-seen state. This behavior is designed but not implemented yet; see [`docs/superpowers/specs/2026-07-27-context-bot-mvp-design.md`](docs/superpowers/specs/2026-07-27-context-bot-mvp-design.md).
 
 ## Deployment
 

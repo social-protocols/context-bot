@@ -58,7 +58,7 @@ Run `direnv exec . just check` before any completion claim. For release or deplo
 
 This is one Phoenix API application, not an umbrella. `ContextBot.Application` owns the standard OTP tree; `ContextBot.Repo` uses Ecto/SQLite; `ContextBotWeb.Endpoint` exposes the API; `GET /health` is the only initial route.
 
-Development and test databases live under ignored `data/`; Fly mounts `/data/context_bot.db`. SQLite is operational outbox/cache state, not the intended canonical ATProto audit store. No bot-specific domain modules or database tables exist yet.
+Development and test databases live under ignored `data/`; Fly mounts `/data/context_bot.db`. The approved MVP design stores exact intended ATProto records and blobs in SQLite with locally calculated CIDs, then asynchronously converges that state to the bot's PDS. No bot-specific modules or database tables are implemented yet; follow `docs/superpowers/specs/2026-07-27-context-bot-mvp-design.md` without inventing additional domain boundaries.
 
 ## Testing guidance
 
