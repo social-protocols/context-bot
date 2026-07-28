@@ -7,3 +7,5 @@ One-sentence facts and constraints distilled from investigations in this repo. L
 - Anthropic prompt caching requires an identical tools/system/messages prefix; keep optional length repair append-only and treat cache hits only as an optimization. ([reports/2026-07-27-audit-protocol-constraints.md](reports/2026-07-27-audit-protocol-constraints.md))
 - Local ATProto CIDs prove content identity; only PDS inclusion authenticates repository state. ([reports/2026-07-27-audit-protocol-constraints.md](reports/2026-07-27-audit-protocol-constraints.md))
 - IPFS adds no durability without operated or paid pins and gateways. ([reports/2026-07-27-audit-protocol-constraints.md](reports/2026-07-27-audit-protocol-constraints.md))
+- Request Skywatch labels from direct `api.bsky.app` and require its labeler-confirmation response header. ([reports/2026-07-28-live-eligibility-signals.md](reports/2026-07-28-live-eligibility-signals.md))
+- Trust `bsky.team` only after bidirectional handle/DID verification; forward resolution can be stale. ([reports/2026-07-28-live-eligibility-signals.md](reports/2026-07-28-live-eligibility-signals.md))
