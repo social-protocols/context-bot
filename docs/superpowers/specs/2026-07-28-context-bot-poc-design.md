@@ -66,13 +66,13 @@ One `invocations` table stores the operational workflow state:
 - bounded raw thread JSON;
 - versioned canonical ancestor text;
 - complete accumulated Anthropic Messages conversation needed for continuation or repair;
-- primary and optional repair response JSON;
+- the complete raw JSON response body for every Anthropic request, in order, including research, `pause_turn` continuations, retries that return a response, and optional length repair;
 - selected reply text and validation outcome;
 - preallocated reply rkey and exact `app.bsky.feed.post` record JSON;
 - published reply AT URI and CID;
 - last categorized failure and relevant timestamps.
 
-Large unbounded provider artifacts are not retained. Stored JSON and text fields have application size limits. Credentials, authorization headers, app passwords, API keys, access tokens, and refresh tokens never enter this table.
+Every Anthropic response accepted by the HTTP client is retained in full without truncation. The SQLite JSON/text storage limit is a defense-in-depth bound configured strictly above the maximum permitted Anthropic HTTP response size, so a response cannot pass the network boundary and then fail because its complete body is too large to persist. A response that exceeds the HTTP limit fails the research attempt before parsing and never produces a reply. Credentials, authorization headers, app passwords, API keys, access tokens, and refresh tokens never enter this table.
 
 Statuses are explicit and extensible. The POC needs at least `received`, `deferred_capacity`, `checking_eligibility`, `ineligible`, `deferred_rate`, `capturing_thread`, `thread_ready`, `deferred_budget`, `researching`, `reply_ready`, `publishing`, `complete`, and `failed`.
 
@@ -157,7 +157,7 @@ After a normal `end_turn`, concatenate the final model-authored text blocks in o
 
 If a normally completed primary result contains text but fails only the reply-shape or length checks, make at most one length-repair request. Preserve the byte-identical tools, system prompt, settings, and complete prior Messages conversation, then append a user instruction to return only a compliant reply without additional research. This preserves prompt-cache eligibility. Any repair tool use, empty result, refusal, truncation, or invalid length fails the research stage. The renderer never truncates a model-authored claim.
 
-The complete conversation needed for retries and repair, returned usage, primary response, optional repair response, and final selected text are stored locally for operations. They are not published or exposed through a web route.
+The complete conversation needed for retries and repair, every full raw Anthropic response body, returned usage, and final selected text are stored locally for operations. Provider responses are never silently shortened, summarized, or replaced by a parsed projection. They are not published or exposed through a web route.
 
 ### 5. Daily Anthropic budget
 
@@ -202,6 +202,7 @@ Non-secret configuration includes:
 - `MENTION_POLL_INTERVAL_MS`, notification page limit, and `THREAD_PARENT_HEIGHT`;
 - `ANTHROPIC_MODEL_ID`, research and repair token caps;
 - Anthropic web-search and web-fetch tool versions and use limits;
+- maximum Anthropic HTTP response bytes and a strictly larger SQLite provider-response storage limit;
 - `ELIGIBILITY_SKYWATCH_DID`, defaulting to the pinned reviewed DID;
 - the direct AppView URL and exact Elder label value;
 - operator-allowed DIDs;
@@ -227,6 +228,7 @@ Pure and persistence tests cover:
 - ancestor-only ordering, placeholders, and truncation markers;
 - stage handoff only after the prior result commits;
 - primary reply validation, Unicode edge cases, one repair attempt, and no claim truncation;
+- full retention of primary, continuation, retry, and repair response bodies up to the HTTP boundary;
 - reply root/parent strong references and deterministic rkeys;
 - restart recovery from every committed stage.
 
@@ -259,6 +261,7 @@ The POC is complete when:
 - Claude can use server-side web search and fetch before producing the reply;
 - the thread snapshot commits before research starts, and the chosen reply record commits before publication starts;
 - the primary path uses one Claude research conversation and invokes length repair only for an invalid primary result;
+- every Anthropic response accepted by the HTTP client is retained locally in full without truncation;
 - every published reply fits 300 grapheme clusters and 3,000 UTF-8 bytes without deterministic claim truncation;
 - URI/CID uniqueness and deterministic reply rkeys prevent duplicates across repeated polling, retries, ambiguous writes, and restarts;
 - only operator-allowlisted, active Skywatch Elder, or bidirectionally verified `bsky.team` actors pass eligibility;
