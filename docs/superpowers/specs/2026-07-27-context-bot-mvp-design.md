@@ -14,8 +14,9 @@ The MVP is reactive only. It does not proactively scan, moderate, label, rank, o
 - Poll direct-mention notifications for MVP. Do not consume the firehose or Jetstream.
 - Capture only the invocation post and its rootward ancestor chain. Do not fetch or include direct replies to the invocation post. This is an explicit product-scope decision: ancestors are the conversation visible before the question, while descendants are later reactions that can change after the bot is invoked.
 - Use Claude's server-side `web_search` and `web_fetch` tools. Do not build a custom search crawler or client-side research loop.
-- Use two Claude invocations: a citation-bearing research invocation and a schema-constrained structuring invocation.
-- Render the Bluesky reply deterministically from the structured result. Do not use a third model invocation for compression.
+- Normally use one Claude invocation for cited research and a delimited Bluesky-reply candidate. Make one conditional length-repair invocation only when that candidate is absent, malformed, or over budget.
+- Reserve the audit-link suffix before prompting. Give Claude the remaining Unicode-grapheme budget as `N`, then render and validate the complete post deterministically.
+- Enable Anthropic automatic prompt caching for research, provider continuations, and conditional length repair. Cache hits are an optimization, never a correctness dependency.
 - Treat exact ATProto records and blobs as the canonical audit objects. Store their intended state, canonical bytes, AT URIs, and locally calculated CIDs in SQLite before attempting PDS publication.
 - Treat PDS publication as asynchronous convergence of that intended ATProto state. A locally committed object with its final CID exists in the bot's content-addressed intended-object store even if it has not reached the PDS yet.
 - Use a single `SYNC_TO_ATPROTO` switch rather than a separate dry-run model. When disabled, authentication, reads, and Claude calls continue while outgoing records/blobs remain durably queued and no profile, reply, or notification-seen mutation is sent.
@@ -31,11 +32,12 @@ The MVP is reactive only. It does not proactively scan, moderate, label, rank, o
 5. Fetch a bounded thread view for the invocation with replies disabled and an explicit parent-height limit.
 6. Canonicalize the available ancestor path and invocation into the exact model input snapshot.
 7. Invoke Claude once for cited web research, preserving the complete raw request, response, server-tool transcript, citations, usage, and attempt metadata.
-8. Convert the first response into a deterministic evidence envelope and invoke Claude a second time for schema-constrained structured output.
-9. Deterministically render a Bluesky reply containing a compact audit URL and validate its grapheme and byte limits.
-10. Construct every prompt, snapshot, invocation, transcript, output, reply, run, publication, and Bluesky-post record locally. Calculate all blob and record CIDs before any ATProto mutation.
-11. Commit the complete intended object graph and its dependency edges to SQLite.
-12. If `SYNC_TO_ATPROTO=true`, asynchronously upload blobs and create records in topological order. If it is false, retain the graph unchanged until synchronization is enabled.
+8. Extract and validate the delimited Bluesky-reply candidate at the end of the research response.
+9. If the candidate is missing, malformed, or over budget, append the complete response verbatim and invoke Claude once more only to produce a reply within the supplied budget.
+10. Deterministically append the compact audit-link suffix and validate the complete reply's grapheme and byte limits.
+11. Construct every prompt, snapshot, invocation, transcript, output, reply, run, publication, and Bluesky-post record locally. Calculate all blob and record CIDs before any ATProto mutation.
+12. Commit the complete intended object graph and its dependency edges to SQLite.
+13. If `SYNC_TO_ATPROTO=true`, asynchronously upload blobs and create records in topological order. If it is false, retain the graph unchanged until synchronization is enabled.
 
 The audit page becomes available as soon as the intended graph is committed locally. It does not wait for PDS convergence.
 
@@ -68,7 +70,7 @@ For each available post, preserve the AT URI, CID, author DID and handle as obse
 
 Embeds may be described textually from available metadata, but the bot does not inspect image, audio, or video content in MVP. If the question depends on unsupported media and public text sources cannot resolve it, the answer says so.
 
-## Claude Research and Structuring
+## Claude Research and Reply Generation
 
 ### Pinned API contract
 
@@ -79,7 +81,7 @@ Use the direct Anthropic Messages API with:
 - `web_search_20260318`, configurable through `ANTHROPIC_WEB_SEARCH_TOOL_VERSION`;
 - `web_fetch_20260318`, configurable through `ANTHROPIC_WEB_FETCH_TOOL_VERSION`.
 
-Leave temperature, `top_p`, and `top_k` unset. Sonnet 5 rejects non-default sampling parameters; prompt instructions and schema validation provide the desired consistency without claiming deterministic replay.
+Leave temperature, `top_p`, and `top_k` unset. Sonnet 5 rejects non-default sampling parameters. Prompt instructions, strict local validation, and a bounded repair path provide the desired consistency without claiming deterministic replay.
 
 ### Research invocation
 
@@ -93,36 +95,36 @@ The first invocation uses:
 - full response inclusion;
 - citations enabled;
 - fetch cache bypassed;
+- Anthropic automatic prompt caching with the default five-minute TTL;
 - explicit per-run search, fetch, continuation, token, and response-size limits.
 
 The raw first response is the authoritative provider transcript. Preserve ordered content blocks, opaque thinking signatures, encrypted tool content, server-tool uses and results, citations, errors, request IDs, stop reasons, container details, and usage. The system must not claim to expose hidden chain-of-thought.
 
-If Anthropic returns `pause_turn`, append the complete assistant content unchanged and continue with the same model, prompts, and tool configuration. Enforce aggregate run budgets across continuations because provider `max_uses` limits apply per HTTP request.
+If Anthropic returns `pause_turn`, append the complete assistant content unchanged and continue with the same model, prompts, and tool configuration. Enforce aggregate run budgets across continuations because provider `max_uses` limits apply per HTTP request. These provider continuations are part of the primary research invocation and do not consume the one optional length-repair invocation.
 
-### Structuring invocation
+The prompt asks for ordinary cited research prose followed by exactly one terminal sentinel block:
 
-Citation-enabled web search cannot be combined with strict JSON Schema output in one invocation. Therefore, transform the research response into a deterministic evidence envelope containing:
+```text
+BEGIN_BLUESKY_REPLY
+candidate text
+END_BLUESKY_REPLY
+```
 
-- final cited prose;
-- stable local source IDs;
-- cited URLs, titles, and cited text;
-- tool errors and limitations.
+The marker lines are not part of the candidate and are never posted. The candidate excludes the audit-link suffix. Before the invocation, the renderer calculates `N` as 300 minus the grapheme length of the exact separator and visible audit-link suffix. The prompt supplies `N` and asks Claude to keep the candidate within it.
 
-The second invocation has no web tools or citation-enabled blocks. It uses low effort, disabled thinking, and a versioned JSON Schema with all expected fields required and additional properties forbidden.
+The extractor accepts a candidate only when there is exactly one ordered begin/end marker pair, the block is terminal except for trailing whitespace, the enclosed text is nonempty, neither marker is nested or duplicated, and no marker text remains in the candidate. The candidate must be plain text suitable for a Bluesky post. The validator then requires it to use at most `N` Unicode grapheme clusters and the complete rendered post to use at most 300 grapheme clusters and 3,000 UTF-8 bytes. The ordinary research prose remains the visible, cited audit explanation; no rigid result schema is required.
 
-The structured result contains:
+### Conditional length-repair invocation
 
-- `question_interpreted`;
-- `claim_or_issue_checked`;
-- `short_answer`;
-- `key_context`;
-- `evidence_summary`;
-- `caveats_or_uncertainty`;
-- `sources_used` with source IDs;
-- `what_would_change_this_answer`;
-- `suggested_bluesky_reply`.
+If the primary candidate fails extraction or validation, make at most one length-repair invocation. Resend the complete accumulated Messages conversation, including every assistant content block verbatim, and append one final user message directing Claude to return only a Bluesky reply of at most `N` grapheme clusters, without additional research. Use the same model, tools, system prompt, thinking mode, effort, cache settings, and other cache-affecting configuration as the primary request. Keeping the tools present is necessary for cache eligibility even though the repair instruction forbids using them. Any tool use in the repair response invalidates the candidate and is preserved in the audit.
 
-Every returned source ID must resolve to evidence from the first invocation. Refusal, truncation, unknown blocks, malformed output, and context-window exhaustion are explicit outcomes rather than parser crashes.
+The repair response must contain only the candidate text; it does not use sentinel markers or a JSON schema. Apply the same grapheme and full-post byte validation. If it still fails, deterministically render a short failure notice plus the audit link rather than truncating a model claim. Refusal, truncation, unknown blocks, malformed output, context-window exhaustion, and unexpected tool use are explicit outcomes rather than parser crashes.
+
+### Prompt caching
+
+Set top-level `cache_control` on every research, `pause_turn` continuation, and optional length-repair request. Anthropic matches the cache prefix in tools, system, then messages order, so all reused content and request-affecting settings must remain byte-identical and the conversation must grow append-only. Server-tool results receive automatic five-minute cache breakpoints when prompt caching is enabled.
+
+For each response, record `cache_read_input_tokens`, `cache_creation_input_tokens`, the available per-TTL cache-creation breakdown, and whether the length-repair request obtained a cache read. A miss changes cost and latency but never the parsing, validation, retry, or failure behavior.
 
 ### Prompt behavior
 
@@ -140,7 +142,7 @@ The initial system prompt is inspired by the public Ask Grok prompt but is writt
 - assume good intent when ambiguous, but refuse clear requests that would materially facilitate severe harm while still offering safe factual context where appropriate;
 - say plainly when the invocation contains no identifiable checkable claim or useful context question;
 - acknowledge unsupported media analysis;
-- produce visible structured analysis rather than hidden reasoning.
+- produce a visible research explanation and concise reply candidate rather than hidden reasoning.
 
 All prompts have semantic versions, stable hashes, and prompt records referenced by the associated model invocation records.
 
@@ -161,7 +163,7 @@ Explicit `429`, `500`, `504`, `529`, and overload responses use capped exponenti
 
 An ambiguous POST timeout may have consumed provider work. It is recorded as an indeterminate attempt and may be retried at most once under the configured policy; both attempts remain in the audit. No request is represented as deterministic or exactly-once.
 
-If research or structuring ultimately fails, construct a failed run and a short failure reply where enough audit material exists. The reply remains dependent on successful synchronization of the failed-run manifest. If the complete public audit cannot be constructed within storage limits, retain the local failure state and do not enqueue a public reply.
+If research or optional length repair ultimately fails, construct a failed run and a short deterministic failure reply where enough audit material exists. The reply remains dependent on successful synchronization of the failed-run manifest. If the complete public audit cannot be constructed within storage limits, retain the local failure state and do not enqueue a public reply.
 
 ## Canonical Intended ATProto Object Store
 
@@ -228,10 +230,10 @@ The core contents are:
 |---|---|
 | `prompt` | Prompt kind, semantic version, inline text or document manifest, decoded SHA-256, and creation time. |
 | `threadSnapshot` | Invocation and root strong references, ordered ancestor strong references, unavailable placeholders, canonical text document, bounded original response document, fetch parameters, canonicalization version, fetch time, and creation time. There are no descendant-reply fields in MVP. |
-| `modelInvocation` | Invocation kind (`research` or `structuring`), provider, pinned model, public request-projection document, full internal request digest, prompt strong references, thread-snapshot strong reference, tool configuration, parameter name/value pairs, redaction-policy version, and request time. The structuring invocation also references the research output used to derive its evidence envelope. |
-| `toolTranscript` | Research-invocation strong reference, parsed public transcript-projection document, search/fetch/citation summaries, content digests, tool failures, policy version, and creation time. The complete redacted Anthropic response remains authoritative in restricted local storage. |
-| `modelOutput` | Invocation strong reference, output kind, public response-projection document, full internal response digest, visible answer or structured-analysis document, source summaries, limitations, stop reason, and creation time. Each Claude invocation has its own output record. |
-| `renderedReply` | Structured-output strong reference, deterministic renderer name/version, final text, grapheme count, UTF-8 byte count, audit URL, and creation time. |
+| `modelInvocation` | Invocation kind (`research` or `lengthRepair`), provider, pinned model, public request-projection document, full internal request digest, prompt strong references, thread-snapshot strong reference, tool and cache configuration, parameter name/value pairs, redaction-policy version, and request time. An optional length-repair invocation also references the primary research output whose candidate failed validation. |
+| `toolTranscript` | Invocation strong reference, parsed public transcript-projection document, search/fetch/citation summaries, content digests, tool failures, policy version, and creation time. There is one for the research invocation and, only if the repair unexpectedly uses a tool, one for the repair invocation. The complete redacted Anthropic responses remain authoritative in restricted local storage. |
+| `modelOutput` | Invocation strong reference, output kind (`research` or `lengthRepair`), public response-projection document, full internal response digest, visible provider text, extracted candidate and validation outcome, source summaries, cache usage, limitations, stop reason, and creation time. There is always one primary output and at most one repair output. |
+| `renderedReply` | Chosen model-output strong reference, deterministic renderer name/version, final text, grapheme count, UTF-8 byte count, audit URL, and creation time. |
 | `run` | Status, invocation-post strong reference, all prompt/snapshot/invocation/transcript/output/reply strong references available for that status, start/completion times, optional failure document, and optional `supersedes` strong reference. |
 | `publication` | Run strong reference, Bluesky reply-post strong reference, and creation time. |
 
@@ -244,17 +246,21 @@ The graph is:
 ```text
 prompts       threadSnapshot
    \              /
-    modelInvocation (research)
-        |              \
- toolTranscript     modelOutput (research)
-        \              /
-    modelInvocation (structuring)
-                |
-       modelOutput (structured)
-                |
-        renderedReply
-                |
-               run
+    modelInvocation (research) ---- toolTranscript
+                 |
+       modelOutput (research)
+                 |
+          candidate valid?
+             /       \
+           yes        no
+            |          |
+            |    modelInvocation (lengthRepair)
+            |          |
+            |    modelOutput (lengthRepair)
+            \          /
+             renderedReply
+                  |
+                 run <---- toolTranscript(s)
 
 run --sync prerequisite--> reply post
 
@@ -273,7 +279,7 @@ Custom Lexicon documents live in the repository and are validated locally. They 
 
 ## Large Audit Documents
 
-Public request/response projections, canonical thread text, parsed public tool transcripts, and long structured outputs use a shared ATProto document manifest rather than large inline strings. Complete internal provider artifacts use the same deterministic serialization, digest, compression, and chunking rules in restricted local storage but are not automatically queued for public synchronization.
+Public request/response projections, canonical thread text, parsed public tool transcripts, and long model outputs use a shared ATProto document manifest rather than large inline strings. Complete internal provider artifacts use the same deterministic serialization, digest, compression, and chunking rules in restricted local storage but are not automatically queued for public synchronization.
 
 The manifest contains:
 
@@ -296,7 +302,7 @@ The complete redacted Anthropic request and response transcript is retained in r
 The public projection preserves:
 
 - every message, content-block type, tool invocation, tool outcome, stop reason, retry, usage field, and provider request ID;
-- complete model-authored visible text and structured output;
+- complete model-authored visible text, extracted candidates, and validation outcomes;
 - search queries, result URLs/titles/page ages, citations, and returned citation excerpts;
 - fetch URLs, titles, retrieval times, citation locations, content sizes, MIME types, and SHA-256 hashes;
 - explicit placeholders describing every redaction or omitted payload.
@@ -359,7 +365,7 @@ Temporary PDS failures retry indefinitely with bounded exponential backoff. Perm
 
 ## Reply Construction
 
-The reply is derived deterministically from the structured Claude output and includes a compact HTTPS audit link. It is not forced into a fixed true/false taxonomy. Appropriate forms include qualified support, lack of evidence, missing context, mixed evidence, and non-checkable value judgments.
+The reply is derived deterministically from the valid primary candidate or, only when needed, the valid length-repair output. It includes the exact reserved separator and compact HTTPS audit-link suffix. It is not forced into a fixed true/false taxonomy. Appropriate forms include qualified support, lack of evidence, missing context, mixed evidence, and non-checkable value judgments.
 
 Before local insertion, enforce both Bluesky limits:
 
@@ -375,6 +381,8 @@ Elixir's `String.length/1` and `String.slice/3` provide grapheme-safe counting a
 
 Renderer tests cover combining marks, zero-width-joiner emoji, skin tones, flags, non-Latin scripts, and multibyte characters immediately before the link facet.
 
+The renderer never truncates a model-authored factual claim to make it fit. It either uses a fully valid candidate or emits the versioned deterministic failure notice. This keeps the meaning of the published answer attributable to a complete model output.
+
 ## Public Audit Viewer
 
 Phoenix serves minimal server-rendered pages; LiveView is unnecessary. The primary route is a stable audit URL based on the run rkey, with additional raw-artifact download routes.
@@ -389,10 +397,10 @@ The page shows:
 - original invocation and ancestor-only thread snapshot;
 - prompt versions and full prompt text;
 - provider, pinned model ID, and request parameters;
-- both Claude invocations;
-- visible long research answer and structured analysis;
+- the primary Claude invocation and optional length-repair invocation;
+- visible long research answer, extracted candidates, and validation results;
 - web-search and web-fetch transcript returned by Anthropic;
-- citations, tool failures, limitations, and what could change the answer;
+- citations, tool failures, limitations, and stated uncertainty;
 - raw redacted requests, responses, and derived artifacts;
 - AT URIs, CIDs, strong references, blob manifests, and synchronization state.
 
@@ -411,7 +419,7 @@ Expected non-secret configuration includes:
 - `THREAD_PARENT_HEIGHT`;
 - `ANTHROPIC_MODEL_ID`;
 - `ANTHROPIC_RESEARCH_MAX_TOKENS`;
-- `ANTHROPIC_STRUCTURING_MAX_TOKENS`;
+- `ANTHROPIC_LENGTH_REPAIR_MAX_TOKENS`;
 - `ANTHROPIC_WEB_SEARCH_TOOL_VERSION`;
 - `ANTHROPIC_WEB_FETCH_TOOL_VERSION`;
 - `MAX_WEB_SEARCH_USES`;
@@ -438,8 +446,8 @@ The application uses explicit protocol ports and adapters without promoting them
 - narrow project-owned XRPC builders and parsers for only the required endpoints;
 - a supervised ATProto session process;
 - Oban with `Oban.Engines.Lite` for durable SQLite jobs;
-- pure thread canonicalization, record construction, CID calculation, evidence-envelope, and reply-rendering functions;
-- JSON Schema validation for the structured Claude response;
+- pure thread canonicalization, record construction, CID calculation, candidate extraction, and reply-rendering functions;
+- strict local validation for primary and length-repair reply candidates;
 - structured JSON logging with an application redaction boundary;
 - `Req.Test` for wire-level HTTP contracts and Mox for semantic adapter behavior.
 
@@ -459,7 +467,11 @@ Pure tests cover:
 - blocked, unavailable, truncated, and unknown thread variants;
 - deterministic gzip, chunking, DAG-CBOR, local record CIDs, blob CIDs, AT URIs, TIDs, and strong references;
 - prompt versioning and hashes;
-- evidence-envelope construction and source-ID validation;
+- primary candidate extraction for valid, missing, duplicate, nested, and empty sentinel blocks;
+- reserved-suffix budget calculation and complete-post grapheme and byte validation;
+- valid primary candidates skipping length repair and invalid candidates causing exactly one repair attempt;
+- byte-identical cached request prefixes, verbatim assistant-message continuation, cache-usage capture, and invalidation on unexpected repair tool use;
+- invalid repair output producing the deterministic failure reply without claim truncation;
 - no-checkable-claim and severe-harm safety fixtures;
 - renderer grapheme limits and facet byte offsets;
 - custom Lexicon builders and no-float ATProto validation;
@@ -470,6 +482,7 @@ HTTP contract tests cover:
 - exact XRPC methods, paths, queries, auth, and payloads;
 - session refresh without credential leakage;
 - Anthropic headers, model/tool versions, and request bodies;
+- automatic `cache_control` on research, continuation, and repair requests, with an unchanged cached prefix;
 - search, fetch, citation, continuation, refusal, truncation, overload, timeout, and unknown-block responses;
 - blob uploads and returned metadata verification;
 - temporary blob re-upload after expiry or missing-blob rejection;
@@ -495,7 +508,7 @@ Golden fixtures include official Lexicon-shaped notifications and thread views, 
 The MVP is delivered as one feature branch through four sequential milestones:
 
 1. **Durable ingestion and intended-object store:** configuration, ATProto reads/authentication, mention inbox, ancestor-only thread capture, Oban, local record/blob/CID primitives, `SYNC_TO_ATPROTO=false`, and local audit skeleton.
-2. **Claude research and rendering:** prompts, both Claude invocations, complete attempt capture, evidence envelope, structured output, deterministic reply rendering, and failed-run behavior.
+2. **Claude research and rendering:** prompts, the primary research invocation, conditional cache-enabled length repair, complete attempt capture, candidate validation, deterministic reply rendering, and failed-run behavior.
 3. **ATProto graph and synchronization:** custom Lexicons, complete immutable audit graph, deterministic document chunking, dependency-aware PDS sync, remote verification, reply posts, publication records, and profile setup command.
 4. **Audit viewer and hardening:** complete public pages and raw artifacts, synchronization diagnostics, security headers, failure recovery, monitoring, deployment configuration, and end-to-end acceptance tests.
 
@@ -508,7 +521,7 @@ The MVP is complete when:
 - a public Bluesky user can trigger one run by directly mentioning the bot;
 - the bot never initiates proactive moderation or unmentioned replies;
 - the captured context contains only the invocation and rootward ancestors;
-- all transformations from thread input through both Claude invocations to final reply are retained;
+- all transformations from thread input through the primary and any optional length-repair invocation to the final reply are retained;
 - the complete redacted Anthropic requests, responses, server tools, citations, errors, retries, and usage are auditable;
 - every intended ATProto record and blob has its final AT URI or blob identity and locally calculated CID before network publication;
 - `SYNC_TO_ATPROTO=false` publishes no records or blobs and mutates no profile, reply, or notification-seen state while preserving the full intended graph;
@@ -545,8 +558,9 @@ The MVP is complete when:
 - [Anthropic server tools](https://platform.claude.com/docs/en/agents-and-tools/tool-use/server-tools)
 - [Anthropic web search](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool)
 - [Anthropic web fetch](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool)
-- [Anthropic structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs)
 - [Anthropic citations](https://platform.claude.com/docs/en/build-with-claude/citations)
+- [Anthropic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
+- [Anthropic tool use with prompt caching](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-use-with-prompt-caching)
 - [ATProto repository](https://atproto.com/specs/repository)
 - [ATProto blobs](https://atproto.com/specs/blob)
 - [ATProto data validation](https://atproto.com/guides/data-validation)
