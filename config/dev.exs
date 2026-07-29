@@ -4,6 +4,8 @@ import Config
 config :context_bot, ContextBot.Repo,
   database: Path.expand("../data/context_bot_dev.db", __DIR__),
   pool_size: 5,
+  journal_mode: :wal,
+  busy_timeout: 5_000,
   stacktrace: true,
   show_sensitive_data_on_connection_error: true
 

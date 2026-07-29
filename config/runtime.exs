@@ -1,5 +1,32 @@
 import Config
 
+settings = ContextBot.Settings.load(System.get_env())
+
+config :context_bot, :settings, settings
+
+config :context_bot, Oban,
+  queues: [
+    eligibility: settings.queue_concurrency,
+    thread: settings.queue_concurrency,
+    research: settings.queue_concurrency,
+    reply: settings.queue_concurrency,
+    maintenance: settings.queue_concurrency
+  ]
+
+if ContextBot.Settings.bot_enabled?(settings) do
+  bot_app_password =
+    System.get_env("BOT_APP_PASSWORD") ||
+      raise "environment variable BOT_APP_PASSWORD is required when BOT_ENABLED=true"
+
+  anthropic_api_key =
+    System.get_env("ANTHROPIC_API_KEY") ||
+      raise "environment variable ANTHROPIC_API_KEY is required when BOT_ENABLED=true"
+
+  config :context_bot,
+    bot_app_password: bot_app_password,
+    anthropic_api_key: anthropic_api_key
+end
+
 # config/runtime.exs is executed for all environments, including
 # during releases. It is executed after compilation and before the
 # system starts, so it is typically used to load production configuration
@@ -30,7 +57,9 @@ if config_env() == :prod do
 
   config :context_bot, ContextBot.Repo,
     database: database_path,
-    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "5")
+    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "5"),
+    journal_mode: :wal,
+    busy_timeout: 5_000
 
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you

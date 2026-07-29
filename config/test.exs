@@ -11,7 +11,11 @@ database_name = "context_bot_test#{partition}.db"
 config :context_bot, ContextBot.Repo,
   database: Path.expand("../data/#{database_name}", __DIR__),
   pool: Ecto.Adapters.SQL.Sandbox,
-  pool_size: System.schedulers_online() * 2
+  pool_size: System.schedulers_online() * 2,
+  journal_mode: :wal,
+  busy_timeout: 5_000
+
+config :context_bot, Oban, testing: :manual
 
 # We don't run a server during test. If one is required,
 # you can enable the server option below.

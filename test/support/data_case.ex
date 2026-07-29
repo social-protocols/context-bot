@@ -21,6 +21,8 @@ defmodule ContextBot.DataCase do
 
   using do
     quote do
+      use Oban.Testing, repo: ContextBot.Repo
+
       alias ContextBot.Repo
 
       import Ecto

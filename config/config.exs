@@ -11,6 +11,11 @@ config :context_bot,
   ecto_repos: [ContextBot.Repo],
   generators: [timestamp_type: :utc_datetime]
 
+config :context_bot, Oban,
+  engine: Oban.Engines.Lite,
+  repo: ContextBot.Repo,
+  queues: [eligibility: 1, thread: 1, research: 1, reply: 1, maintenance: 1]
+
 # Configure the endpoint
 config :context_bot, ContextBotWeb.Endpoint,
   url: [host: "localhost"],

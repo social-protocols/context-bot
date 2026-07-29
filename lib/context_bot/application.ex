@@ -7,16 +7,16 @@ defmodule ContextBot.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [
-      ContextBotWeb.Telemetry,
-      ContextBot.Repo,
-      {DNSCluster, query: Application.get_env(:context_bot, :dns_cluster_query) || :ignore},
-      {Phoenix.PubSub, name: ContextBot.PubSub},
-      # Start a worker by calling: ContextBot.Worker.start_link(arg)
-      # {ContextBot.Worker, arg},
-      # Start to serve requests, typically the last entry
-      ContextBotWeb.Endpoint
-    ]
+    settings = Application.fetch_env!(:context_bot, :settings)
+
+    children =
+      [
+        ContextBotWeb.Telemetry,
+        ContextBot.Repo,
+        {Finch, name: ContextBot.Finch},
+        {DNSCluster, query: Application.get_env(:context_bot, :dns_cluster_query) || :ignore},
+        {Phoenix.PubSub, name: ContextBot.PubSub}
+      ] ++ bot_children(settings) ++ [ContextBotWeb.Endpoint]
 
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options
@@ -30,5 +30,13 @@ defmodule ContextBot.Application do
   def config_change(changed, _new, removed) do
     ContextBotWeb.Endpoint.config_change(changed, removed)
     :ok
+  end
+
+  defp bot_children(settings) do
+    if ContextBot.Settings.bot_enabled?(settings) do
+      [{Oban, Application.fetch_env!(:context_bot, Oban)}]
+    else
+      []
+    end
   end
 end
