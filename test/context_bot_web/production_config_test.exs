@@ -39,6 +39,39 @@ defmodule ContextBotWeb.ProductionConfigTest do
     end
   end
 
+  test "production runtime rejects a blank bot app password when enabled" do
+    replace_environment(
+      enabled_bot_environment(%{"BOT_APP_PASSWORD" => "", "ANTHROPIC_API_KEY" => "test-key"})
+    )
+
+    assert_raise RuntimeError, ~r/BOT_APP_PASSWORD/, fn ->
+      Config.Reader.read!("config/runtime.exs", env: :prod)
+    end
+  end
+
+  test "production runtime requires an Anthropic API key when enabled" do
+    replace_environment(
+      enabled_bot_environment(%{
+        "BOT_APP_PASSWORD" => "test-password",
+        "ANTHROPIC_API_KEY" => nil
+      })
+    )
+
+    assert_raise RuntimeError, ~r/ANTHROPIC_API_KEY/, fn ->
+      Config.Reader.read!("config/runtime.exs", env: :prod)
+    end
+  end
+
+  test "production runtime rejects a blank Anthropic API key when enabled" do
+    replace_environment(
+      enabled_bot_environment(%{"BOT_APP_PASSWORD" => "test-password", "ANTHROPIC_API_KEY" => ""})
+    )
+
+    assert_raise RuntimeError, ~r/ANTHROPIC_API_KEY/, fn ->
+      Config.Reader.read!("config/runtime.exs", env: :prod)
+    end
+  end
+
   test "runtime config applies queue concurrency to every manual queue" do
     replace_environment(%{"BOT_ENABLED" => "false", "QUEUE_CONCURRENCY" => "3"})
 
@@ -66,5 +99,18 @@ defmodule ContextBotWeb.ProductionConfigTest do
         {key, value} -> System.put_env(key, value)
       end)
     end)
+  end
+
+  defp enabled_bot_environment(overrides) do
+    Map.merge(
+      %{
+        "BOT_ENABLED" => "true",
+        "BOT_DID" => "did:plc:botidentifier",
+        "BOT_HANDLE" => "contextbot.bsky.social",
+        "BOT_PDS_URL" => "https://bsky.social",
+        "ANTHROPIC_DAILY_BUDGET_USD" => "1.00"
+      },
+      overrides
+    )
   end
 end

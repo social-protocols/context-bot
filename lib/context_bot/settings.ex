@@ -359,12 +359,12 @@ defmodule ContextBot.Settings do
     Map.get_lazy(environment, option_key, fn -> Map.get(environment, environment_key, default) end)
   end
 
-  defp fetch_first(environment, keys, default) do
-    Enum.find_value(keys, default, fn {environment_key, option_key} ->
-      case fetch(environment, environment_key, option_key, :missing) do
-        :missing -> nil
-        value -> value
-      end
-    end)
+  defp fetch_first(_environment, [], default), do: default
+
+  defp fetch_first(environment, [{environment_key, option_key} | remaining_keys], default) do
+    case fetch(environment, environment_key, option_key, :missing) do
+      :missing -> fetch_first(environment, remaining_keys, default)
+      value -> value
+    end
   end
 end

@@ -23,6 +23,10 @@ defmodule ContextBot.SettingsTest do
       Settings.load(thread_parent_height: "80.5")
     end
 
+    assert_raise ArgumentError, ~r/THREAD_PARENT_HEIGHT/, fn ->
+      Settings.load(thread_parent_height: false)
+    end
+
     assert_raise ArgumentError, ~r/BOT_ENABLED/, fn ->
       Settings.load(bot_enabled: "yes")
     end

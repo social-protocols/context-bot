@@ -14,13 +14,15 @@ config :context_bot, Oban,
   ]
 
 if ContextBot.Settings.bot_enabled?(settings) do
-  bot_app_password =
-    System.get_env("BOT_APP_PASSWORD") ||
-      raise "environment variable BOT_APP_PASSWORD is required when BOT_ENABLED=true"
+  required_secret = fn variable ->
+    case System.get_env(variable) do
+      value when is_binary(value) and value != "" -> value
+      _ -> raise "environment variable #{variable} is required when BOT_ENABLED=true"
+    end
+  end
 
-  anthropic_api_key =
-    System.get_env("ANTHROPIC_API_KEY") ||
-      raise "environment variable ANTHROPIC_API_KEY is required when BOT_ENABLED=true"
+  bot_app_password = required_secret.("BOT_APP_PASSWORD")
+  anthropic_api_key = required_secret.("ANTHROPIC_API_KEY")
 
   config :context_bot,
     bot_app_password: bot_app_password,
