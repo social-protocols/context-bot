@@ -57,6 +57,32 @@ defmodule ContextBot.Workflow.StoreTest do
     assert Repo.aggregate(Invocation, :count) == 2
   end
 
+  test "rejects changes to an existing receipt's durable identity" do
+    assert {:ok, invocation, :inserted} =
+             Store.receive_mention(
+               mention("at://did:plc:actor/app.bsky.feed.post/immutable", "bafy-immutable"),
+               @received_at,
+               nil
+             )
+
+    changeset =
+      Invocation.changeset(invocation, %{
+        invocation_uri: "at://did:plc:actor/app.bsky.feed.post/replaced",
+        notification_cid: "bafy-replaced"
+      })
+
+    refute changeset.valid?
+    assert errors_on(changeset).invocation_uri == ["is immutable"]
+    assert errors_on(changeset).notification_cid == ["is immutable"]
+    assert {:error, rejected} = Repo.update(changeset)
+    assert errors_on(rejected).invocation_uri == ["is immutable"]
+    assert errors_on(rejected).notification_cid == ["is immutable"]
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.invocation_uri == "at://did:plc:actor/app.bsky.feed.post/immutable"
+    assert persisted.notification_cid == "bafy-immutable"
+  end
+
   test "preserves the notification CID when the current record CID changes" do
     assert {:ok, invocation, :inserted} =
              Store.receive_mention(
@@ -186,6 +212,38 @@ defmodule ContextBot.Workflow.StoreTest do
     assert failed.status == :failed
     assert failed.failure_category == :thread_unavailable
     assert Store.pending_capacity_available?(2)
+  end
+
+  test "persists failure state when called with a stale invocation struct" do
+    assert {:ok, stale, :inserted} =
+             Store.receive_mention(
+               mention("at://did:plc:actor/app.bsky.feed.post/stale-failure", "bafy-stale"),
+               @received_at,
+               nil
+             )
+
+    assert {:ok, current} =
+             Store.transition(
+               stale,
+               :deferred_capacity,
+               :capturing_thread,
+               %{eligibility_method: "operator_allowlist"},
+               nil
+             )
+
+    assert current.stage == :capturing_thread
+
+    assert {:ok, failed} =
+             Store.fail(stale, :thread_unavailable, %{reason: "invocation disappeared"})
+
+    assert failed.status == :failed
+    assert failed.stage == :failed
+    assert failed.failure_category == :thread_unavailable
+    assert failed.failure_detail == %{reason: "invocation disappeared"}
+
+    persisted = Repo.reload!(stale)
+    assert persisted.status == :failed
+    assert persisted.failure_category == :thread_unavailable
   end
 
   test "failure categories are finite and unknown values are safely classified" do

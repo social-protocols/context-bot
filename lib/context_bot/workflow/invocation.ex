@@ -134,6 +134,7 @@ defmodule ContextBot.Workflow.Invocation do
   def changeset(invocation, attrs) do
     invocation
     |> cast(attrs, @receipt_fields ++ @transition_fields)
+    |> validate_immutable_identity()
     |> validate_required([
       :invocation_uri,
       :notification_cid,
@@ -166,4 +167,18 @@ defmodule ContextBot.Workflow.Invocation do
   def anthropic_responses_changeset(invocation, responses) do
     change(invocation, anthropic_responses: responses)
   end
+
+  defp validate_immutable_identity(
+         %Ecto.Changeset{data: %{__meta__: %{state: :loaded}}} = changeset
+       ) do
+    Enum.reduce([:invocation_uri, :notification_cid], changeset, fn field, changeset ->
+      if Map.has_key?(changeset.changes, field) do
+        add_error(changeset, field, "is immutable")
+      else
+        changeset
+      end
+    end)
+  end
+
+  defp validate_immutable_identity(changeset), do: changeset
 end

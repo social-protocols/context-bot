@@ -110,18 +110,25 @@ defmodule ContextBot.Workflow.Store do
   end
 
   @spec fail(Invocation.t(), atom(), map()) :: {:ok, Invocation.t()}
-  def fail(%Invocation{} = invocation, category, detail) when is_map(detail) do
-    transition(
-      invocation,
-      invocation.stage,
-      :failed,
-      %{
-        failure_category: Failure.category(category),
-        failure_detail: detail,
-        completed_at: DateTime.utc_now()
-      },
-      nil
-    )
+  def fail(%Invocation{id: id}, category, detail) when is_map(detail) do
+    {:ok, failed} =
+      Repo.transaction(
+        fn ->
+          id
+          |> then(&Repo.get!(Invocation, &1))
+          |> Invocation.transition_changeset(%{
+            status: :failed,
+            stage: :failed,
+            failure_category: Failure.category(category),
+            failure_detail: detail,
+            completed_at: DateTime.utc_now()
+          })
+          |> Repo.update!()
+        end,
+        mode: :immediate
+      )
+
+    {:ok, failed}
   end
 
   defp receive_once(repo, attrs) do
