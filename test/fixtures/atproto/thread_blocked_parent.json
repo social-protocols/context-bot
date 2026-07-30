@@ -1,0 +1,32 @@
+{
+  "thread": {
+    "$type": "app.bsky.feed.defs#threadViewPost",
+    "post": {
+      "uri": "at://did:plc:alice/app.bsky.feed.post/invocation",
+      "cid": "bafy-invocation-v1",
+      "author": {
+        "did": "did:plc:alice",
+        "handle": "alice.test"
+      },
+      "record": {
+        "$type": "app.bsky.feed.post",
+        "text": "@contextbot.test please add context.",
+        "reply": {
+          "root": {
+            "uri": "at://did:plc:blocked/app.bsky.feed.post/root",
+            "cid": "bafy-blocked-root"
+          },
+          "parent": {
+            "uri": "at://did:plc:blocked/app.bsky.feed.post/root",
+            "cid": "bafy-blocked-root"
+          }
+        }
+      }
+    },
+    "parent": {
+      "$type": "app.bsky.feed.defs#blockedPost",
+      "uri": "at://did:plc:blocked/app.bsky.feed.post/root",
+      "blocked": true
+    }
+  }
+}

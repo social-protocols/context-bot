@@ -1,0 +1,149 @@
+{
+  "thread": {
+    "$type": "app.bsky.feed.defs#threadViewPost",
+    "post": {
+      "uri": "at://did:plc:alice/app.bsky.feed.post/invocation",
+      "cid": "bafy-invocation-v1",
+      "author": {
+        "did": "did:plc:alice",
+        "handle": "alice.test"
+      },
+      "record": {
+        "$type": "app.bsky.feed.post",
+        "text": "@contextbot.test please add context.",
+        "facets": [
+          {
+            "features": [
+              {
+                "$type": "app.bsky.richtext.facet#mention",
+                "did": "did:plc:contextbot"
+              }
+            ]
+          }
+        ],
+        "reply": {
+          "root": {
+            "uri": "at://did:plc:root/app.bsky.feed.post/root",
+            "cid": "bafy-root"
+          },
+          "parent": {
+            "uri": "at://did:plc:bob/app.bsky.feed.post/parent",
+            "cid": "bafy-parent"
+          }
+        }
+      },
+      "embed": {
+        "$type": "app.bsky.embed.images#view",
+        "images": [
+          {
+            "alt": "MEDIA ALT MUST NEVER APPEAR",
+            "thumb": "https://cdn.example/thumb.jpg",
+            "fullsize": "https://cdn.example/full.jpg"
+          }
+        ]
+      }
+    },
+    "parent": {
+      "$type": "app.bsky.feed.defs#threadViewPost",
+      "post": {
+        "uri": "at://did:plc:bob/app.bsky.feed.post/parent",
+        "cid": "bafy-parent",
+        "author": {
+          "did": "did:plc:bob",
+          "handle": "bob.test"
+        },
+        "record": {
+          "$type": "app.bsky.feed.post",
+          "text": "The immediate parent claim."
+        },
+        "embed": {
+          "$type": "app.bsky.embed.record#view",
+          "record": {
+            "$type": "app.bsky.embed.record#viewRecord",
+            "uri": "at://did:plc:quoted/app.bsky.feed.post/quoted",
+            "cid": "bafy-quoted",
+            "value": {
+              "$type": "app.bsky.feed.post",
+              "text": "QUOTED POST BODY MUST NEVER APPEAR"
+            }
+          }
+        }
+      },
+      "parent": {
+        "$type": "app.bsky.feed.defs#threadViewPost",
+        "post": {
+          "uri": "at://did:plc:root/app.bsky.feed.post/root",
+          "cid": "bafy-root",
+          "author": {
+            "did": "did:plc:root",
+            "handle": "root.test"
+          },
+          "record": {
+            "$type": "app.bsky.feed.post",
+            "text": "The root claim."
+          },
+          "embed": {
+            "$type": "app.bsky.embed.external#view",
+            "external": {
+              "title": "Evidence packet",
+              "uri": "https://example.com/evidence",
+              "description": "EXTERNAL DESCRIPTION MUST NEVER APPEAR",
+              "thumb": "https://cdn.example/external.jpg"
+            }
+          }
+        },
+        "replies": [
+          {
+            "$type": "app.bsky.feed.defs#threadViewPost",
+            "post": {
+              "uri": "at://did:plc:tempting/app.bsky.feed.post/root-reply",
+              "cid": "bafy-root-reply",
+              "author": {
+                "did": "did:plc:tempting",
+                "handle": "tempting.test"
+              },
+              "record": {
+                "$type": "app.bsky.feed.post",
+                "text": "ROOT DESCENDANT MUST NEVER APPEAR"
+              }
+            }
+          }
+        ]
+      },
+      "replies": [
+        {
+          "$type": "app.bsky.feed.defs#threadViewPost",
+          "post": {
+            "uri": "at://did:plc:tempting/app.bsky.feed.post/parent-reply",
+            "cid": "bafy-parent-reply",
+            "author": {
+              "did": "did:plc:tempting",
+              "handle": "tempting.test"
+            },
+            "record": {
+              "$type": "app.bsky.feed.post",
+              "text": "PARENT DESCENDANT MUST NEVER APPEAR"
+            }
+          }
+        }
+      ]
+    },
+    "replies": [
+      {
+        "$type": "app.bsky.feed.defs#threadViewPost",
+        "post": {
+          "uri": "at://did:plc:tempting/app.bsky.feed.post/invocation-reply",
+          "cid": "bafy-invocation-reply",
+          "author": {
+            "did": "did:plc:tempting",
+            "handle": "tempting.test"
+          },
+          "record": {
+            "$type": "app.bsky.feed.post",
+            "text": "INVOCATION DESCENDANT MUST NEVER APPEAR"
+          }
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "thread": {
+    "$type": "app.bsky.feed.defs#threadViewPost",
+    "post": {
+      "uri": "at://did:plc:alice/app.bsky.feed.post/invocation",
+      "cid": "bafy-invocation-v2",
+      "author": {
+        "did": "did:plc:alice",
+        "handle": "alice.test"
+      },
+      "record": {
+        "$type": "app.bsky.feed.post",
+        "text": "Edited, but still asking @contextbot.test for context.",
+        "facets": [
+          {
+            "features": [
+              {
+                "$type": "app.bsky.richtext.facet#mention",
+                "did": "did:plc:contextbot"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

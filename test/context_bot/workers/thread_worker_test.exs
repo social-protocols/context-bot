@@ -1,0 +1,300 @@
+defmodule ContextBot.Workers.ThreadWorkerTest.Client do
+  @moduledoc false
+
+  def get_post_thread(uri, parent_height) do
+    config = Application.fetch_env!(:context_bot, __MODULE__)
+
+    send(
+      config[:test_pid],
+      {:thread_fetch, uri, parent_height, ContextBot.Repo.in_transaction?()}
+    )
+
+    if delay_ms = config[:delay_ms], do: Process.sleep(delay_ms)
+    config[:result]
+  end
+end
+
+defmodule ContextBot.Workers.ThreadWorkerTest.SessionStub do
+  @moduledoc false
+
+  def access_token, do: {:ok, "worker-test-access-token"}
+  def refresh(_rejected_token), do: {:error, :unexpected_refresh}
+end
+
+defmodule ContextBot.Workers.ThreadWorkerTest do
+  use ContextBot.DataCase, async: false
+
+  alias ContextBot.ATProto.ReqClient
+  alias ContextBot.Settings
+  alias ContextBot.Workers.ThreadWorker
+  alias ContextBot.Workers.ThreadWorkerTest.{Client, SessionStub}
+  alias ContextBot.Workflow.Invocation
+
+  @bot_did "did:plc:contextbot"
+  @invocation_uri "at://did:plc:alice/app.bsky.feed.post/invocation"
+  @notification_cid "bafy-invocation-v1"
+  @now ~U[2026-07-29 12:00:00.123456Z]
+
+  setup {Req.Test, :verify_on_exit!}
+
+  setup do
+    original_worker_config = Application.get_env(:context_bot, ThreadWorker, :missing)
+    original_client_config = Application.get_env(:context_bot, Client, :missing)
+    original_req_config = Application.fetch_env!(:context_bot, ReqClient)
+
+    on_exit(fn ->
+      restore_env(ThreadWorker, original_worker_config)
+      restore_env(Client, original_client_config)
+      Application.put_env(:context_bot, ReqClient, original_req_config)
+    end)
+
+    :ok
+  end
+
+  test "requests depth zero through the authenticated client and atomically hands frozen thread state to research" do
+    invocation = invocation()
+    response = fixture("thread_ancestors.json")
+    configure(settings(thread_parent_height: 2), client: ReqClient)
+
+    Application.put_env(
+      :context_bot,
+      ReqClient,
+      Application.fetch_env!(:context_bot, ReqClient)
+      |> Keyword.put(:session, SessionStub)
+      |> Keyword.update!(:req_options, &Keyword.put(&1, :plugins, []))
+    )
+
+    Req.Test.expect(ReqClient, fn conn ->
+      assert conn.method == "GET"
+      assert conn.request_path == "/xrpc/app.bsky.feed.getPostThread"
+
+      assert conn.query_string
+             |> URI.query_decoder()
+             |> Enum.to_list()
+             |> Enum.sort() ==
+               Enum.sort([
+                 {"depth", "0"},
+                 {"parentHeight", "2"},
+                 {"uri", @invocation_uri}
+               ])
+
+      assert Plug.Conn.get_req_header(conn, "authorization") == [
+               "Bearer worker-test-access-token"
+             ]
+
+      Req.Test.json(conn, response)
+    end)
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.status == :thread_ready
+    assert persisted.stage == :thread_ready
+    assert persisted.raw_thread == response
+    assert persisted.canonical_thread_version == "1"
+    assert persisted.canonical_thread =~ "The root claim."
+    assert persisted.canonical_thread =~ "@contextbot.test please add context."
+    refute persisted.canonical_thread =~ "DESCENDANT"
+    assert persisted.root_uri == "at://did:plc:root/app.bsky.feed.post/root"
+    assert persisted.root_cid == "bafy-root"
+    assert persisted.current_cid == "bafy-invocation-v1"
+
+    assert [%Oban.Job{} = research_job] = Repo.all(Oban.Job)
+    assert research_job.worker == "ContextBot.Workers.ResearchWorker"
+    assert research_job.queue == "research"
+
+    assert research_job.args == %{
+             "uri" => @invocation_uri,
+             "cid" => @notification_cid
+           }
+
+    assert research_job.state == "available"
+
+    # A future research worker can only observe this durable snapshot after its job is visible.
+    assert Repo.get!(Invocation, invocation.id).stage == :thread_ready
+  end
+
+  test "fetches outside transactions, freezes an edited current CID, and ignores a completed handoff" do
+    invocation = invocation()
+    response = fixture("thread_edited_cid.json")
+    configure_fake({:ok, 200, %{}, response})
+
+    assert :ok = perform(invocation)
+
+    assert_received {:thread_fetch, @invocation_uri, 80, false}
+    persisted = Repo.reload!(invocation)
+    assert persisted.current_cid == "bafy-invocation-v2"
+    assert persisted.root_uri == @invocation_uri
+    assert persisted.root_cid == "bafy-invocation-v2"
+
+    assert :ok = perform(persisted)
+    refute_receive {:thread_fetch, _, _, _}
+    assert Repo.aggregate(Oban.Job, :count) == 1
+  end
+
+  test "rolls back both the thread snapshot and research job when the handoff transaction fails" do
+    invocation = invocation()
+    response = fixture("thread_ancestors.json")
+
+    invalid_job_builder = fn transitioned_invocation ->
+      %{
+        "uri" => transitioned_invocation.invocation_uri,
+        "cid" => transitioned_invocation.notification_cid
+      }
+      |> Oban.Job.new(worker: "ContextBot.Workers.ResearchWorker", queue: :research)
+      |> Ecto.Changeset.add_error(:args, "forced handoff failure")
+    end
+
+    configure_fake({:ok, 200, %{}, response}, research_job_builder: invalid_job_builder)
+
+    assert_raise Ecto.InvalidChangesetError, fn -> perform(invocation) end
+    assert_received {:thread_fetch, @invocation_uri, 80, false}
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.status == :capturing_thread
+    assert persisted.stage == :capturing_thread
+    assert persisted.raw_thread == nil
+    assert persisted.canonical_thread == nil
+    assert persisted.canonical_thread_version == nil
+    assert persisted.root_uri == nil
+    assert persisted.root_cid == nil
+    assert persisted.current_cid == @notification_cid
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "rejects an oversized raw snapshot before persistence" do
+    invocation = invocation()
+    response = fixture("thread_ancestors.json")
+
+    configure_fake(
+      {:ok, 200, %{}, response},
+      settings: settings(max_response_bytes: 128, max_storage_bytes: 256)
+    )
+
+    assert {:error, :response_too_large} = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.status == :capturing_thread
+    assert persisted.raw_thread == nil
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "bounds a slow fetch before any response can be persisted" do
+    invocation = invocation()
+    response = fixture("thread_ancestors.json")
+
+    Application.put_env(:context_bot, Client,
+      test_pid: self(),
+      result: {:ok, 200, %{}, response},
+      delay_ms: 100
+    )
+
+    configure(settings(), client: Client, fetch_timeout_ms: 10)
+
+    assert {:error, :timeout} = perform(invocation)
+    assert_received {:thread_fetch, @invocation_uri, 80, false}
+    assert Repo.reload!(invocation).raw_thread == nil
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "returns transient fetch failures for retry with capped backoff" do
+    invocation = invocation()
+    configure_fake({:error, :timeout})
+
+    assert {:error, :timeout} = perform(invocation)
+    assert Repo.reload!(invocation).stage == :capturing_thread
+    assert Repo.aggregate(Oban.Job, :count) == 0
+
+    assert ThreadWorker.backoff(%Oban.Job{attempt: 1, max_attempts: 10}) == 15
+    assert ThreadWorker.backoff(%Oban.Job{attempt: 5, max_attempts: 10}) == 240
+    assert ThreadWorker.backoff(%Oban.Job{attempt: 10, max_attempts: 10}) == 300
+  end
+
+  test "silently records permanent target unavailability and publishes no downstream work" do
+    invocation = invocation()
+    configure_fake({:error, :record_not_found})
+
+    assert :ok = perform(invocation)
+
+    failed = Repo.reload!(invocation)
+    assert failed.status == :failed
+    assert failed.stage == :failed
+    assert failed.failure_category == :thread_unavailable
+    assert failed.failure_detail == %{"reason" => "target_unavailable"}
+    assert failed.completed_at
+    assert failed.raw_thread == nil
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "treats an unavailable target union as terminal without a research handoff" do
+    invocation = invocation()
+
+    target = %{
+      "thread" => %{
+        "$type" => "app.bsky.feed.defs#notFoundPost",
+        "uri" => @invocation_uri,
+        "notFound" => true
+      }
+    }
+
+    configure_fake({:ok, 200, %{}, target})
+
+    assert :ok = perform(invocation)
+    assert Repo.reload!(invocation).failure_category == :thread_unavailable
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  defp configure_fake(result, overrides \\ []) do
+    Application.put_env(:context_bot, Client, test_pid: self(), result: result)
+
+    configure(
+      Keyword.get(overrides, :settings, settings()),
+      Keyword.put(overrides, :client, Client)
+    )
+  end
+
+  defp configure(settings, overrides) do
+    Application.put_env(
+      :context_bot,
+      ThreadWorker,
+      Keyword.merge([settings: settings], overrides)
+    )
+  end
+
+  defp settings(overrides \\ []),
+    do: Settings.load(Keyword.merge([bot_did: @bot_did], overrides))
+
+  defp perform(invocation) do
+    ThreadWorker.perform(%Oban.Job{
+      args: %{"uri" => invocation.invocation_uri, "cid" => invocation.notification_cid},
+      attempt: 1,
+      max_attempts: 10
+    })
+  end
+
+  defp invocation do
+    %Invocation{}
+    |> Invocation.changeset(%{
+      invocation_uri: @invocation_uri,
+      notification_cid: @notification_cid,
+      current_cid: @notification_cid,
+      actor_did: "did:plc:alice",
+      actor_handle: "alice.test",
+      raw_notification: %{"uri" => @invocation_uri, "cid" => @notification_cid},
+      received_at: @now,
+      admitted_at: @now,
+      status: :capturing_thread,
+      stage: :capturing_thread
+    })
+    |> Repo.insert!()
+  end
+
+  defp fixture(name) do
+    "test/fixtures/atproto/#{name}"
+    |> File.read!()
+    |> Jason.decode!()
+  end
+
+  defp restore_env(module, :missing), do: Application.delete_env(:context_bot, module)
+  defp restore_env(module, config), do: Application.put_env(:context_bot, module, config)
+end
