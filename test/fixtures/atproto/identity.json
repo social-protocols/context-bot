@@ -1,14 +1,14 @@
 {
-  "resolveHandle": {"did": "did:plc:bskyteam123"},
+  "resolveHandle": {"did": "did:plc:ewvi7nxzyoun6zhxrhs64oiz"},
   "didDocument": {
     "@context": ["https://www.w3.org/ns/did/v1"],
-    "id": "did:plc:bskyteam123",
+    "id": "did:plc:ewvi7nxzyoun6zhxrhs64oiz",
     "alsoKnownAs": ["at://bsky.team"],
     "verificationMethod": [
       {
-        "id": "did:plc:bskyteam123#atproto",
+        "id": "did:plc:ewvi7nxzyoun6zhxrhs64oiz#atproto",
         "type": "Multikey",
-        "controller": "did:plc:bskyteam123",
+        "controller": "did:plc:ewvi7nxzyoun6zhxrhs64oiz",
         "publicKeyMultibase": "zDnaeFakePublicKeyForFixture"
       }
     ],

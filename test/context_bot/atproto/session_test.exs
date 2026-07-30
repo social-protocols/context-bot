@@ -96,6 +96,81 @@ defmodule ContextBot.ATProto.SessionTest do
     assert Session.status(pid) == {:ok, %{authenticated?: true, did: @bot_did}}
   end
 
+  test "a failed invalid-refresh fallback also rate-limits tokenless lazy authentication" do
+    session = fixture()
+    expect_create_session(session["create"])
+    pid = start_session()
+    assert Session.access_token(pid) == {:ok, "test-access-jwt-one"}
+
+    Req.Test.expect(Session, fn conn ->
+      conn
+      |> Plug.Conn.put_status(401)
+      |> Req.Test.json(%{"error" => "InvalidToken"})
+    end)
+
+    Req.Test.expect(Session, fn conn ->
+      conn
+      |> Plug.Conn.put_status(503)
+      |> Req.Test.json(%{"error" => "UpstreamFailure"})
+    end)
+
+    assert Session.refresh("test-access-jwt-one", pid) ==
+             {:error, :authentication_failed}
+
+    assert Session.access_token(pid) == {:error, :reauthentication_rate_limited}
+    assert Session.status(pid) == {:ok, %{authenticated?: false, did: @bot_did}}
+  end
+
+  test "refresh preserves rate-limit classification and does not create a new session" do
+    session = fixture()
+    expect_create_session(session["create"])
+    pid = start_session()
+    assert Session.access_token(pid) == {:ok, "test-access-jwt-one"}
+
+    Req.Test.expect(Session, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("retry-after", "23")
+      |> Plug.Conn.put_status(429)
+      |> Req.Test.json(%{"error" => "RateLimitExceeded"})
+    end)
+
+    assert Session.refresh("test-access-jwt-one", pid) ==
+             {:error, {:rate_limited, "23"}}
+
+    assert Session.access_token(pid) == {:ok, "test-access-jwt-one"}
+  end
+
+  test "refresh preserves transient classification and does not create a new session" do
+    session = fixture()
+    expect_create_session(session["create"])
+    pid = start_session()
+    assert Session.access_token(pid) == {:ok, "test-access-jwt-one"}
+
+    Req.Test.expect(Session, fn conn ->
+      conn
+      |> Plug.Conn.put_status(503)
+      |> Req.Test.json(%{"error" => "UpstreamFailure"})
+    end)
+
+    assert Session.refresh("test-access-jwt-one", pid) ==
+             {:error, {:transient, 503}}
+
+    assert Session.access_token(pid) == {:ok, "test-access-jwt-one"}
+  end
+
+  @tag timeout: 7_000
+  test "public calls wait beyond GenServer's five-second default for a valid HTTP result" do
+    session = fixture()
+
+    Req.Test.expect(Session, fn conn ->
+      Process.sleep(5_100)
+      Req.Test.json(conn, session["create"])
+    end)
+
+    pid = start_session(timeout: 6_000)
+    assert Session.access_token(pid) == {:ok, "test-access-jwt-one"}
+  end
+
   test "a mismatched DID rejects the call and stops the session without leaking credentials" do
     response = Map.put(fixture()["create"], "did", "did:plc:attacker123")
     expect_create_session(response)
@@ -145,15 +220,20 @@ defmodule ContextBot.ATProto.SessionTest do
     refute logs =~ "test-refresh-jwt-one"
   end
 
-  defp start_session do
+  defp start_session(options \\ []) do
     pid =
       start_supervised!(
         {Session,
-         name: nil,
-         bot_did: @bot_did,
-         identifier: @bot_handle,
-         password: @password,
-         pds_url: "https://pds.test"}
+         Keyword.merge(
+           [
+             name: nil,
+             bot_did: @bot_did,
+             identifier: @bot_handle,
+             password: @password,
+             pds_url: "https://pds.test"
+           ],
+           options
+         )}
       )
 
     Req.Test.allow(Session, self(), pid)

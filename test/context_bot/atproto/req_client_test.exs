@@ -66,14 +66,35 @@ defmodule ContextBot.ATProto.ReqClientTest do
   end
 
   test "getPostThread suppresses descendants and sends the configured parent height" do
+    start_authenticated_session()
     thread = fixture("thread.json")
 
     Req.Test.expect(ReqClient, fn conn ->
-      assert_request(conn, :get, "api.bsky.app", "/xrpc/app.bsky.feed.getPostThread")
+      assert_request(conn, :get, "pds.test", "/xrpc/app.bsky.feed.getPostThread")
 
       assert query_pairs(conn) ==
                Enum.sort([{"depth", "0"}, {"parentHeight", "37"}, {"uri", @post_uri}])
 
+      assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer test-access-jwt-one"]
+      Req.Test.json(conn, thread)
+    end)
+
+    assert {:ok, 200, _headers, ^thread} = ReqClient.get_post_thread(@post_uri, 37)
+  end
+
+  test "getPostThread refreshes and retries once after an access-token 401" do
+    start_authenticated_session(refresh?: true)
+    thread = fixture("thread.json")
+
+    Req.Test.expect(ReqClient, fn conn ->
+      assert_request(conn, :get, "pds.test", "/xrpc/app.bsky.feed.getPostThread")
+      assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer test-access-jwt-one"]
+      conn |> Plug.Conn.put_status(401) |> Req.Test.json(%{"error" => "ExpiredToken"})
+    end)
+
+    Req.Test.expect(ReqClient, fn conn ->
+      assert_request(conn, :get, "pds.test", "/xrpc/app.bsky.feed.getPostThread")
+      assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer test-access-jwt-two"]
       Req.Test.json(conn, thread)
     end)
 
@@ -111,15 +132,15 @@ defmodule ContextBot.ATProto.ReqClientTest do
   test "resolveDid uses the exact did:plc directory request" do
     identity = fixture("identity.json")
     response = identity["didDocument"]
+    did = "did:plc:ewvi7nxzyoun6zhxrhs64oiz"
 
     Req.Test.expect(ReqClient, fn conn ->
-      assert_request(conn, :get, "plc.directory", "/did:plc:bskyteam123")
+      assert_request(conn, :get, "plc.directory", "/#{did}")
       assert conn.query_string == ""
       Req.Test.json(conn, response)
     end)
 
-    assert {:ok, 200, _headers, ^response} =
-             ReqClient.resolve_did("did:plc:bskyteam123")
+    assert {:ok, 200, _headers, ^response} = ReqClient.resolve_did(did)
   end
 
   test "resolveDid uses the exact did:web well-known request" do
@@ -132,6 +153,27 @@ defmodule ContextBot.ATProto.ReqClientTest do
     end)
 
     assert {:ok, 200, _headers, ^response} = ReqClient.resolve_did("did:web:bsky.team")
+  end
+
+  test "resolveDid rejects malformed or unsupported DIDs without an HTTP request" do
+    invalid_dids = [
+      "did:plc:too-short",
+      "did:plc:ewvi7nxzyoun6zhxrhs64oi0",
+      "did:key:zQ3shFakeKey",
+      "did:web:",
+      "did:web:example.com:path",
+      "did:web:example.com%2Fpath",
+      "did:web:example.com%3A443",
+      "did:web:user%40example.com",
+      "did:web:example.com:443",
+      "did:web:example.com/path",
+      "did:web:127.0.0.1",
+      "did:web:EXAMPLE.com"
+    ]
+
+    Enum.each(invalid_dids, fn did ->
+      assert ReqClient.resolve_did(did) == {:error, {:permanent, 400}}
+    end)
   end
 
   test "getRecord uses the persisted repo, collection, and rkey" do

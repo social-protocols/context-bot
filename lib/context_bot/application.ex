@@ -32,9 +32,13 @@ defmodule ContextBot.Application do
     :ok
   end
 
-  defp bot_children(settings) do
+  @doc false
+  def bot_children(settings) do
     if ContextBot.Settings.bot_enabled?(settings) do
-      [{Oban, Application.fetch_env!(:context_bot, Oban)}]
+      [
+        {Oban, Application.fetch_env!(:context_bot, Oban)},
+        ContextBot.ATProto.Session
+      ]
     else
       []
     end

@@ -8,6 +8,8 @@ defmodule ContextBot.ATProto.ReqClient do
   @appview_url "https://api.bsky.app"
   @plc_directory_url "https://plc.directory"
   @default_timeout 15_000
+  @plc_did_regex ~r/\Adid:plc:[a-z2-7]{24}\z/
+  @hostname_label_regex ~r/\A[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\z/
 
   @impl true
   def list_notifications(cursor) when is_binary(cursor) or is_nil(cursor) do
@@ -24,9 +26,9 @@ defmodule ContextBot.ATProto.ReqClient do
   @impl true
   def get_post_thread(uri, parent_height)
       when is_binary(uri) and is_integer(parent_height) and parent_height > 0 do
-    request(
+    authenticated_request(
       method: :get,
-      url: @appview_url <> "/xrpc/app.bsky.feed.getPostThread",
+      url: pds_url() <> "/xrpc/app.bsky.feed.getPostThread",
       params: [uri: uri, depth: 0, parentHeight: parent_height]
     )
   end
@@ -52,11 +54,19 @@ defmodule ContextBot.ATProto.ReqClient do
 
   @impl true
   def resolve_did("did:plc:" <> _identifier = did) do
-    request(method: :get, url: @plc_directory_url <> "/" <> did)
+    if Regex.match?(@plc_did_regex, did) do
+      request(method: :get, url: @plc_directory_url <> "/" <> did)
+    else
+      {:error, {:permanent, 400}}
+    end
   end
 
-  def resolve_did("did:web:" <> hostname) when hostname != "" do
-    request(method: :get, url: "https://#{URI.decode(hostname)}/.well-known/did.json")
+  def resolve_did("did:web:" <> hostname) do
+    if valid_web_hostname?(hostname) do
+      request(method: :get, url: "https://#{hostname}/.well-known/did.json")
+    else
+      {:error, {:permanent, 400}}
+    end
   end
 
   def resolve_did(_did), do: {:error, {:permanent, 400}}
@@ -107,7 +117,7 @@ defmodule ContextBot.ATProto.ReqClient do
   defp refresh_and_retry(session, request_options, rejected_access_token) do
     case session.refresh(rejected_access_token) do
       {:ok, refreshed_token} -> request_with_token(request_options, refreshed_token)
-      {:error, _reason} -> {:error, :session_unavailable}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -173,6 +183,17 @@ defmodule ContextBot.ATProto.ReqClient do
       [value | _] -> value
       [] -> nil
     end
+  end
+
+  defp valid_web_hostname?(hostname) do
+    labels = String.split(hostname, ".", trim: false)
+
+    byte_size(hostname) in 1..253 and
+      length(labels) >= 2 and
+      Enum.all?(labels, fn label ->
+        byte_size(label) <= 63 and Regex.match?(@hostname_label_regex, label)
+      end) and
+      Regex.match?(~r/[a-z]/, List.last(labels))
   end
 
   defp pds_url do

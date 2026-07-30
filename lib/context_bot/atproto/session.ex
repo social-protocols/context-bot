@@ -15,6 +15,11 @@ defmodule ContextBot.ATProto.Session do
   @default_reauthentication_cooldown_ms 30_000
 
   @type server :: GenServer.server()
+  @type session_error ::
+          atom()
+          | {:rate_limited, String.t() | nil}
+          | {:transient, non_neg_integer() | :transport}
+          | {:permanent, non_neg_integer()}
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(options \\ []) do
@@ -32,28 +37,28 @@ defmodule ContextBot.ATProto.Session do
   end
 
   @doc false
-  @spec access_token() :: {:ok, String.t()} | {:error, atom()}
+  @spec access_token() :: {:ok, String.t()} | {:error, session_error()}
   def access_token, do: access_token(__MODULE__)
 
   @doc false
-  @spec access_token(server()) :: {:ok, String.t()} | {:error, atom()}
-  def access_token(server), do: GenServer.call(server, :access_token)
+  @spec access_token(server()) :: {:ok, String.t()} | {:error, session_error()}
+  def access_token(server), do: GenServer.call(server, :access_token, :infinity)
 
   @doc false
-  @spec refresh(String.t()) :: {:ok, String.t()} | {:error, atom()}
+  @spec refresh(String.t()) :: {:ok, String.t()} | {:error, session_error()}
   def refresh(rejected_access_token), do: refresh(rejected_access_token, __MODULE__)
 
   @doc false
-  @spec refresh(String.t(), server()) :: {:ok, String.t()} | {:error, atom()}
+  @spec refresh(String.t(), server()) :: {:ok, String.t()} | {:error, session_error()}
   def refresh(rejected_access_token, server) when is_binary(rejected_access_token) do
-    GenServer.call(server, {:refresh, rejected_access_token})
+    GenServer.call(server, {:refresh, rejected_access_token}, :infinity)
   end
 
   @spec status() :: {:ok, %{authenticated?: boolean(), did: String.t()}}
   def status, do: status(__MODULE__)
 
   @spec status(server()) :: {:ok, %{authenticated?: boolean(), did: String.t()}}
-  def status(server), do: GenServer.call(server, :status)
+  def status(server), do: GenServer.call(server, :status, :infinity)
 
   @impl true
   def init(options) do
@@ -95,10 +100,14 @@ defmodule ContextBot.ATProto.Session do
   end
 
   def handle_call(:access_token, _from, state) do
-    case create_session(state) do
-      {:ok, authenticated} -> {:reply, {:ok, authenticated.access_jwt}, authenticated}
-      {:stop, reason} -> {:stop, :normal, {:error, reason}, clear_tokens(state)}
-      {:error, _reason} -> {:reply, {:error, :authentication_failed}, state}
+    if reauthentication_rate_limited?(state) do
+      {:reply, {:error, :reauthentication_rate_limited}, state}
+    else
+      case create_session(state) do
+        {:ok, authenticated} -> {:reply, {:ok, authenticated.access_jwt}, authenticated}
+        {:stop, reason} -> {:stop, :normal, {:error, reason}, clear_tokens(state)}
+        {:error, _reason} -> {:reply, {:error, :authentication_failed}, state}
+      end
     end
   end
 
@@ -122,8 +131,8 @@ defmodule ContextBot.ATProto.Session do
       {:stop, reason} ->
         {:stop, :normal, {:error, reason}, clear_tokens(state)}
 
-      {:error, _reason} ->
-        {:reply, {:error, :refresh_failed}, state}
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -135,7 +144,7 @@ defmodule ContextBot.ATProto.Session do
   defp handle_reauthentication(state) do
     now = System.monotonic_time(:millisecond)
 
-    if state.reauthenticate_after && now < state.reauthenticate_after do
+    if reauthentication_rate_limited?(state, now) do
       {:reply, {:error, :reauthentication_rate_limited}, state}
     else
       state = %{
@@ -159,8 +168,8 @@ defmodule ContextBot.ATProto.Session do
       json: %{"identifier" => state.identifier, "password" => state.password}
     )
     |> case do
-      {:ok, status, body} when status in 200..299 -> accept_session(body, state)
-      {:ok, _status, _body} -> {:error, :authentication_failed}
+      {:ok, status, _headers, body} when status in 200..299 -> accept_session(body, state)
+      {:ok, _status, _headers, _body} -> {:error, :authentication_failed}
       {:error, _reason} -> {:error, :authentication_failed}
     end
   end
@@ -173,10 +182,24 @@ defmodule ContextBot.ATProto.Session do
       headers: [{"authorization", "Bearer #{state.refresh_jwt}"}]
     )
     |> case do
-      {:ok, status, body} when status in 200..299 -> accept_session(body, state)
-      {:ok, status, _body} when status in 400..499 -> {:invalid_refresh, status}
-      {:ok, _status, _body} -> {:error, :provider_unavailable}
-      {:error, _reason} -> {:error, :transport}
+      {:ok, status, _headers, body} when status in 200..299 ->
+        accept_session(body, state)
+
+      {:ok, 429, headers, _body} ->
+        {:error, {:rate_limited, first_header(headers, "retry-after")}}
+
+      {:ok, status, _headers, %{"error" => error}}
+      when status in 400..499 and error in ["InvalidToken", "ExpiredToken"] ->
+        {:invalid_refresh, error}
+
+      {:ok, status, _headers, _body} when status in 500..599 ->
+        {:error, {:transient, status}}
+
+      {:ok, status, _headers, _body} ->
+        {:error, {:permanent, status}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -215,12 +238,32 @@ defmodule ContextBot.ATProto.Session do
     |> Keyword.put(:url, url)
     |> then(&Req.request(Req.new(options), &1))
     |> case do
-      {:ok, %Req.Response{status: status, body: body}} -> {:ok, status, body}
-      {:error, _exception} -> {:error, :transport}
+      {:ok, %Req.Response{status: status, headers: headers, body: body}} ->
+        {:ok, status, headers, body}
+
+      {:error, %Req.TransportError{reason: :timeout}} ->
+        {:error, :timeout}
+
+      {:error, %{reason: :timeout}} ->
+        {:error, :timeout}
+
+      {:error, _exception} ->
+        {:error, {:transient, :transport}}
+    end
+  end
+
+  defp first_header(headers, name) do
+    case Map.get(headers, name, []) do
+      [value | _] -> value
+      [] -> nil
     end
   end
 
   defp clear_tokens(state), do: %{state | access_jwt: nil, refresh_jwt: nil}
+
+  defp reauthentication_rate_limited?(state, now \\ System.monotonic_time(:millisecond)) do
+    is_integer(state.reauthenticate_after) and now < state.reauthenticate_after
+  end
 
   defp option(options, config, key, default) do
     Keyword.get(options, key, Keyword.get(config, key, default))
