@@ -11,7 +11,7 @@ defmodule ContextBot.Mentions.Poller do
   alias ContextBot.Mentions.Validator
   alias ContextBot.Workflow.Store
 
-  @eligibility_worker "ContextBot.Workflow.EligibilityWorker"
+  @eligibility_worker "ContextBot.Workers.EligibilityWorker"
   @default_poll_interval_ms 30_000
   @default_page_cap 5
 

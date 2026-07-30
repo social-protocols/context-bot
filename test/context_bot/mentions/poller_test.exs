@@ -134,9 +134,9 @@ defmodule ContextBot.Mentions.PollerTest do
     assert job_uris == [uri("oldest"), uri("middle"), uri("newest")]
 
     assert Repo.all(from(job in Oban.Job, select: job.worker)) == [
-             "ContextBot.Workflow.EligibilityWorker",
-             "ContextBot.Workflow.EligibilityWorker",
-             "ContextBot.Workflow.EligibilityWorker"
+             "ContextBot.Workers.EligibilityWorker",
+             "ContextBot.Workers.EligibilityWorker",
+             "ContextBot.Workers.EligibilityWorker"
            ]
   end
 
