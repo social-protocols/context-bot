@@ -12,7 +12,7 @@ defmodule ContextBot.ApplicationTest do
         bot_did: "did:plc:ewvi7nxzyoun6zhxrhs64oiz",
         bot_handle: "contextbot.test",
         bot_pds_url: "https://pds.test",
-        anthropic_daily_budget_usd: "1.00"
+        anthropic_daily_budget_usd: "10.00"
       )
 
     assert [{Oban, oban_options}, Session, Poller] = Application.bot_children(settings)

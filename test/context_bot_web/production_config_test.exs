@@ -19,7 +19,7 @@ defmodule ContextBotWeb.ProductionConfigTest do
 
   test "enabled bots require their non-secret production identity settings" do
     assert_raise ArgumentError, ~r/BOT_DID/, fn ->
-      Settings.load(bot_enabled: "true", anthropic_daily_budget_usd: "1.00")
+      Settings.load(bot_enabled: "true", anthropic_daily_budget_usd: "10.00")
     end
   end
 
@@ -29,7 +29,7 @@ defmodule ContextBotWeb.ProductionConfigTest do
       "BOT_DID" => "did:plc:botidentifier",
       "BOT_HANDLE" => "contextbot.bsky.social",
       "BOT_PDS_URL" => "https://bsky.social",
-      "ANTHROPIC_DAILY_BUDGET_USD" => "1.00",
+      "ANTHROPIC_DAILY_BUDGET_USD" => "10.00",
       "BOT_APP_PASSWORD" => nil,
       "ANTHROPIC_API_KEY" => nil
     })
@@ -108,7 +108,7 @@ defmodule ContextBotWeb.ProductionConfigTest do
         "BOT_DID" => "did:plc:botidentifier",
         "BOT_HANDLE" => "contextbot.bsky.social",
         "BOT_PDS_URL" => "https://bsky.social",
-        "ANTHROPIC_DAILY_BUDGET_USD" => "1.00"
+        "ANTHROPIC_DAILY_BUDGET_USD" => "10.00"
       },
       overrides
     )
