@@ -25,6 +25,7 @@ defmodule ContextBot.Mentions.PollerTest do
   alias Ecto.Adapters.SQL.Sandbox
 
   @bot_did "did:plc:contextbot"
+  @raw_notification_max_bytes 65_536
 
   setup do
     :persistent_term.put({ClientStub, :owner}, self())
@@ -158,6 +159,17 @@ defmodule ContextBot.Mentions.PollerTest do
     assert Repo.aggregate(Oban.Job, :count) == 1
   end
 
+  test "does not persist an oversized otherwise valid notification" do
+    poller = start_poller()
+
+    Poller.poll_now(poller)
+    assert_receive {:list_notifications, nil}
+    send(poller, {:notification_page, page([oversized_mention()])})
+
+    assert_eventually(fn -> Poller.idle?(poller) end)
+    assert Repo.aggregate(Invocation, :count) == 0
+  end
+
   defp start_poller(overrides \\ []) do
     {:ok, poller} =
       Poller.start_link(
@@ -197,6 +209,12 @@ defmodule ContextBot.Mentions.PollerTest do
         ]
       }
     }
+  end
+
+  defp oversized_mention do
+    notification = Map.put(mention("oversized"), "padding", "")
+    padding_size = @raw_notification_max_bytes + 1 - byte_size(Jason.encode!(notification))
+    Map.put(notification, "padding", String.duplicate("x", padding_size))
   end
 
   defp receipt(notification) do

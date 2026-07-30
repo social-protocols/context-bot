@@ -26,3 +26,20 @@
 ## Concerns
 
 - None. The backward pagination cursor is deliberately process-local and is never persisted as a forward checkpoint; receipt admission remains backpressure only, with Task 6 responsible for transactional rechecks.
+
+## Fix Round 1
+
+### RED
+
+- A semantically valid 65,537-byte JSON notification was accepted by the validator and persisted by the poller.
+- The URI collection-spoof regression was already green because `ContextBot.ATProto.ATURI` rejects non-post collections; the validator now also makes the exact collection check explicit so it does not rely on that helper remaining post-specific.
+
+### GREEN
+
+- The validator accepts a 65,536-byte JSON notification and preserves its exact raw map, while rejecting a one-byte-larger notification as `:raw_notification_too_large`.
+- The poller does not persist a semantically valid oversized notification.
+
+### Gate
+
+- Focused: `direnv exec . mix test test/context_bot/mentions/validator_test.exs test/context_bot/mentions/poller_test.exs test/context_bot/workflow/store_test.exs test/context_bot/application_test.exs` — 34 passed.
+- Full: `direnv exec . just check` — formatting, warnings-as-errors compile, Credo, ShellCheck, 91 ExUnit tests, secrets tests, and Dialyzer passed.

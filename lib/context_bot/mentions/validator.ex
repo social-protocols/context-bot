@@ -7,6 +7,9 @@ defmodule ContextBot.Mentions.Validator do
 
   @post_type "app.bsky.feed.post"
   @mention_feature "app.bsky.richtext.facet#mention"
+  # Raw notifications are attacker-controlled and retained in SQLite verbatim for the audit trail.
+  # Keep this independent of provider-response storage, whose much larger cap serves another purpose.
+  @max_raw_notification_bytes 65_536
 
   @spec validate(map(), String.t()) ::
           {:ok,
@@ -19,7 +22,8 @@ defmodule ContextBot.Mentions.Validator do
            }}
           | {:error, atom()}
   def validate(notification, bot_did) when is_map(notification) and is_binary(bot_did) do
-    with :ok <- mention_reason(notification),
+    with :ok <- raw_notification_within_limit?(notification),
+         :ok <- mention_reason(notification),
          {:ok, record} <- post_record(notification),
          {:ok, actor_did, actor_handle} <- author(notification, bot_did),
          {:ok, uri} <- post_uri(notification, actor_did),
@@ -53,7 +57,7 @@ defmodule ContextBot.Mentions.Validator do
 
   defp post_uri(%{"uri" => uri}, actor_did) when is_binary(uri) do
     case ATURI.parse(uri) do
-      {:ok, %{repo: ^actor_did}} -> {:ok, uri}
+      {:ok, %{repo: ^actor_did, collection: @post_type}} -> {:ok, uri}
       _ -> {:error, :invalid_post_uri}
     end
   end
@@ -62,6 +66,14 @@ defmodule ContextBot.Mentions.Validator do
 
   defp cid(%{"cid" => cid}) when is_binary(cid) and cid != "", do: {:ok, cid}
   defp cid(_notification), do: {:error, :missing_cid}
+
+  defp raw_notification_within_limit?(notification) do
+    case Jason.encode(notification) do
+      {:ok, encoded} when byte_size(encoded) <= @max_raw_notification_bytes -> :ok
+      {:ok, _encoded} -> {:error, :raw_notification_too_large}
+      {:error, _reason} -> {:error, :invalid_notification}
+    end
+  end
 
   defp mentions_bot?(%{"facets" => facets}, bot_did) when is_list(facets) do
     if Enum.any?(facets, &mention_facet?(&1, bot_did)) do

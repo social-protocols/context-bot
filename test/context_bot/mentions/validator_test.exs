@@ -4,6 +4,7 @@ defmodule ContextBot.Mentions.ValidatorTest do
   alias ContextBot.Mentions.Validator
 
   @bot_did "did:plc:contextbot"
+  @raw_notification_max_bytes 65_536
 
   test "returns a receipt that preserves the raw eligible mention" do
     notification = mention_notification()
@@ -43,6 +44,17 @@ defmodule ContextBot.Mentions.ValidatorTest do
     assert {:error, _reason} = Validator.validate(notification, @bot_did)
   end
 
+  test "rejects a post-typed record whose URI names a different collection" do
+    notification =
+      Map.put(
+        mention_notification(),
+        "uri",
+        "at://did:plc:alice/app.bsky.feed.like/3kabc"
+      )
+
+    assert {:error, :invalid_post_uri} = Validator.validate(notification, @bot_did)
+  end
+
   test "rejects a missing or empty CID" do
     assert {:error, _reason} =
              Validator.validate(Map.put(mention_notification(), "cid", ""), @bot_did)
@@ -68,6 +80,20 @@ defmodule ContextBot.Mentions.ValidatorTest do
     assert {:error, _reason} = Validator.validate(notification, @bot_did)
   end
 
+  test "accepts a raw notification at the configured JSON byte boundary" do
+    notification = notification_at_json_size(@raw_notification_max_bytes)
+
+    assert byte_size(Jason.encode!(notification)) == @raw_notification_max_bytes
+    assert {:ok, %{raw: ^notification}} = Validator.validate(notification, @bot_did)
+  end
+
+  test "rejects a semantically valid raw notification one byte beyond the JSON byte boundary" do
+    notification = notification_at_json_size(@raw_notification_max_bytes + 1)
+
+    assert byte_size(Jason.encode!(notification)) == @raw_notification_max_bytes + 1
+    assert {:error, :raw_notification_too_large} = Validator.validate(notification, @bot_did)
+  end
+
   defp mention_notification do
     %{
       "reason" => "mention",
@@ -87,5 +113,11 @@ defmodule ContextBot.Mentions.ValidatorTest do
         ]
       }
     }
+  end
+
+  defp notification_at_json_size(size) do
+    notification = Map.put(mention_notification(), "padding", "")
+    padding_size = size - byte_size(Jason.encode!(notification))
+    Map.put(notification, "padding", String.duplicate("x", padding_size))
   end
 end
