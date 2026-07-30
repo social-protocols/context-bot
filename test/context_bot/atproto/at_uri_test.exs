@@ -30,4 +30,33 @@ defmodule ContextBot.ATProto.ATURITest do
       assert :error == ATURI.parse("at://did:plc:alice/app.bsky.feed.post/#{rkey}")
     end
   end
+
+  test "requires a lowercase-letter DID method and valid method-specific identifier" do
+    assert {:ok, %{repo: "did:web:example.com:profile%2Fcontext"}} =
+             ATURI.parse(
+               "at://did:web:example.com:profile%2Fcontext/app.bsky.feed.post/3kq3q4abcde2a"
+             )
+
+    for did <- [
+          "did:plc1:alice",
+          "did:web:example.com:",
+          "did:web:example.com%",
+          "did:web:example%2",
+          "did:web:example%zz"
+        ] do
+      assert :error == ATURI.parse("at://#{did}/app.bsky.feed.post/3kq3q4abcde2a")
+    end
+  end
+
+  test "accepts DIDs up to 2,048 characters and rejects longer DIDs" do
+    maximum_did = "did:web:" <> String.duplicate("a", 2_040)
+    too_long_did = "did:web:" <> String.duplicate("a", 2_041)
+
+    assert byte_size(maximum_did) == 2_048
+
+    assert {:ok, %{repo: ^maximum_did}} =
+             ATURI.parse("at://#{maximum_did}/app.bsky.feed.post/3kq3q4abcde2a")
+
+    assert :error == ATURI.parse("at://#{too_long_did}/app.bsky.feed.post/3kq3q4abcde2a")
+  end
 end

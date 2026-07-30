@@ -4,7 +4,8 @@ defmodule ContextBot.ATProto.ATURI do
   """
 
   @post_collection "app.bsky.feed.post"
-  @post_uri ~r/\Aat:\/\/(did:[a-z0-9]+:[a-zA-Z0-9._:%-]+)\/app\.bsky\.feed\.post\/([^\/?#]+)\z/
+  @post_uri ~r/\Aat:\/\/(did:[^\/]+)\/app\.bsky\.feed\.post\/([^\/?#]+)\z/
+  @did ~r/\Adid:[a-z]+:(?:[a-zA-Z0-9._:-]|%[a-fA-F0-9]{2})*(?:[a-zA-Z0-9._-]|%[a-fA-F0-9]{2})\z/
   @rkey ~r/\A[a-zA-Z0-9_~.:-]{1,512}\z/
 
   @spec parse(binary()) ::
@@ -12,7 +13,7 @@ defmodule ContextBot.ATProto.ATURI do
   def parse(uri) when is_binary(uri) do
     case Regex.run(@post_uri, uri) do
       [_, repo, rkey] when rkey not in [".", ".."] ->
-        if Regex.match?(@rkey, rkey) do
+        if valid_did?(repo) and Regex.match?(@rkey, rkey) do
           {:ok, %{repo: repo, collection: @post_collection, rkey: rkey}}
         else
           :error
@@ -27,4 +28,6 @@ defmodule ContextBot.ATProto.ATURI do
   end
 
   def parse(_uri), do: :error
+
+  defp valid_did?(did), do: byte_size(did) <= 2_048 and Regex.match?(@did, did)
 end
