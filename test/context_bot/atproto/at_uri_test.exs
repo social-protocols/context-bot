@@ -24,4 +24,10 @@ defmodule ContextBot.ATProto.ATURITest do
       assert :error == ATURI.parse(uri)
     end
   end
+
+  test "rejects record keys outside the ATProto grammar" do
+    for rkey <- [".", "..", "contains space", "@handle", String.duplicate("a", 513)] do
+      assert :error == ATURI.parse("at://did:plc:alice/app.bsky.feed.post/#{rkey}")
+    end
+  end
 end

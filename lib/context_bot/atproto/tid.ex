@@ -6,16 +6,23 @@ defmodule ContextBot.ATProto.TID do
   import Bitwise
 
   @alphabet "234567abcdefghijklmnopqrstuvwxyz"
-  @clock_id 0
   @clock_id_bits 10
+  @clock_id_range 1 <<< @clock_id_bits
+  @max_timestamp (1 <<< 53) - 1
   @tid_length 13
 
   @spec generate(integer()) :: binary()
-  def generate(timestamp_us) when is_integer(timestamp_us) and timestamp_us >= 0 do
+  def generate(timestamp_us)
+      when is_integer(timestamp_us) and timestamp_us >= 0 and timestamp_us <= @max_timestamp do
     timestamp_us
     |> bsl(@clock_id_bits)
-    |> bor(@clock_id)
+    |> bor(clock_id())
     |> encode()
+  end
+
+  defp clock_id do
+    System.unique_integer([:positive, :monotonic])
+    |> rem(@clock_id_range)
   end
 
   defp encode(value) do
