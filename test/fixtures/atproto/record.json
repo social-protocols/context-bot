@@ -1,0 +1,30 @@
+{
+  "get": {
+    "uri": "at://did:plc:contextbot123/app.bsky.feed.post/3mreplyrecord2a",
+    "cid": "bafyreifakereplycid",
+    "value": {
+      "$type": "app.bsky.feed.post",
+      "text": "Concise researched context.",
+      "createdAt": "2026-07-29T12:05:00.000Z",
+      "reply": {
+        "root": {
+          "uri": "at://did:plc:bob123/app.bsky.feed.post/3m0000000002b",
+          "cid": "bafyreifakecidparent"
+        },
+        "parent": {
+          "uri": "at://did:plc:alice123/app.bsky.feed.post/3m1234567892a",
+          "cid": "bafyreifakecidmention"
+        }
+      }
+    }
+  },
+  "put": {
+    "uri": "at://did:plc:contextbot123/app.bsky.feed.post/3mreplyrecord2a",
+    "cid": "bafyreifakereplycid",
+    "commit": {
+      "cid": "bafyreifakecommitcid",
+      "rev": "3mreplycommit2a"
+    },
+    "validationStatus": "valid"
+  }
+}

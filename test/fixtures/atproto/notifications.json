@@ -1,0 +1,31 @@
+{
+  "cursor": "opaque+/cursor==",
+  "notifications": [
+    {
+      "uri": "at://did:plc:alice123/app.bsky.feed.post/3m1234567892a",
+      "cid": "bafyreifakecidmention",
+      "author": {
+        "did": "did:plc:alice123",
+        "handle": "alice.test",
+        "displayName": "Alice",
+        "avatar": "https://cdn.bsky.app/img/avatar/plain/did:plc:alice123/bafkreifake@jpeg",
+        "associated": {"lists": 0, "feedgens": 0, "starterPacks": 0, "labeler": false},
+        "viewer": {"muted": false, "blockedBy": false},
+        "labels": [],
+        "createdAt": "2026-07-29T12:00:00.000Z"
+      },
+      "reason": "mention",
+      "reasonSubject": "at://did:plc:alice123/app.bsky.feed.post/3m1234567892a",
+      "record": {
+        "$type": "app.bsky.feed.post",
+        "createdAt": "2026-07-29T12:00:00.000Z",
+        "langs": ["en"],
+        "text": "@contextbot.test can you add context?"
+      },
+      "isRead": false,
+      "indexedAt": "2026-07-29T12:00:01.000Z",
+      "labels": []
+    }
+  ],
+  "seenAt": "2026-07-29T11:59:00.000Z"
+}

@@ -33,3 +33,19 @@ config :phoenix, :plug_init_mode, :runtime
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+import Config
+
+config :context_bot, ContextBot.ATProto.ReqClient,
+  pds_url: "https://pds.test",
+  session: ContextBot.ATProto.Session,
+  timeout: 1_000,
+  req_options: [
+    plug: {Req.Test, ContextBot.ATProto.ReqClient},
+    plugins: [ContextBot.ATProto.ReqClientTest.RequestCapture]
+  ]
+
+config :context_bot, ContextBot.ATProto.Session,
+  timeout: 1_000,
+  reauthentication_cooldown_ms: 60_000,
+  req_options: [plug: {Req.Test, ContextBot.ATProto.Session}]

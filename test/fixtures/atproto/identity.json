@@ -1,0 +1,23 @@
+{
+  "resolveHandle": {"did": "did:plc:bskyteam123"},
+  "didDocument": {
+    "@context": ["https://www.w3.org/ns/did/v1"],
+    "id": "did:plc:bskyteam123",
+    "alsoKnownAs": ["at://bsky.team"],
+    "verificationMethod": [
+      {
+        "id": "did:plc:bskyteam123#atproto",
+        "type": "Multikey",
+        "controller": "did:plc:bskyteam123",
+        "publicKeyMultibase": "zDnaeFakePublicKeyForFixture"
+      }
+    ],
+    "service": [
+      {
+        "id": "#atproto_pds",
+        "type": "AtprotoPersonalDataServer",
+        "serviceEndpoint": "https://morel.us-east.host.bsky.network"
+      }
+    ]
+  }
+}

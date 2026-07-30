@@ -1,0 +1,26 @@
+{
+  "did": "did:plc:alice123",
+  "handle": "alice.test",
+  "displayName": "Alice",
+  "description": "Testing a complete profile response.",
+  "avatar": "https://cdn.bsky.app/img/avatar/plain/did:plc:alice123/bafkreifake@jpeg",
+  "banner": "https://cdn.bsky.app/img/banner/plain/did:plc:alice123/bafkreifake@jpeg",
+  "followersCount": 101,
+  "followsCount": 55,
+  "postsCount": 89,
+  "associated": {"lists": 0, "feedgens": 0, "starterPacks": 0, "labeler": false},
+  "joinedViaStarterPack": null,
+  "indexedAt": "2024-01-01T00:00:00.000Z",
+  "createdAt": "2023-01-01T00:00:00.000Z",
+  "viewer": {"muted": false, "blockedBy": false},
+  "labels": [
+    {
+      "ver": 1,
+      "src": "did:plc:e4elbtctnfqocyfcml6h2lf7",
+      "uri": "did:plc:alice123",
+      "val": "bluesky-elder",
+      "cts": "2026-07-29T00:00:00.000Z"
+    }
+  ],
+  "pinnedPost": null
+}

@@ -1,0 +1,62 @@
+{
+  "create": {
+    "accessJwt": "test-access-jwt-one",
+    "refreshJwt": "test-refresh-jwt-one",
+    "handle": "contextbot.test",
+    "did": "did:plc:contextbot123",
+    "didDoc": {
+      "@context": ["https://www.w3.org/ns/did/v1"],
+      "id": "did:plc:contextbot123",
+      "alsoKnownAs": ["at://contextbot.test"],
+      "verificationMethod": [],
+      "service": [
+        {
+          "id": "#atproto_pds",
+          "type": "AtprotoPersonalDataServer",
+          "serviceEndpoint": "https://pds.test"
+        }
+      ]
+    },
+    "active": true
+  },
+  "refresh": {
+    "accessJwt": "test-access-jwt-two",
+    "refreshJwt": "test-refresh-jwt-two",
+    "handle": "contextbot.test",
+    "did": "did:plc:contextbot123",
+    "didDoc": {
+      "@context": ["https://www.w3.org/ns/did/v1"],
+      "id": "did:plc:contextbot123",
+      "alsoKnownAs": ["at://contextbot.test"],
+      "verificationMethod": [],
+      "service": [
+        {
+          "id": "#atproto_pds",
+          "type": "AtprotoPersonalDataServer",
+          "serviceEndpoint": "https://pds.test"
+        }
+      ]
+    },
+    "active": true
+  },
+  "reauthenticated": {
+    "accessJwt": "test-access-jwt-three",
+    "refreshJwt": "test-refresh-jwt-three",
+    "handle": "contextbot.test",
+    "did": "did:plc:contextbot123",
+    "didDoc": {
+      "@context": ["https://www.w3.org/ns/did/v1"],
+      "id": "did:plc:contextbot123",
+      "alsoKnownAs": ["at://contextbot.test"],
+      "verificationMethod": [],
+      "service": [
+        {
+          "id": "#atproto_pds",
+          "type": "AtprotoPersonalDataServer",
+          "serviceEndpoint": "https://pds.test"
+        }
+      ]
+    },
+    "active": true
+  }
+}

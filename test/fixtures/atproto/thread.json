@@ -1,0 +1,55 @@
+{
+  "thread": {
+    "$type": "app.bsky.feed.defs#threadViewPost",
+    "post": {
+      "uri": "at://did:plc:alice123/app.bsky.feed.post/3m1234567892a",
+      "cid": "bafyreifakecidmention",
+      "author": {
+        "did": "did:plc:alice123",
+        "handle": "alice.test",
+        "displayName": "Alice",
+        "labels": [],
+        "viewer": {"muted": false, "blockedBy": false},
+        "createdAt": "2026-07-01T00:00:00.000Z"
+      },
+      "record": {
+        "$type": "app.bsky.feed.post",
+        "createdAt": "2026-07-29T12:00:00.000Z",
+        "text": "@contextbot.test can you add context?"
+      },
+      "replyCount": 0,
+      "repostCount": 0,
+      "likeCount": 0,
+      "quoteCount": 0,
+      "indexedAt": "2026-07-29T12:00:01.000Z",
+      "labels": []
+    },
+    "parent": {
+      "$type": "app.bsky.feed.defs#threadViewPost",
+      "post": {
+        "uri": "at://did:plc:bob123/app.bsky.feed.post/3m0000000002b",
+        "cid": "bafyreifakecidparent",
+        "author": {
+          "did": "did:plc:bob123",
+          "handle": "bob.test",
+          "displayName": "Bob",
+          "labels": [],
+          "viewer": {"muted": false, "blockedBy": false},
+          "createdAt": "2025-05-01T00:00:00.000Z"
+        },
+        "record": {
+          "$type": "app.bsky.feed.post",
+          "createdAt": "2026-07-29T11:58:00.000Z",
+          "text": "The original claim."
+        },
+        "replyCount": 1,
+        "repostCount": 2,
+        "likeCount": 3,
+        "quoteCount": 0,
+        "indexedAt": "2026-07-29T11:58:01.000Z",
+        "labels": []
+      }
+    },
+    "replies": []
+  }
+}
