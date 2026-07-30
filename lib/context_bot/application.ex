@@ -37,7 +37,8 @@ defmodule ContextBot.Application do
     if ContextBot.Settings.bot_enabled?(settings) do
       [
         {Oban, Application.fetch_env!(:context_bot, Oban)},
-        ContextBot.ATProto.Session
+        ContextBot.ATProto.Session,
+        ContextBot.Mentions.Poller
       ]
     else
       []

@@ -109,6 +109,16 @@ defmodule ContextBot.Workflow.Store do
     pending_count < maximum
   end
 
+  @spec received?(String.t(), String.t()) :: boolean()
+  def received?(uri, cid) when is_binary(uri) and is_binary(cid) do
+    Invocation
+    |> where(
+      [invocation],
+      invocation.invocation_uri == ^uri and invocation.notification_cid == ^cid
+    )
+    |> Repo.exists?()
+  end
+
   @spec fail(Invocation.t(), atom(), map()) :: {:ok, Invocation.t()}
   def fail(%Invocation{id: id}, category, detail) when is_map(detail) do
     {:ok, failed} =

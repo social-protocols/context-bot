@@ -3,6 +3,7 @@ defmodule ContextBot.ApplicationTest do
 
   alias ContextBot.{Application, Settings}
   alias ContextBot.ATProto.Session
+  alias ContextBot.Mentions.Poller
 
   test "an enabled bot supervises its session after Oban" do
     settings =
@@ -14,13 +15,13 @@ defmodule ContextBot.ApplicationTest do
         anthropic_daily_budget_usd: "1.00"
       )
 
-    assert [{Oban, oban_options}, Session] = Application.bot_children(settings)
+    assert [{Oban, oban_options}, Session, Poller] = Application.bot_children(settings)
     assert oban_options == Elixir.Application.fetch_env!(:context_bot, Oban)
 
     assert {:ok, {_flags, child_specs}} =
              Supervisor.init(Application.bot_children(settings), strategy: :one_for_one)
 
-    assert Enum.map(child_specs, & &1.id) == [Oban, Session]
+    assert Enum.map(child_specs, & &1.id) == [Oban, Session, Poller]
   end
 
   test "a disabled bot does not supervise bot-only children" do

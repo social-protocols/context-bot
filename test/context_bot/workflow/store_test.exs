@@ -214,6 +214,19 @@ defmodule ContextBot.Workflow.StoreTest do
     assert Store.pending_capacity_available?(2)
   end
 
+  test "recognizes a durable receipt by its URI and notification CID" do
+    uri = "at://did:plc:actor/app.bsky.feed.post/known"
+    cid = "bafy-known"
+
+    refute Store.received?(uri, cid)
+
+    assert {:ok, _invocation, :inserted} =
+             Store.receive_mention(mention(uri, cid), @received_at, nil)
+
+    assert Store.received?(uri, cid)
+    refute Store.received?(uri, "bafy-new-version")
+  end
+
   test "persists failure state when called with a stale invocation struct" do
     assert {:ok, stale, :inserted} =
              Store.receive_mention(
