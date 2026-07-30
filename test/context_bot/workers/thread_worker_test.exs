@@ -10,7 +10,11 @@ defmodule ContextBot.Workers.ThreadWorkerTest.Client do
     )
 
     if delay_ms = config[:delay_ms], do: Process.sleep(delay_ms)
-    config[:result]
+
+    case config[:result] do
+      result_function when is_function(result_function, 0) -> result_function.()
+      result -> result
+    end
   end
 end
 
@@ -242,6 +246,74 @@ defmodule ContextBot.Workers.ThreadWorkerTest do
     assert :ok = perform(invocation)
     assert Repo.reload!(invocation).failure_category == :thread_unavailable
     assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "silently records an invalid fetched thread as terminal without a research handoff" do
+    invocation = invocation()
+
+    invalid_thread =
+      put_in(
+        fixture("thread_ancestors.json"),
+        ["thread", "post", "record", "reply"],
+        "not-a-map"
+      )
+
+    configure_fake({:ok, 200, %{}, invalid_thread})
+
+    assert :ok = perform(invocation)
+
+    failed = Repo.reload!(invocation)
+    assert failed.status == :failed
+    assert failed.stage == :failed
+    assert failed.failure_category == :thread_unavailable
+    assert failed.failure_detail == %{"reason" => "invalid_thread"}
+    assert failed.raw_thread == nil
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "silently records a non-map successful thread body as terminal" do
+    invocation = invocation()
+    configure_fake({:ok, 200, %{}, "not-a-thread-object"})
+
+    assert :ok = perform(invocation)
+    assert Repo.reload!(invocation).failure_detail == %{"reason" => "invalid_thread"}
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "a stale permanent fetch cannot overwrite a concurrent successful handoff" do
+    invocation = invocation()
+    test_pid = self()
+
+    stale_result = fn ->
+      send(test_pid, {:stale_fetch_waiting, self()})
+
+      receive do
+        :release_stale_fetch -> {:error, :record_not_found}
+      after
+        5_000 -> {:error, :timeout}
+      end
+    end
+
+    configure_fake(stale_result)
+    stale_worker = Task.async(fn -> perform(invocation) end)
+    assert_receive {:stale_fetch_waiting, stale_fetch_pid}
+
+    response = fixture("thread_ancestors.json")
+    configure_fake({:ok, 200, %{}, response})
+    assert :ok = perform(invocation)
+
+    send(stale_fetch_pid, :release_stale_fetch)
+    assert :ok = Task.await(stale_worker)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.status == :thread_ready
+    assert persisted.stage == :thread_ready
+    assert persisted.raw_thread == response
+    assert persisted.failure_category == nil
+    assert persisted.failure_detail == nil
+
+    assert [%Oban.Job{worker: "ContextBot.Workers.ResearchWorker", queue: "research"}] =
+             Repo.all(Oban.Job)
   end
 
   defp configure_fake(result, overrides \\ []) do

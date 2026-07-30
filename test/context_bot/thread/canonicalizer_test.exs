@@ -58,9 +58,16 @@ defmodule ContextBot.Thread.CanonicalizerTest do
     refute result.text =~ "cdn.example"
   end
 
-  test "marks a capped parent chain without changing the record's copied root" do
+  test "marks a server-capped chain when the deepest returned ancestor is not the record root" do
+    server_capped =
+      update_in(
+        fixture("thread_ancestors.json"),
+        ["thread", "parent"],
+        &Map.delete(&1, "parent")
+      )
+
     assert {:ok, result} =
-             Canonicalizer.build(fixture("thread_ancestors.json"), context(parent_height: 1))
+             Canonicalizer.build(server_capped, context(parent_height: 1))
 
     assert result.text =~ "[ancestor chain truncated]"
     assert result.text =~ "The immediate parent claim."
@@ -71,6 +78,21 @@ defmodule ContextBot.Thread.CanonicalizerTest do
              "uri" => "at://did:plc:root/app.bsky.feed.post/root",
              "cid" => "bafy-root"
            }
+  end
+
+  test "does not mark truncation when the deepest returned ancestor is the record root" do
+    full_thread = fixture("thread_ancestors.json")
+    root_view = get_in(full_thread, ["thread", "parent", "parent"])
+    root_ref = get_in(full_thread, ["thread", "post", "record", "reply", "root"])
+
+    root_complete =
+      full_thread
+      |> put_in(["thread", "parent"], root_view)
+      |> put_in(["thread", "post", "record", "reply", "parent"], root_ref)
+
+    assert {:ok, result} = Canonicalizer.build(root_complete, context(parent_height: 1))
+    refute result.text =~ "[ancestor chain truncated]"
+    assert result.text =~ "The root claim."
   end
 
   test "renders blocked, unavailable, and unknown ancestor unions as explicit placeholders" do
@@ -149,6 +171,40 @@ defmodule ContextBot.Thread.CanonicalizerTest do
     assert {:error, :invalid_thread} = Canonicalizer.build(%{}, context())
   end
 
+  test "returns invalid_thread without raising for malformed target records and roots" do
+    base = fixture("thread_ancestors.json")
+
+    malformed = [
+      put_in(base, ["thread", "post", "record", "reply"], "not-a-map"),
+      put_in(base, ["thread", "post", "record", "reply"], ["not-a-map"]),
+      put_in(base, ["thread", "post", "record", "reply", "root"], "not-a-ref"),
+      put_in(base, ["thread", "post", "record", "reply", "root", "cid"], ""),
+      put_in(base, ["thread", "post"], "not-a-post")
+    ]
+
+    Enum.each(malformed, fn response ->
+      assert safely_build(response) == {:error, :invalid_thread}
+    end)
+  end
+
+  test "rejects target URI, CID, or author fields inconsistent with the invocation" do
+    base = fixture("thread_ancestors.json")
+
+    invalid_targets = [
+      put_in(
+        base,
+        ["thread", "post", "uri"],
+        "at://did:plc:mallory/app.bsky.feed.post/different"
+      ),
+      put_in(base, ["thread", "post", "cid"], ""),
+      put_in(base, ["thread", "post", "author", "did"], "did:plc:mallory")
+    ]
+
+    Enum.each(invalid_targets, fn response ->
+      assert safely_build(response) == {:error, :invalid_thread}
+    end)
+  end
+
   defp context(overrides \\ []) do
     %{
       bot_did: @bot_did,
@@ -163,5 +219,13 @@ defmodule ContextBot.Thread.CanonicalizerTest do
     "test/fixtures/atproto/#{name}"
     |> File.read!()
     |> Jason.decode!()
+  end
+
+  defp safely_build(response) do
+    Canonicalizer.build(response, context())
+  rescue
+    exception -> {:raised, exception.__struct__}
+  catch
+    kind, reason -> {kind, reason}
   end
 end

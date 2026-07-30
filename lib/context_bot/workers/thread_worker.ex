@@ -84,16 +84,21 @@ defmodule ContextBot.Workers.ThreadWorker do
            }) do
       persist_handoff(invocation, body, canonical, dependencies.research_job_builder)
     else
-      {:error, :target_unavailable} -> fail_unavailable(invocation)
+      {:error, :target_unavailable} -> fail_thread(invocation, "target_unavailable")
+      {:error, :invalid_thread} -> fail_thread(invocation, "invalid_thread")
       {:error, reason} -> {:error, reason}
     end
   end
 
   defp handle_fetch({:error, :record_not_found}, invocation, _dependencies),
-    do: fail_unavailable(invocation)
+    do: fail_thread(invocation, "target_unavailable")
 
   defp handle_fetch({:error, {:permanent, _status}}, invocation, _dependencies),
-    do: fail_unavailable(invocation)
+    do: fail_thread(invocation, "target_unavailable")
+
+  defp handle_fetch({:ok, status, _headers, _invalid_body}, invocation, _dependencies)
+       when status in 200..299,
+       do: fail_thread(invocation, "invalid_thread")
 
   defp handle_fetch({:error, reason}, _invocation, _dependencies), do: {:error, reason}
   defp handle_fetch(_invalid_response, _invocation, _dependencies), do: {:error, :invalid_thread}
@@ -130,11 +135,27 @@ defmodule ContextBot.Workers.ThreadWorker do
     end
   end
 
-  defp fail_unavailable(invocation) do
-    {:ok, _failed} =
-      Store.fail(invocation, :thread_unavailable, %{"reason" => "target_unavailable"})
+  defp fail_thread(invocation, reason) do
+    case Store.transition(
+           invocation,
+           :capturing_thread,
+           :failed,
+           %{
+             failure_category: :thread_unavailable,
+             failure_detail: %{"reason" => reason},
+             completed_at: DateTime.utc_now()
+           },
+           nil
+         ) do
+      {:ok, _failed} ->
+        :ok
 
-    :ok
+      {:error, :stale_stage} ->
+        :ok
+
+      {:error, changeset} ->
+        raise Ecto.InvalidChangesetError, action: :update, changeset: changeset
+    end
   end
 
   defp research_job(invocation) do

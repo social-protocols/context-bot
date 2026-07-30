@@ -5,7 +5,7 @@ defmodule ContextBot.Thread.Canonicalizer do
   Only nested `parent` values are traversed. Descendant replies and media content are ignored.
   """
 
-  alias ContextBot.ATProto.StrongRef
+  alias ContextBot.ATProto.{ATURI, StrongRef}
 
   @thread_view_post "app.bsky.feed.defs#threadViewPost"
   @blocked_post "app.bsky.feed.defs#blockedPost"
@@ -51,7 +51,8 @@ defmodule ContextBot.Thread.Canonicalizer do
          :ok <- current_mention?(target_post, notification_cid, bot_did),
          {:ok, parent} <- strong_ref(target_post),
          {:ok, root} <- root_ref(target_post.record, parent),
-         {:ok, ancestors} <- ancestors(Map.get(target, "parent"), parent_height, []) do
+         {:ok, ancestors} <-
+           ancestors(Map.get(target, "parent"), parent_height, root["uri"], []) do
       sections =
         Enum.map(ancestors, &render_ancestor/1) ++ [render_post(target_post, "invocation")]
 
@@ -75,29 +76,30 @@ defmodule ContextBot.Thread.Canonicalizer do
 
   def build(_response, _context), do: {:error, :invalid_thread}
 
-  defp available_post(%{"post" => post}) when is_map(post) do
-    case post do
-      %{
-        "uri" => uri,
-        "cid" => cid,
-        "author" => %{"did" => did} = author,
-        "record" => %{"$type" => @post_record, "text" => text} = record
-      }
-      when is_binary(uri) and is_binary(cid) and cid != "" and is_binary(did) and did != "" and
-             is_binary(text) ->
-        {:ok,
-         %{
-           uri: uri,
-           cid: cid,
-           did: did,
-           handle: optional_nonempty(author, "handle"),
-           text: text,
-           record: record,
-           embed: Map.get(post, "embed")
-         }}
-
-      _invalid_post ->
-        {:error, :invalid_post}
+  defp available_post(%{
+         "post" =>
+           %{
+             "uri" => uri,
+             "cid" => cid,
+             "author" => %{"did" => did} = author,
+             "record" => %{"$type" => @post_record, "text" => text} = record
+           } = post
+       })
+       when is_binary(text) do
+    with {:ok, %{repo: ^did}} <- ATURI.parse(uri),
+         {:ok, _reference} <- StrongRef.new(uri, cid) do
+      {:ok,
+       %{
+         uri: uri,
+         cid: cid,
+         did: did,
+         handle: optional_nonempty(author, "handle"),
+         text: text,
+         record: record,
+         embed: Map.get(post, "embed")
+       }}
+    else
+      _invalid_author_uri_or_cid -> {:error, :invalid_post}
     end
   end
 
@@ -132,35 +134,55 @@ defmodule ContextBot.Thread.Canonicalizer do
   defp strong_ref(%{uri: uri, cid: cid}), do: StrongRef.new(uri, cid)
 
   defp root_ref(record, parent) do
-    case get_in(record, ["reply", "root"]) do
-      nil -> {:ok, parent}
-      %{"uri" => uri, "cid" => cid} -> StrongRef.new(uri, cid)
-      _invalid_root -> {:error, :invalid_root}
+    case Map.fetch(record, "reply") do
+      :error ->
+        {:ok, parent}
+
+      {:ok, %{"root" => %{"uri" => uri, "cid" => cid}}} ->
+        StrongRef.new(uri, cid)
+
+      {:ok, _invalid_reply} ->
+        {:error, :invalid_root}
     end
   end
 
-  defp ancestors(nil, _remaining, ancestors), do: {:ok, ancestors}
+  defp ancestors(nil, remaining, root_uri, ancestors),
+    do: {:ok, maybe_mark_truncated(ancestors, remaining, root_uri)}
 
-  defp ancestors(_parent, 0, ancestors),
-    do: {:ok, [:truncated | ancestors]}
+  defp ancestors(_parent, 0, root_uri, ancestors),
+    do: {:ok, maybe_mark_truncated(ancestors, 0, root_uri)}
 
-  defp ancestors(%{"$type" => @thread_view_post} = parent, remaining, ancestors) do
+  defp ancestors(%{"$type" => @thread_view_post} = parent, remaining, root_uri, ancestors) do
     with {:ok, post} <- available_post(parent),
          {:ok, _strong_ref} <- strong_ref(post) do
-      ancestors(Map.get(parent, "parent"), remaining - 1, [{:post, post} | ancestors])
+      ancestors(
+        Map.get(parent, "parent"),
+        remaining - 1,
+        root_uri,
+        [{:post, post} | ancestors]
+      )
     end
   end
 
-  defp ancestors(%{"$type" => @blocked_post}, _remaining, ancestors),
+  defp ancestors(%{"$type" => @blocked_post}, _remaining, _root_uri, ancestors),
     do: {:ok, [:blocked | ancestors]}
 
-  defp ancestors(%{"$type" => @not_found_post}, _remaining, ancestors),
+  defp ancestors(%{"$type" => @not_found_post}, _remaining, _root_uri, ancestors),
     do: {:ok, [:unavailable | ancestors]}
 
-  defp ancestors(%{"$type" => _unknown_type}, _remaining, ancestors),
+  defp ancestors(%{"$type" => _unknown_type}, _remaining, _root_uri, ancestors),
     do: {:ok, [:unknown | ancestors]}
 
-  defp ancestors(_invalid_parent, _remaining, _ancestors), do: {:error, :invalid_parent}
+  defp ancestors(_invalid_parent, _remaining, _root_uri, _ancestors),
+    do: {:error, :invalid_parent}
+
+  defp maybe_mark_truncated([{:post, %{uri: root_uri}} | _rest] = ancestors, 0, root_uri),
+    do: ancestors
+
+  defp maybe_mark_truncated([{:post, _deepest} | _rest] = ancestors, 0, _root_uri),
+    do: [:truncated | ancestors]
+
+  defp maybe_mark_truncated(ancestors, _remaining, _root_uri), do: ancestors
 
   defp render_ancestor({:post, post}), do: render_post(post, "ancestor")
   defp render_ancestor(:blocked), do: "[blocked ancestor]"
