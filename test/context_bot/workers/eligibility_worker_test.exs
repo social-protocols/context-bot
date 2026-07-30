@@ -154,6 +154,41 @@ defmodule ContextBot.Workers.EligibilityWorkerTest do
     assert byte_size(Jason.encode!(persisted.eligibility_evidence)) < 512
   end
 
+  test "safely persists and admits finite string-key team evidence" do
+    invocation = invocation("safe-team-evidence", :received)
+
+    Process.put(
+      {GateStub, :result},
+      {:eligible, :bsky_team,
+       %{
+         "actor_did" => @actor_did,
+         "handle" => "alice.bsky.team",
+         "verification" => "bidirectional",
+         "raw_document" => %{"alsoKnownAs" => String.duplicate("x", 10_000)},
+         "token" => "Bearer should-never-persist"
+       }}
+    )
+
+    configure(settings(), eligibility: GateStub)
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.status == :capturing_thread
+    assert persisted.eligibility_method == "bsky_team"
+
+    assert persisted.eligibility_evidence == %{
+             "actor_did" => @actor_did,
+             "handle" => "alice.bsky.team",
+             "verification" => "bidirectional"
+           }
+
+    assert byte_size(Jason.encode!(persisted.eligibility_evidence)) < 512
+
+    assert [%Oban.Job{worker: "ContextBot.Workers.ThreadWorker", queue: "thread"}] =
+             Repo.all(Oban.Job)
+  end
+
   test "stores eligible rate deferral without enqueueing thread work" do
     historical("rate-one", DateTime.add(@now, -30, :minute))
     historical("rate-two", DateTime.add(@now, -10, :minute))

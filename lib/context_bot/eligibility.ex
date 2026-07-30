@@ -23,7 +23,8 @@ defmodule ContextBot.Eligibility do
 
   defp check_elder(actor_did, observed_handle, now, settings, client) do
     case client.get_profile(actor_did, settings.skywatch_did) do
-      {:ok, _status, headers, %{"labels" => labels}} when is_map(headers) and is_list(labels) ->
+      {:ok, status, headers, %{"labels" => labels}}
+      when status in 200..299 and is_map(headers) and is_list(labels) ->
         evaluate_profile(
           actor_did,
           observed_handle,
@@ -33,6 +34,9 @@ defmodule ContextBot.Eligibility do
           headers,
           labels
         )
+
+      {:ok, status, _headers, _body} when is_integer(status) ->
+        {:error, :labeler_unavailable}
 
       _error ->
         team_or_labeler_error(actor_did, observed_handle, client)
@@ -113,17 +117,21 @@ defmodule ContextBot.Eligibility do
 
   defp verify_forward_identity(actor_did, handle, client) do
     case client.resolve_handle(handle) do
-      {:ok, _status, _headers, %{"did" => ^actor_did}} ->
+      {:ok, status, _headers, %{"did" => ^actor_did}} when status in 200..299 ->
         if supported_did?(actor_did) do
           verify_did_document(actor_did, handle, client)
         else
           :ineligible
         end
 
-      {:ok, _status, _headers, %{"did" => resolved_did}} when is_binary(resolved_did) ->
+      {:ok, status, _headers, %{"did" => resolved_did}}
+      when status in 200..299 and is_binary(resolved_did) ->
         :ineligible
 
-      {:ok, _status, _headers, _malformed_body} ->
+      {:ok, status, _headers, _body} when is_integer(status) and status not in 200..299 ->
+        {:error, :identity_unavailable}
+
+      {:ok, status, _headers, _malformed_body} when status in 200..299 ->
         {:error, :identity_unavailable}
 
       {:error, _reason} ->
@@ -133,29 +141,39 @@ defmodule ContextBot.Eligibility do
 
   defp verify_did_document(actor_did, handle, client) do
     case client.resolve_did(actor_did) do
-      {:ok, _status, _headers, %{"id" => ^actor_did, "alsoKnownAs" => aliases}}
-      when is_list(aliases) ->
-        if first_valid_handle_claim(aliases) == handle do
-          {:eligible, :bsky_team,
-           %{
-             "actor_did" => actor_did,
-             "handle" => handle,
-             "verification" => "bidirectional"
-           }}
-        else
-          :ineligible
-        end
+      {:ok, status, _headers, body} when status in 200..299 ->
+        verify_did_document_body(body, actor_did, handle)
 
-      {:ok, _status, _headers, body} when is_map(body) ->
-        :ineligible
-
-      {:ok, _status, _headers, _malformed_body} ->
+      {:ok, status, _headers, _body} when is_integer(status) and status not in 200..299 ->
         {:error, :identity_unavailable}
 
       {:error, _reason} ->
         {:error, :identity_unavailable}
     end
   end
+
+  defp verify_did_document_body(
+         %{"id" => actor_did, "alsoKnownAs" => aliases},
+         actor_did,
+         handle
+       )
+       when is_list(aliases) do
+    if first_valid_handle_claim(aliases) == handle do
+      {:eligible, :bsky_team,
+       %{
+         "actor_did" => actor_did,
+         "handle" => handle,
+         "verification" => "bidirectional"
+       }}
+    else
+      :ineligible
+    end
+  end
+
+  defp verify_did_document_body(body, _actor_did, _handle) when is_map(body), do: :ineligible
+
+  defp verify_did_document_body(_body, _actor_did, _handle),
+    do: {:error, :identity_unavailable}
 
   defp first_valid_handle_claim(aliases) do
     Enum.find_value(aliases, fn

@@ -192,7 +192,19 @@ defmodule ContextBot.Workers.EligibilityWorker do
   defp evidence_keys(:bsky_team), do: ["actor_did", "handle", "verification"]
   defp evidence_keys(_method), do: []
 
-  defp fetch(map, key), do: Map.get(map, key, Map.get(map, String.to_existing_atom(key)))
+  defp fetch(map, "actor_did"), do: fetch_key(map, "actor_did", :actor_did)
+  defp fetch(map, "source"), do: fetch_key(map, "source", :source)
+  defp fetch(map, "label"), do: fetch_key(map, "label", :label)
+  defp fetch(map, "labeler_did"), do: fetch_key(map, "labeler_did", :labeler_did)
+  defp fetch(map, "handle"), do: fetch_key(map, "handle", :handle)
+  defp fetch(map, "verification"), do: fetch_key(map, "verification", :verification)
+
+  defp fetch_key(map, string_key, atom_key) do
+    case Map.fetch(map, string_key) do
+      {:ok, value} -> value
+      :error -> Map.get(map, atom_key)
+    end
+  end
 
   defp bound_binary(value) do
     if String.valid?(value) do

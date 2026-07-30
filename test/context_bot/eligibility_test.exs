@@ -270,6 +270,42 @@ defmodule ContextBot.EligibilityTest do
              Eligibility.check(@actor_did, "alice.bsky.team", @now, settings(), ClientStub)
   end
 
+  test "never authorizes a valid Elder body from a non-2xx profile response" do
+    Process.put(
+      {ClientStub, :profile},
+      {:ok, 503, confirmed_headers(), profile([elder_label()])}
+    )
+
+    assert {:error, :labeler_unavailable} ==
+             Eligibility.check(@actor_did, "alice.example", @now, settings(), ClientStub)
+  end
+
+  test "never authorizes a valid handle body from a non-2xx resolution response" do
+    put_profile(confirmed_headers(), profile([]))
+    Process.put({ClientStub, :handle}, {:ok, 503, %{}, %{"did" => @actor_did}})
+
+    Process.put(
+      {ClientStub, :did},
+      {:ok, 200, %{}, %{"id" => @actor_did, "alsoKnownAs" => ["at://alice.bsky.team"]}}
+    )
+
+    assert {:error, :identity_unavailable} ==
+             Eligibility.check(@actor_did, "alice.bsky.team", @now, settings(), ClientStub)
+  end
+
+  test "never authorizes a valid DID document body from a non-2xx resolution response" do
+    put_profile(confirmed_headers(), profile([]))
+    Process.put({ClientStub, :handle}, {:ok, 200, %{}, %{"did" => @actor_did}})
+
+    Process.put(
+      {ClientStub, :did},
+      {:ok, 503, %{}, %{"id" => @actor_did, "alsoKnownAs" => ["at://alice.bsky.team"]}}
+    )
+
+    assert {:error, :identity_unavailable} ==
+             Eligibility.check(@actor_did, "alice.bsky.team", @now, settings(), ClientStub)
+  end
+
   defp settings(overrides \\ []) do
     []
     |> Settings.load()
