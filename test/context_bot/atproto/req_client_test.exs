@@ -14,10 +14,21 @@ defmodule ContextBot.ATProto.ReqClientTest.RequestCapture do
   end
 end
 
+defmodule ContextBot.ATProto.ReqClientTest.SessionStub do
+  @moduledoc false
+
+  def access_token, do: {:ok, "test-access-jwt-one"}
+
+  def refresh("test-access-jwt-one") do
+    Process.get(:req_client_session_refresh_result, {:error, :unexpected_session_stub})
+  end
+end
+
 defmodule ContextBot.ATProto.ReqClientTest do
   use ExUnit.Case, async: false
 
   alias ContextBot.ATProto.{ReqClient, Session}
+  alias ContextBot.ATProto.ReqClientTest.SessionStub
 
   @bot_did "did:plc:contextbot123"
   @bot_handle "contextbot.test"
@@ -249,6 +260,45 @@ defmodule ContextBot.ATProto.ReqClientTest do
     end)
 
     assert {:error, :unauthorized} = ReqClient.list_notifications(nil)
+  end
+
+  test "normalizes session refresh errors at the client boundary" do
+    original_config = Application.fetch_env!(:context_bot, ReqClient)
+
+    Application.put_env(
+      :context_bot,
+      ReqClient,
+      Keyword.put(original_config, :session, SessionStub)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:context_bot, ReqClient, original_config)
+      Process.delete(:req_client_session_refresh_result)
+    end)
+
+    cases = [
+      {:reauthentication_rate_limited, :session_unavailable},
+      {:authentication_failed, :session_unavailable},
+      {:did_mismatch, :session_unavailable},
+      {:inactive_session, :session_unavailable},
+      {{:rate_limited, "29"}, {:rate_limited, "29"}},
+      {{:transient, 503}, {:transient, 503}},
+      {{:permanent, 401}, {:permanent, 401}},
+      {:timeout, :timeout}
+    ]
+
+    Enum.each(cases, fn {session_reason, expected_reason} ->
+      Process.put(:req_client_session_refresh_result, {:error, session_reason})
+
+      Req.Test.expect(ReqClient, fn conn ->
+        assert Plug.Conn.get_req_header(conn, "authorization") ==
+                 ["Bearer test-access-jwt-one"]
+
+        conn |> Plug.Conn.put_status(401) |> Req.Test.json(%{"error" => "ExpiredToken"})
+      end)
+
+      assert ReqClient.list_notifications(nil) == {:error, expected_reason}
+    end)
   end
 
   test "classifies provider and transport failures without automatic Req retries" do

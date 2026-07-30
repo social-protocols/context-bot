@@ -117,9 +117,25 @@ defmodule ContextBot.ATProto.ReqClient do
   defp refresh_and_retry(session, request_options, rejected_access_token) do
     case session.refresh(rejected_access_token) do
       {:ok, refreshed_token} -> request_with_token(request_options, refreshed_token)
-      {:error, reason} -> {:error, reason}
+      {:error, reason} -> {:error, normalize_session_error(reason)}
     end
   end
+
+  defp normalize_session_error(reason) when reason in [:timeout, :session_unavailable], do: reason
+
+  defp normalize_session_error({:rate_limited, retry_after} = reason)
+       when is_binary(retry_after) or is_nil(retry_after),
+       do: reason
+
+  defp normalize_session_error({:transient, status} = reason)
+       when status == :transport or (is_integer(status) and status >= 0),
+       do: reason
+
+  defp normalize_session_error({:permanent, status} = reason)
+       when is_integer(status) and status >= 0,
+       do: reason
+
+  defp normalize_session_error(_reason), do: :session_unavailable
 
   defp request_with_token(request_options, access_token) do
     headers = Keyword.get(request_options, :headers, [])

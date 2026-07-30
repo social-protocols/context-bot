@@ -121,6 +121,83 @@ defmodule ContextBot.ATProto.SessionTest do
     assert Session.status(pid) == {:ok, %{authenticated?: false, did: @bot_did}}
   end
 
+  test "a slow failed invalid-refresh fallback starts its cooldown when it returns" do
+    session = fixture()
+    expect_create_session(session["create"])
+    pid = start_session(reauthentication_cooldown_ms: 100)
+    assert Session.access_token(pid) == {:ok, "test-access-jwt-one"}
+
+    Req.Test.expect(Session, fn conn ->
+      conn
+      |> Plug.Conn.put_status(401)
+      |> Req.Test.json(%{"error" => "ExpiredToken"})
+    end)
+
+    Req.Test.expect(Session, fn conn ->
+      Process.sleep(150)
+
+      conn
+      |> Plug.Conn.put_status(503)
+      |> Req.Test.json(%{"error" => "UpstreamFailure"})
+    end)
+
+    test_pid = self()
+
+    Req.Test.stub(Session, fn conn ->
+      send(test_pid, :unexpected_create_attempt)
+
+      conn
+      |> Plug.Conn.put_status(503)
+      |> Req.Test.json(%{"error" => "UpstreamFailure"})
+    end)
+
+    assert Session.refresh("test-access-jwt-one", pid) ==
+             {:error, :authentication_failed}
+
+    assert Session.access_token(pid) == {:error, :reauthentication_rate_limited}
+    refute_receive :unexpected_create_attempt
+  end
+
+  test "a failed tokenless reauthentication advances an expired cooldown" do
+    session = fixture()
+    expect_create_session(session["create"])
+    pid = start_session(reauthentication_cooldown_ms: 100)
+    assert Session.access_token(pid) == {:ok, "test-access-jwt-one"}
+
+    Req.Test.expect(Session, fn conn ->
+      conn
+      |> Plug.Conn.put_status(401)
+      |> Req.Test.json(%{"error" => "ExpiredToken"})
+    end)
+
+    Req.Test.expect(Session, fn conn ->
+      conn
+      |> Plug.Conn.put_status(503)
+      |> Req.Test.json(%{"error" => "UpstreamFailure"})
+    end)
+
+    assert Session.refresh("test-access-jwt-one", pid) ==
+             {:error, :authentication_failed}
+
+    Process.sleep(150)
+
+    test_pid = self()
+
+    Req.Test.stub(Session, fn conn ->
+      assert conn.request_path == "/xrpc/com.atproto.server.createSession"
+      send(test_pid, :tokenless_create_attempt)
+
+      conn
+      |> Plug.Conn.put_status(503)
+      |> Req.Test.json(%{"error" => "UpstreamFailure"})
+    end)
+
+    assert Session.access_token(pid) == {:error, :authentication_failed}
+    assert_receive :tokenless_create_attempt
+    assert Session.access_token(pid) == {:error, :reauthentication_rate_limited}
+    refute_receive :tokenless_create_attempt
+  end
+
   test "refresh preserves rate-limit classification and does not create a new session" do
     session = fixture()
     expect_create_session(session["create"])

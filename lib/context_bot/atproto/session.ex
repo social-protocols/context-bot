@@ -104,9 +104,14 @@ defmodule ContextBot.ATProto.Session do
       {:reply, {:error, :reauthentication_rate_limited}, state}
     else
       case create_session(state) do
-        {:ok, authenticated} -> {:reply, {:ok, authenticated.access_jwt}, authenticated}
-        {:stop, reason} -> {:stop, :normal, {:error, reason}, clear_tokens(state)}
-        {:error, _reason} -> {:reply, {:error, :authentication_failed}, state}
+        {:ok, authenticated} ->
+          {:reply, {:ok, authenticated.access_jwt}, authenticated}
+
+        {:stop, reason} ->
+          {:stop, :normal, {:error, reason}, clear_tokens(state)}
+
+        {:error, _reason} ->
+          {:reply, {:error, :authentication_failed}, begin_reauthentication_cooldown(state)}
       end
     end
   end
@@ -147,15 +152,18 @@ defmodule ContextBot.ATProto.Session do
     if reauthentication_rate_limited?(state, now) do
       {:reply, {:error, :reauthentication_rate_limited}, state}
     else
-      state = %{
-        state
-        | reauthenticate_after: now + state.reauthentication_cooldown_ms
-      }
+      state = begin_reauthentication_cooldown(state, now)
 
       case create_session(state) do
-        {:ok, authenticated} -> {:reply, {:ok, authenticated.access_jwt}, authenticated}
-        {:stop, reason} -> {:stop, :normal, {:error, reason}, clear_tokens(state)}
-        {:error, _reason} -> {:reply, {:error, :authentication_failed}, clear_tokens(state)}
+        {:ok, authenticated} ->
+          {:reply, {:ok, authenticated.access_jwt}, authenticated}
+
+        {:stop, reason} ->
+          {:stop, :normal, {:error, reason}, clear_tokens(state)}
+
+        {:error, _reason} ->
+          state = state |> begin_reauthentication_cooldown() |> clear_tokens()
+          {:reply, {:error, :authentication_failed}, state}
       end
     end
   end
@@ -263,6 +271,10 @@ defmodule ContextBot.ATProto.Session do
 
   defp reauthentication_rate_limited?(state, now \\ System.monotonic_time(:millisecond)) do
     is_integer(state.reauthenticate_after) and now < state.reauthenticate_after
+  end
+
+  defp begin_reauthentication_cooldown(state, now \\ System.monotonic_time(:millisecond)) do
+    %{state | reauthenticate_after: now + state.reauthentication_cooldown_ms}
   end
 
   defp option(options, config, key, default) do
