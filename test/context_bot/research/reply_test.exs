@@ -39,7 +39,10 @@ defmodule ContextBot.Research.ReplyTest do
         "content" => [
           %{
             "type" => "web_search_result",
-            "encrypted_content" => "opaque-search-result"
+            "url" => "https://example.test/search-result",
+            "title" => "Search result",
+            "encrypted_content" => "opaque-search-result",
+            "page_age" => nil
           }
         ]
       },
@@ -53,12 +56,122 @@ defmodule ContextBot.Research.ReplyTest do
       %{
         "type" => "web_fetch_tool_result",
         "tool_use_id" => "fetch-1",
-        "content" => %{"type" => "web_fetch_result", "encrypted_content" => "opaque-fetch"}
+        "content" => %{
+          "type" => "web_fetch_result",
+          "url" => "https://example.test",
+          "content" => %{"type" => "document", "opaque" => "opaque-fetch"},
+          "retrieved_at" => nil
+        }
       },
       %{"type" => "text", "text" => "second."}
     ]
 
     assert Reply.select(content, :end_turn) == {:ok, "First second."}
+  end
+
+  test "completes a server tool started in a prior pause without publishing prior partial text" do
+    paused_content = [
+      text("Partial pre-pause narration must not publish. "),
+      %{
+        "type" => "server_tool_use",
+        "id" => "paused-fetch-1",
+        "name" => "web_fetch",
+        "input" => %{"url" => "https://example.test/live"}
+      }
+    ]
+
+    assert List.first(paused_content)["text"] =~ "must not publish"
+
+    completed_content = [
+      %{
+        "type" => "web_fetch_tool_result",
+        "tool_use_id" => "paused-fetch-1",
+        "content" => %{
+          "type" => "web_fetch_result",
+          "url" => "https://example.test/live",
+          "content" => %{"type" => "document", "opaque" => %{"future" => true}}
+        }
+      },
+      text("Final context only.")
+    ]
+
+    context = %{
+      stop_reason: "end_turn",
+      pending_server_tools: %{"paused-fetch-1" => "web_fetch"}
+    }
+
+    assert Reply.select(completed_content, context) == {:ok, "Final context only."}
+  end
+
+  test "rejects mismatched, unknown, orphaned, and still-pending cross-response tools" do
+    fetch_success = %{
+      "type" => "web_fetch_tool_result",
+      "tool_use_id" => "paused-call-1",
+      "content" => %{
+        "type" => "web_fetch_result",
+        "url" => "https://example.test/page",
+        "content" => %{"type" => "document"},
+        "retrieved_at" => nil
+      }
+    }
+
+    assert Reply.select(
+             [fetch_success, text("must not publish")],
+             %{
+               stop_reason: :end_turn,
+               pending_server_tools: %{"paused-call-1" => "web_search"}
+             }
+           ) == {:error, :unexpected_tool_use}
+
+    assert Reply.select(
+             [%{"type" => "future_tool_result", "tool_use_id" => "paused-call-1"}],
+             %{
+               stop_reason: :end_turn,
+               pending_server_tools: %{"paused-call-1" => "web_fetch"}
+             }
+           ) == {:error, {:unexpected_content_block, "future_tool_result"}}
+
+    assert Reply.select(
+             [fetch_success],
+             %{
+               stop_reason: :end_turn,
+               pending_server_tools: %{"different-call" => "web_fetch"}
+             }
+           ) == {:error, :unexpected_tool_use}
+
+    assert Reply.select(
+             [fetch_success],
+             %{
+               stop_reason: :end_turn,
+               pending_server_tools: %{
+                 "paused-call-1" => "web_fetch",
+                 "paused-call-2" => "web_search"
+               }
+             }
+           ) == {:error, :pending_tool_use}
+
+    assert Reply.select(
+             [text("must not publish"), fetch_success, text("nor this")],
+             %{
+               stop_reason: :end_turn,
+               pending_server_tools: %{"paused-call-1" => "web_fetch"}
+             }
+           ) == {:error, :unexpected_tool_use}
+  end
+
+  test "rejects malformed pending server-tool context" do
+    invalid_pending_maps = [
+      %{123 => "web_search"},
+      %{"" => "web_search"},
+      %{"call-1" => "future_tool"}
+    ]
+
+    Enum.each(invalid_pending_maps, fn pending_server_tools ->
+      assert Reply.select([text("must not publish")], %{
+               stop_reason: :end_turn,
+               pending_server_tools: pending_server_tools
+             }) == {:error, :invalid_content}
+    end)
   end
 
   test "classifies over-limit normal completions as repairable without truncating" do
@@ -166,6 +279,54 @@ defmodule ContextBot.Research.ReplyTest do
     assert Reply.select(%{"not" => "a list"}, :end_turn) == {:error, :invalid_content}
   end
 
+  test "rejects malformed thinking blocks even when valid text follows" do
+    malformed_blocks = [
+      %{"type" => "thinking", "thinking" => "missing signature"},
+      %{"type" => "thinking", "thinking" => 123, "signature" => "signed"},
+      %{"type" => "thinking", "thinking" => "summary", "signature" => nil},
+      %{"type" => "redacted_thinking"},
+      %{"type" => "redacted_thinking", "data" => 123}
+    ]
+
+    Enum.each(malformed_blocks, fn malformed_block ->
+      assert Reply.select([malformed_block, text("must not publish")], :end_turn) ==
+               {:error, :invalid_content}
+    end)
+  end
+
+  test "rejects malformed known server-tool calls even when valid text follows" do
+    malformed_calls = [
+      %{"type" => "server_tool_use", "id" => "call-1", "name" => "web_search"},
+      %{"type" => "server_tool_use", "id" => "", "name" => "web_search", "input" => %{}},
+      %{"type" => "server_tool_use", "id" => 123, "name" => "web_fetch", "input" => %{}},
+      %{"type" => "server_tool_use", "id" => "call-1", "input" => %{}}
+    ]
+
+    Enum.each(malformed_calls, fn malformed_call ->
+      assert Reply.select([malformed_call, text("must not publish")], :end_turn) ==
+               {:error, :invalid_content}
+    end)
+  end
+
+  test "requires server-tool input while keeping its nested value opaque" do
+    content = [
+      %{
+        "type" => "server_tool_use",
+        "id" => "search-opaque-input",
+        "name" => "web_search",
+        "input" => "opaque-provider-input"
+      },
+      %{
+        "type" => "web_search_tool_result",
+        "tool_use_id" => "search-opaque-input",
+        "content" => []
+      },
+      text("publishable")
+    ]
+
+    assert Reply.select(content, :end_turn) == {:ok, "publishable"}
+  end
+
   test "rejects malformed known server-tool result payloads" do
     cases = [
       {"web_search", "web_search_tool_result", %{}},
@@ -186,6 +347,103 @@ defmodule ContextBot.Research.ReplyTest do
           %{"type" => result_type, "tool_use_id" => "server-call-1"},
           malformed_fields
         ),
+        text("must not publish")
+      ]
+
+      assert Reply.select(content, :end_turn) == {:error, :invalid_content}
+    end)
+  end
+
+  test "accepts documented success and error server-tool result variants" do
+    variants = [
+      {"web_search", "web_search_tool_result",
+       [
+         %{
+           "type" => "web_search_result",
+           "url" => "https://example.test/result",
+           "title" => "Result title",
+           "encrypted_content" => "opaque",
+           "page_age" => "2 days ago",
+           "future_metadata" => %{"preserved" => true}
+         }
+       ]},
+      {"web_search", "web_search_tool_result",
+       %{
+         "type" => "web_search_tool_result_error",
+         "error_code" => "unavailable",
+         "future_metadata" => [1, 2, 3]
+       }},
+      {"web_fetch", "web_fetch_tool_result",
+       %{
+         "type" => "web_fetch_result",
+         "url" => "https://example.test/page",
+         "content" => %{"type" => "document", "opaque" => %{"preserved" => true}},
+         "retrieved_at" => nil,
+         "future_metadata" => "preserved"
+       }},
+      {"web_fetch", "web_fetch_tool_result",
+       %{
+         "type" => "web_fetch_tool_result_error",
+         "error_code" => "url_not_accessible",
+         "future_metadata" => %{"preserved" => true}
+       }}
+    ]
+
+    Enum.each(variants, fn {tool_name, result_type, result_content} ->
+      content = [
+        %{
+          "type" => "server_tool_use",
+          "id" => "server-call-1",
+          "name" => tool_name,
+          "input" => %{},
+          "caller" => %{"type" => "direct", "opaque" => true}
+        },
+        %{
+          "type" => result_type,
+          "tool_use_id" => "server-call-1",
+          "content" => result_content,
+          "caller" => %{"type" => "direct", "opaque" => true}
+        },
+        text("publishable")
+      ]
+
+      assert Reply.select(content, :end_turn) == {:ok, "publishable"}
+    end)
+  end
+
+  test "rejects unrecognized or malformed server-tool result variants" do
+    malformed_variants = [
+      {"web_search", "web_search_tool_result", [%{"type" => "future_search_result"}]},
+      {"web_search", "web_search_tool_result", [%{"type" => "web_search_result"}]},
+      {"web_search", "web_search_tool_result", %{"type" => "web_search_tool_result_error"}},
+      {"web_search", "web_search_tool_result",
+       %{"type" => "web_search_tool_result_error", "error_code" => 123}},
+      {"web_fetch", "web_fetch_tool_result", []},
+      {"web_fetch", "web_fetch_tool_result", %{"type" => "future_fetch_result"}},
+      {"web_fetch", "web_fetch_tool_result", %{"type" => "web_fetch_result"}},
+      {"web_fetch", "web_fetch_tool_result",
+       %{
+         "type" => "web_fetch_result",
+         "url" => "https://example.test",
+         "content" => %{"type" => "future_document"},
+         "retrieved_at" => nil
+       }},
+      {"web_fetch", "web_fetch_tool_result", %{"type" => "web_fetch_tool_result_error"}}
+    ]
+
+    Enum.each(malformed_variants, fn {tool_name, result_type, result_content} ->
+      content = [
+        %{
+          "type" => "server_tool_use",
+          "id" => "server-call-1",
+          "name" => tool_name,
+          "input" => %{}
+        },
+        %{
+          "type" => result_type,
+          "tool_use_id" => "server-call-1",
+          "content" => result_content
+        },
         text("must not publish")
       ]
 

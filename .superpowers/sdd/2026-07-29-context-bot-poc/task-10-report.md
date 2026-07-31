@@ -86,3 +86,69 @@ Result: exit 0.
   token/search/fetch caps are explicit caller-supplied configuration.
 - Known search/fetch result payloads are validated only at the documented outer shape and remain
   opaque, preserving forward-compatible provider fields while preventing malformed completion.
+
+## Fix Round 1: Continuation Results and Provider Block Shapes
+
+### Findings addressed
+
+- `Reply.select/2` now accepts a documented context second argument containing prior pending
+  server-tool IDs and names. A continued response may begin with the matching result block, while
+  mismatched, unknown, orphaned, and still-pending tools remain terminal. The bare stop-reason form
+  remains supported. Prior pause text is neither accepted by the context nor concatenated into the
+  selected reply.
+- Known provider blocks now validate their documented outer discriminated shapes. Thinking and
+  redacted-thinking fields must be strings; direct server calls require a nonempty string ID, a
+  recognized name, and map input; search/fetch results recognize documented success and error
+  variants. Extra provider metadata and nested document data remain opaque. `caller` stays optional
+  because Anthropic's documented direct server-tool responses do not require it.
+
+### TDD evidence
+
+Each behavioral slice failed for its intended reason before its implementation:
+
+- the leading post-pause result was classified as orphaned before prior pending-call context was
+  supported, then the reply suite passed `9` tests;
+- malformed thinking blocks plus valid text were accepted (`9/10 passed`), then passed after outer
+  field/type validation;
+- server calls without valid `id`, `name`, or map `input` did not consistently return malformed
+  content (`10/11 passed`), then passed after call-shape validation;
+- arbitrary list/map result payloads allowed trailing text to publish (`12/13 passed`), then passed
+  after success/error discriminated-shape validation;
+- the exact documented cross-response fetch result without optional `retrieved_at` was initially
+  rejected (`14/15 passed`), then passed while malformed present values remain rejected;
+- final review regressions showed that text could precede a pending continuation result and that
+  opaque non-map server-tool input was overvalidated (`14/16 passed`). The selector now requires
+  all prior results as a leading prefix and requires the `input` field without inspecting its
+  nested value.
+
+Fresh focused command:
+
+```text
+direnv exec . mix test test/context_bot/research/request_test.exs test/context_bot/research/reply_test.exs
+```
+
+Result: `22 passed`, exit 0.
+
+### Review
+
+A final independent read-only review found no Critical issues and two Important edges: continuation
+results needed to form a strict leading prefix, and required server-tool `input` needed to remain
+opaque. Both findings were addressed with the RED/GREEN regressions above. The formal scoped
+re-review follows this fix commit.
+
+### Full gate
+
+Fresh command:
+
+```text
+direnv exec . just check
+```
+
+Result: exit 0.
+
+- formatting, compilation with warnings as errors, Credo strict, and ShellCheck passed;
+- ExUnit: `207 passed`, 0 failures;
+- secrets shell tests passed;
+- Dialyzer: 0 errors, 0 skipped, 0 unnecessary skips.
+
+Commit message: `fix: validate Claude continuation blocks`
