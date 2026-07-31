@@ -1,0 +1,37 @@
+{
+  "id": "msg_unknown_blocks",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-5",
+  "content": [
+    {
+      "type": "server_tool_use",
+      "id": "srvtoolu_search_1",
+      "name": "web_search",
+      "input": {"query": "first source"}
+    },
+    {
+      "type": "future_provider_block",
+      "opaque": {"nested": [1, 2, 3]}
+    },
+    {
+      "type": "server_tool_use",
+      "id": "srvtoolu_search_2",
+      "name": "web_search",
+      "input": {"query": "second source"}
+    }
+  ],
+  "stop_reason": "pause_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 100,
+    "cache_creation_input_tokens": 100,
+    "cache_creation": {
+      "ephemeral_5m_input_tokens": 100,
+      "ephemeral_1h_input_tokens": 0
+    },
+    "cache_read_input_tokens": 0,
+    "output_tokens": 30,
+    "server_tool_use": {"web_search_requests": 2}
+  }
+}

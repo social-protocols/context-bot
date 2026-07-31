@@ -1,0 +1,610 @@
+defmodule ContextBot.Research.RunnerTest.Client do
+  @moduledoc false
+
+  alias ContextBot.Repo
+  alias ContextBot.Research.BudgetEntry
+
+  def send_message(request, metadata) do
+    test_pid = Process.get(:runner_test_pid)
+    send(test_pid, {:anthropic_call, request, metadata, Repo.in_transaction?()})
+
+    entry = Repo.get_by!(BudgetEntry, attempt_key: metadata.attempt_key)
+    send(test_pid, {:attempt_at_send, entry.state, entry.sent_at, entry.response_recorded_at})
+
+    [result | rest] = Process.get(:runner_client_results)
+    Process.put(:runner_client_results, rest)
+    result
+  end
+end
+
+defmodule ContextBot.Research.RunnerTest do
+  use ContextBot.DataCase, async: false
+
+  alias ContextBot.Research.{BudgetEntry, Runner}
+  alias ContextBot.Workflow.Invocation
+
+  @now ~U[2026-07-29 12:00:00.123456Z]
+
+  setup do
+    Process.put(:runner_test_pid, self())
+
+    on_exit(fn ->
+      Process.delete(:runner_test_pid)
+      Process.delete(:runner_client_results)
+    end)
+
+    :ok
+  end
+
+  test "commits a complete 200 envelope and sent marker before decoding" do
+    invocation = invocation("persist-before-decode")
+    raw_body = fixture("tool_success.json")
+    Process.put(:runner_client_results, [{:ok, envelope(200, raw_body)}])
+
+    decoder = fn body ->
+      persisted = Repo.reload!(invocation)
+      [stored] = persisted.anthropic_responses
+      entry = Repo.get_by!(BudgetEntry, attempt_key: stored["attempt_key"])
+
+      send(self(), {
+        :decode_observed,
+        stored["raw_body"],
+        stored["status"],
+        entry.response_recorded_at
+      })
+
+      Jason.decode(body)
+    end
+
+    assert {:ok, result} = Runner.run(invocation, options(decoder: decoder))
+    assert result.text == "Useful context from primary sources."
+
+    assert_received {:attempt_at_send, :sent, %DateTime{}, nil}
+    assert_received {:decode_observed, ^raw_body, 200, %DateTime{}}
+
+    [stored] = Repo.reload!(invocation).anthropic_responses
+    assert stored["raw_body"] == raw_body
+    assert stored["attempt_key"] =~ "-attempt-1-research"
+    assert stored["kind"] == "research"
+
+    entry = Repo.get_by!(BudgetEntry, attempt_key: stored["attempt_key"])
+    assert entry.state == :settled
+    assert entry.response_recorded_at != nil
+  end
+
+  test "a forced raw-ledger persistence failure stops before decode or another request" do
+    invocation = invocation("persistence-failure")
+    raw_body = fixture("tool_success.json")
+    Process.put(:runner_client_results, [{:ok, envelope(200, raw_body)}])
+
+    decoder = fn _body ->
+      send(self(), :decoder_called)
+      {:ok, %{}}
+    end
+
+    assert {:error, :provider_storage_limit} =
+             Runner.run(invocation, options(decoder: decoder, max_storage_bytes: 80))
+
+    assert_received {:anthropic_call, _request, _metadata, false}
+    refute_received :decoder_called
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+    assert Repo.reload!(invocation).anthropic_responses == []
+
+    entry = Repo.one!(BudgetEntry)
+    assert entry.state == :sent
+    assert entry.response_recorded_at == nil
+  end
+
+  test "persists 429 before honoring retry-after and sends the retry under a new reservation" do
+    invocation = invocation("retry-after")
+    error_body = fixture("error.json")
+    success_body = fixture("tool_success.json")
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(429, error_body, %{"retry-after" => ["7"]})},
+      {:ok, envelope(200, success_body)}
+    ])
+
+    sleep = fn milliseconds ->
+      [persisted_error] = Repo.reload!(invocation).anthropic_responses
+      send(self(), {:retry_sleep, milliseconds, persisted_error["raw_body"]})
+    end
+
+    assert {:ok, result} = Runner.run(invocation, options(sleep: sleep))
+    assert result.text == "Useful context from primary sources."
+    assert_received {:retry_sleep, 7_000, ^error_body}
+
+    entries = Repo.all(from entry in BudgetEntry, order_by: entry.id)
+    assert Enum.map(entries, & &1.kind) == [:research, :retry]
+
+    assert Enum.map(entries, & &1.attempt_key) == [
+             "invocation-#{invocation.id}-attempt-1-research",
+             "invocation-#{invocation.id}-attempt-2-retry"
+           ]
+
+    assert Enum.all?(entries, &(&1.response_recorded_at != nil))
+
+    assert Enum.map(Repo.reload!(invocation).anthropic_responses, & &1["raw_body"]) == [
+             error_body,
+             success_body
+           ]
+  end
+
+  test "persists 500 before parsing an HTTP-date retry-after" do
+    invocation = invocation("retry-http-date")
+    error_body = fixture("error.json")
+    success_body = fixture("tool_success.json")
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(500, error_body, %{"retry-after" => ["Wed, 29 Jul 2026 12:00:07 GMT"]})},
+      {:ok, envelope(200, success_body)}
+    ])
+
+    sleep = fn milliseconds ->
+      [persisted_error] = Repo.reload!(invocation).anthropic_responses
+      send(self(), {:http_date_retry_sleep, milliseconds, persisted_error["raw_body"]})
+    end
+
+    assert {:ok, _result} = Runner.run(invocation, options(sleep: sleep))
+    assert_received {:http_date_retry_sleep, 7_000, ^error_body}
+  end
+
+  test "persists auth and malformed responses and fails closed without retry" do
+    for {suffix, status, body, expected_reason} <- [
+          {"auth", 401, fixture("error.json"), :provider_auth},
+          {"malformed", 200, "{not-json", :malformed_provider_response}
+        ] do
+      invocation = invocation(suffix)
+      Process.put(:runner_client_results, [{:ok, envelope(status, body)}])
+
+      assert {:error, ^expected_reason} = Runner.run(invocation, options())
+      assert_received {:anthropic_call, _request, _metadata, false}
+      refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+      assert [stored] = Repo.reload!(invocation).anthropic_responses
+      assert stored["raw_body"] == body
+    end
+  end
+
+  test "reuses a reserved but unsent attempt after a crash" do
+    invocation = invocation("crash-reserved")
+    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+
+    crash = crash_once(:after_reservation)
+
+    assert_raise RuntimeError, "injected crash after_reservation", fn ->
+      Runner.run(invocation, options(crash: crash))
+    end
+
+    [reserved] = Repo.all(BudgetEntry)
+    assert reserved.state == :reserved
+    assert reserved.attempt_key =~ "-attempt-1-research"
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+
+    assert {:ok, _result} = Runner.run(invocation, options(crash: crash))
+    assert [%BudgetEntry{state: :settled, attempt_key: attempt_key}] = Repo.all(BudgetEntry)
+    assert attempt_key == reserved.attempt_key
+  end
+
+  test "a crash after sent makes the exposed attempt indeterminate and replay reserves a retry" do
+    invocation = invocation("crash-sent")
+    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+
+    crash = crash_once(:after_sent)
+
+    assert_raise RuntimeError, "injected crash after_sent", fn ->
+      Runner.run(invocation, options(crash: crash))
+    end
+
+    assert [%BudgetEntry{state: :sent, response_recorded_at: nil}] = Repo.all(BudgetEntry)
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+
+    assert {:ok, _result} = Runner.run(invocation, options(crash: crash))
+
+    assert Enum.map(Repo.all(from entry in BudgetEntry, order_by: entry.id), &{&1.kind, &1.state}) ==
+             [{:research, :indeterminate}, {:retry, :settled}]
+  end
+
+  test "a crash after HTTP return but before persistence replays with a new charged key" do
+    invocation = invocation("crash-http")
+    body = fixture("tool_success.json")
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, body)},
+      {:ok, envelope(200, body)}
+    ])
+
+    crash = crash_once(:after_http)
+
+    assert_raise RuntimeError, "injected crash after_http", fn ->
+      Runner.run(invocation, options(crash: crash))
+    end
+
+    assert Repo.reload!(invocation).anthropic_responses == []
+    assert [%BudgetEntry{state: :sent, response_recorded_at: nil}] = Repo.all(BudgetEntry)
+
+    assert {:ok, _result} = Runner.run(invocation, options(crash: crash))
+
+    assert Enum.map(Repo.all(from entry in BudgetEntry, order_by: entry.id), &{&1.kind, &1.state}) ==
+             [{:research, :indeterminate}, {:retry, :settled}]
+  end
+
+  test "a crash after response persistence resumes decode and settlement without another POST" do
+    invocation = invocation("crash-persisted")
+    body = fixture("tool_success.json")
+    Process.put(:runner_client_results, [{:ok, envelope(200, body)}])
+
+    crash = crash_once(:after_persistence)
+
+    assert_raise RuntimeError, "injected crash after_persistence", fn ->
+      Runner.run(invocation, options(crash: crash))
+    end
+
+    assert [%BudgetEntry{state: :sent, response_recorded_at: %DateTime{}}] =
+             Repo.all(BudgetEntry)
+
+    assert [stored] = Repo.reload!(invocation).anthropic_responses
+    assert stored["raw_body"] == body
+    assert_received {:anthropic_call, _request, _metadata, false}
+
+    assert {:ok, _result} = Runner.run(invocation, options(crash: crash))
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+    assert [%BudgetEntry{state: :settled}] = Repo.all(BudgetEntry)
+  end
+
+  test "an ambiguous timeout retries only once and retains both reservations" do
+    invocation = invocation("ambiguous-timeout")
+    Process.put(:runner_client_results, [{:error, :timeout}, {:error, :timeout}])
+
+    assert {:error, :ambiguous_timeout} = Runner.run(invocation, options())
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    assert_received {:anthropic_call, _request, %{kind: :retry}, false}
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+
+    entries = Repo.all(from entry in BudgetEntry, order_by: entry.id)
+
+    assert Enum.map(entries, &{&1.kind, &1.state}) == [
+             {:research, :indeterminate},
+             {:retry, :indeterminate}
+           ]
+  end
+
+  test "known transport failures use the configured bounded retry count with fresh reservations" do
+    invocation = invocation("transport-retries")
+
+    Process.put(:runner_client_results, [
+      {:error, :transport},
+      {:error, :transport},
+      {:error, :transport}
+    ])
+
+    assert {:error, :provider_transport} = Runner.run(invocation, options())
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    assert_received {:anthropic_call, _request, %{kind: :retry}, false}
+    assert_received {:anthropic_call, _request, %{kind: :retry}, false}
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+
+    assert Enum.map(Repo.all(from entry in BudgetEntry, order_by: entry.id), &{&1.kind, &1.state}) ==
+             [
+               {:research, :indeterminate},
+               {:retry, :indeterminate},
+               {:retry, :indeterminate}
+             ]
+  end
+
+  test "continues pause turns with opaque content and aggregates all usage and tool counts" do
+    invocation = invocation("pause-success")
+    fixture = decoded_fixture("pause_then_success.json")
+    pause_raw = Jason.encode!(fixture["pause"])
+    success_raw = Jason.encode!(fixture["success"])
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, pause_raw)},
+      {:ok, envelope(200, success_raw)}
+    ])
+
+    assert {:ok, result} = Runner.run(invocation, options())
+    assert result.text == "The cited primary source resolves the disputed date."
+    assert result.usage["continuations"] == 1
+    assert result.usage["tool_uses"] == 1
+    assert result.usage["tool_use_counts"] == %{"web_fetch" => 0, "web_search" => 1}
+    assert result.usage["totals"]["input_tokens"] == 320
+    assert result.usage["totals"]["output_tokens"] == 58
+    assert length(result.usage["attempts"]) == 2
+
+    assert_received {:anthropic_call, initial_request, %{kind: :research}, false}
+    assert_received {:anthropic_call, continued_request, %{kind: :continuation}, false}
+
+    assert continued_request["messages"] ==
+             initial_request["messages"] ++
+               [%{"role" => "assistant", "content" => fixture["pause"]["content"]}]
+
+    assert Enum.at(fixture["pause"]["content"], 1)["type"] == "future_encrypted_trace"
+
+    assert Enum.map(Repo.reload!(invocation).anthropic_responses, & &1["raw_body"]) == [
+             pause_raw,
+             success_raw
+           ]
+
+    assert Enum.map(Repo.all(from entry in BudgetEntry, order_by: entry.id), & &1.kind) == [
+             :research,
+             :continuation
+           ]
+  end
+
+  test "fails silently when the aggregate continuation cap is exceeded" do
+    invocation = invocation("continuation-cap")
+    fixture = decoded_fixture("pause_then_success.json")
+    first_pause = fixture["pause"]
+
+    second_pause =
+      fixture["pause"]
+      |> put_in(["id"], "msg_pause_2")
+      |> put_in(["content"], [
+        fixture["success"]["content"] |> hd(),
+        %{
+          "type" => "server_tool_use",
+          "id" => "srvtoolu_02",
+          "name" => "web_fetch",
+          "input" => %{"url" => "https://primary.example/report"}
+        }
+      ])
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(first_pause))},
+      {:ok, envelope(200, Jason.encode!(second_pause))}
+    ])
+
+    settings = Map.put(settings(), :max_tool_continuations, 1)
+
+    assert {:error, :continuation_limit_exceeded} =
+             Runner.run(invocation, options(settings: settings))
+
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    assert_received {:anthropic_call, _request, %{kind: :continuation}, false}
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+    assert length(Repo.reload!(invocation).anthropic_responses) == 2
+  end
+
+  test "fails before continuation when aggregate server-tool use exceeds its cap" do
+    invocation = invocation("tool-cap")
+    fixture = decoded_fixture("unknown_blocks.json")
+    Process.put(:runner_client_results, [{:ok, envelope(200, Jason.encode!(fixture))}])
+
+    settings = Map.put(settings(), :max_web_search_uses, 1)
+
+    assert {:error, :tool_use_limit_exceeded} =
+             Runner.run(invocation, options(settings: settings))
+
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+    assert [stored] = Repo.reload!(invocation).anthropic_responses
+    assert stored["raw_body"] == Jason.encode!(fixture)
+  end
+
+  test "sends exactly one cached repair for an over-limit normal completion" do
+    invocation = invocation("repair-success")
+    fixture = decoded_fixture("repair_success.json")
+    primary_raw = Jason.encode!(fixture["primary"])
+    repair_raw = Jason.encode!(fixture["repair"])
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, primary_raw)},
+      {:ok, envelope(200, repair_raw)}
+    ])
+
+    assert {:ok, result} = Runner.run(invocation, options())
+    assert result.text == "A concise repaired answer."
+    assert result.validation == %{"result" => "valid", "repair_used" => true}
+
+    assert result.usage["attempts"] |> List.last() |> get_in(["usage", "cache_read_input_tokens"]) ==
+             0
+
+    assert_received {:anthropic_call, primary_request, %{kind: :research}, false}
+    assert_received {:anthropic_call, repair_request, %{kind: :repair}, false}
+    assert repair_request["max_tokens"] == 256
+
+    assert Map.drop(repair_request, ["messages", "max_tokens"]) ==
+             Map.drop(primary_request, ["messages", "max_tokens"])
+
+    assert Enum.take(repair_request["messages"], length(primary_request["messages"])) ==
+             primary_request["messages"]
+
+    [assistant, repair_instruction] =
+      Enum.drop(repair_request["messages"], length(primary_request["messages"]))
+
+    assert assistant == %{"role" => "assistant", "content" => fixture["primary"]["content"]}
+    assert repair_instruction["role"] == "user"
+    assert String.starts_with?(repair_instruction["content"], "LENGTH_REPAIR\n")
+
+    assert Enum.map(Repo.reload!(invocation).anthropic_responses, & &1["raw_body"]) == [
+             primary_raw,
+             repair_raw
+           ]
+  end
+
+  test "a repair tool use or second invalid result never triggers another repair" do
+    for {suffix, repair_response, expected_reason} <- [
+          {
+            "repair-tool",
+            %{
+              "id" => "msg_repair_tool",
+              "type" => "message",
+              "role" => "assistant",
+              "content" => [
+                %{
+                  "type" => "server_tool_use",
+                  "id" => "repair_tool_1",
+                  "name" => "web_search",
+                  "input" => %{"query" => "must not run"}
+                }
+              ],
+              "stop_reason" => "tool_use",
+              "usage" => usage()
+            },
+            :tool_use
+          },
+          {
+            "repair-invalid",
+            decoded_fixture("repair_success.json")["primary"],
+            :invalid_repair
+          }
+        ] do
+      invocation = invocation(suffix)
+      primary = decoded_fixture("repair_success.json")["primary"]
+
+      Process.put(:runner_client_results, [
+        {:ok, envelope(200, Jason.encode!(primary))},
+        {:ok, envelope(200, Jason.encode!(repair_response))}
+      ])
+
+      assert {:error, ^expected_reason} = Runner.run(invocation, options())
+      assert_received {:anthropic_call, _request, %{kind: :research}, false}
+      assert_received {:anthropic_call, _request, %{kind: :repair}, false}
+      refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+      persisted = Repo.reload!(invocation)
+      assert length(persisted.anthropic_responses) == 2
+      assert length(persisted.anthropic_usage["attempts"]) == 2
+    end
+  end
+
+  test "resumes a durably checkpointed repair without misclassifying the primary as a second repair" do
+    invocation = invocation("repair-checkpoint-crash")
+    fixture = decoded_fixture("repair_success.json")
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(fixture["primary"]))},
+      {:ok, envelope(200, Jason.encode!(fixture["repair"]))}
+    ])
+
+    crash = crash_once(:after_checkpoint)
+
+    assert_raise RuntimeError, "injected crash after_checkpoint", fn ->
+      Runner.run(invocation, options(crash: crash))
+    end
+
+    checkpoint = Repo.reload!(invocation)
+    assert List.last(checkpoint.anthropic_messages["messages"])["content"] =~ "LENGTH_REPAIR"
+    assert [%BudgetEntry{kind: :research, state: :settled}] = Repo.all(BudgetEntry)
+
+    assert {:ok, result} = Runner.run(invocation, options(crash: crash))
+    assert result.text == "A concise repaired answer."
+
+    assert Enum.map(Repo.all(from entry in BudgetEntry, order_by: entry.id), & &1.kind) == [
+             :research,
+             :repair
+           ]
+  end
+
+  defp options(overrides \\ []) do
+    defaults = [
+      client: ContextBot.Research.RunnerTest.Client,
+      decoder: &Jason.decode/1,
+      now: fn -> @now end,
+      sleep: fn _milliseconds -> :ok end,
+      settings: settings()
+    ]
+
+    Keyword.merge(defaults, overrides)
+  end
+
+  defp settings do
+    %{
+      anthropic_daily_budget_microdollars: 5_000_000,
+      anthropic_research_reservation_microdollars: 1_000_000,
+      anthropic_continuation_reservation_microdollars: 1_000_000,
+      anthropic_repair_reservation_microdollars: 1_000_000,
+      anthropic_retry_reservation_microdollars: 1_000_000,
+      anthropic_pricing_version: "sonnet-5-2026-07-28",
+      anthropic_model_id: "claude-sonnet-5",
+      anthropic_research_max_tokens: 1_024,
+      anthropic_length_repair_max_tokens: 256,
+      max_web_search_uses: 3,
+      max_web_fetch_uses: 3,
+      max_web_fetch_content_tokens: 10_000,
+      max_tool_continuations: 3,
+      anthropic_max_http_retries: 2,
+      anthropic_retry_base_ms: 10,
+      anthropic_retry_max_ms: 10_000,
+      max_storage_bytes: 1_000_000
+    }
+  end
+
+  defp invocation(suffix) do
+    uri = "at://did:plc:actor/app.bsky.feed.post/#{suffix}"
+    cid = "bafy-#{suffix}"
+
+    %Invocation{}
+    |> Invocation.changeset(%{
+      invocation_uri: uri,
+      notification_cid: cid,
+      current_cid: cid,
+      actor_did: "did:plc:actor",
+      raw_notification: %{"uri" => uri, "cid" => cid},
+      received_at: @now,
+      status: :researching,
+      stage: :researching,
+      canonical_thread: "ROOT\nClaim needing context.\n\nINVOCATION\nPlease add context.",
+      canonical_thread_version: "1",
+      root_uri: uri,
+      root_cid: cid
+    })
+    |> Repo.insert!()
+  end
+
+  defp envelope(status, raw_body) do
+    envelope(status, raw_body, %{})
+  end
+
+  defp envelope(status, raw_body, extra_headers) do
+    %{
+      status: status,
+      headers:
+        Map.merge(
+          %{"content-type" => ["application/json"], "request-id" => ["req-test"]},
+          extra_headers
+        ),
+      raw_body: raw_body,
+      received_at: @now,
+      duration_ms: 17
+    }
+  end
+
+  defp crash_once(point) do
+    marker = {:runner_crashed, point}
+
+    fn
+      ^point, _value ->
+        unless Process.get(marker) do
+          Process.put(marker, true)
+          raise "injected crash #{point}"
+        end
+
+        :ok
+
+      _other, _value ->
+        :ok
+    end
+  end
+
+  defp fixture(name) do
+    "../../fixtures/anthropic/#{name}"
+    |> Path.expand(__DIR__)
+    |> File.read!()
+  end
+
+  defp decoded_fixture(name), do: name |> fixture() |> Jason.decode!()
+
+  defp usage do
+    %{
+      "input_tokens" => 10,
+      "cache_creation_input_tokens" => 0,
+      "cache_creation" => %{
+        "ephemeral_5m_input_tokens" => 0,
+        "ephemeral_1h_input_tokens" => 0
+      },
+      "cache_read_input_tokens" => 0,
+      "output_tokens" => 5,
+      "server_tool_use" => %{"web_search_requests" => 0}
+    }
+  end
+end

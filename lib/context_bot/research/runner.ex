@@ -1,0 +1,700 @@
+defmodule ContextBot.Research.Runner do
+  @moduledoc """
+  Runs Anthropic research with durable budget exposure and raw-response ordering.
+
+  Every POST is preceded by a committed reservation and sent marker. Every returned HTTP
+  envelope is committed before decoding, pricing, or reply selection. Recovery always starts
+  from the budget ledger rather than inferring attempt identity from response count.
+  """
+
+  import Ecto.Query
+
+  alias ContextBot.Repo
+  alias ContextBot.Research.{AnthropicClient, Budget, BudgetEntry, Pricing, Reply, Request}
+  alias ContextBot.Workflow.{Invocation, Store}
+
+  @http_date_regex ~r/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (?<day>\d{2}) (?<month>Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (?<year>\d{4}) (?<hour>\d{2}):(?<minute>\d{2}):(?<second>\d{2}) GMT$/
+
+  @type result :: %{
+          required(:messages) => map(),
+          required(:text) => String.t(),
+          required(:usage) => map(),
+          required(:validation) => map()
+        }
+
+  @spec run(Invocation.t(), keyword() | map()) ::
+          {:ok, result()}
+          | {:deferred, DateTime.t()}
+          | {:error, atom() | {atom(), term()}}
+  def run(%Invocation{} = invocation, options) do
+    config = config(options)
+    invocation = Repo.reload!(invocation)
+
+    with {:ok, invocation, _request} <- ensure_request(invocation, config) do
+      resume(invocation, config)
+    end
+  end
+
+  defp resume(invocation, config) do
+    invocation = Repo.reload!(invocation)
+    resume_attempt(invocation, latest_attempt(invocation), config)
+  end
+
+  defp resume_attempt(invocation, nil, config),
+    do: start_attempt(invocation, :research, config)
+
+  defp resume_attempt(invocation, %BudgetEntry{state: :reserved} = entry, config),
+    do: send_attempt(invocation, entry, config)
+
+  defp resume_attempt(
+         invocation,
+         %BudgetEntry{state: :sent, response_recorded_at: nil} = entry,
+         config
+       ) do
+    case config.budget.reconcile_attempt(entry) do
+      {:indeterminate, indeterminate} -> retry_exposed(invocation, indeterminate, config)
+      _unexpected -> {:error, :invalid_attempt_state}
+    end
+  end
+
+  defp resume_attempt(
+         invocation,
+         %BudgetEntry{state: :indeterminate, response_recorded_at: nil} = entry,
+         config
+       ),
+       do: retry_exposed(invocation, entry, config)
+
+  defp resume_attempt(invocation, %BudgetEntry{} = entry, config) do
+    case stored_response(invocation, entry.attempt_key) do
+      nil -> {:error, :invalid_attempt_state}
+      response -> process_recorded(invocation, entry, response, config)
+    end
+  end
+
+  defp start_attempt(invocation, kind, config) do
+    amount = reservation(config.settings, kind)
+
+    case config.budget.reserve_next(
+           invocation,
+           kind,
+           now(config),
+           amount,
+           config.settings.anthropic_daily_budget_microdollars
+         ) do
+      {:ok, entry} ->
+        with :ok <- crash(config, :after_reservation, entry) do
+          send_attempt(Repo.reload!(invocation), entry, config)
+        end
+
+      {:error, :daily_budget_exhausted} ->
+        {:deferred, next_utc_rollover(now(config))}
+    end
+  end
+
+  defp send_attempt(invocation, entry, config) do
+    request = invocation.anthropic_messages
+
+    with {:ok, sent} <- config.budget.mark_sent(entry, now(config)),
+         :ok <- crash(config, :after_sent, sent) do
+      case config.client.send_message(request, metadata(sent)) do
+        {:ok, envelope} -> persist_envelope(invocation, sent, envelope, config)
+        {:error, reason} -> handle_transport_error(invocation, sent, reason, config)
+      end
+    end
+  end
+
+  defp persist_envelope(invocation, sent, envelope, config) do
+    with :ok <- crash(config, :after_http, envelope),
+         {:ok, invocation, recorded} <-
+           config.store.record_anthropic_response(
+             invocation,
+             sent,
+             tag_envelope(envelope, sent),
+             config.storage_limit,
+             now(config)
+           ),
+         :ok <- crash(config, :after_persistence, recorded) do
+      process_recorded(
+        invocation,
+        recorded,
+        stored_response(invocation, sent.attempt_key),
+        config
+      )
+    end
+  end
+
+  defp handle_transport_error(invocation, sent, :timeout, config) do
+    {:ok, _indeterminate} = config.budget.mark_indeterminate(sent)
+
+    if ambiguous_attempt_count(invocation) <= 1 do
+      config.sleep.(retry_delay_ms(ambiguous_attempt_count(invocation), nil, config))
+      start_attempt(Repo.reload!(invocation), :retry, config)
+    else
+      {:error, :ambiguous_timeout}
+    end
+  end
+
+  defp handle_transport_error(invocation, sent, :transport, config) do
+    {:ok, _indeterminate} = config.budget.mark_indeterminate(sent)
+    retry_count = unrecorded_transport_retry_count(invocation)
+
+    if retry_count < config.max_http_retries do
+      config.sleep.(retry_delay_ms(retry_count + 1, nil, config))
+      start_attempt(Repo.reload!(invocation), :retry, config)
+    else
+      {:error, :provider_transport}
+    end
+  end
+
+  defp handle_transport_error(_invocation, _sent, :response_too_large, _config),
+    do: {:error, :provider_response_too_large}
+
+  defp handle_transport_error(_invocation, _sent, _reason, _config),
+    do: {:error, :provider_transport}
+
+  defp retry_exposed(invocation, _entry, config) do
+    if ambiguous_attempt_count(invocation) <= 1 do
+      config.sleep.(retry_delay_ms(ambiguous_attempt_count(invocation), nil, config))
+      start_attempt(Repo.reload!(invocation), :retry, config)
+    else
+      {:error, :ambiguous_timeout}
+    end
+  end
+
+  defp process_recorded(invocation, entry, response, config) when is_map(response) do
+    with {:ok, decoded} <- decode(config, response["raw_body"]) do
+      classify_http(response["status"], invocation, entry, decoded, response, config)
+    end
+  end
+
+  defp classify_http(status, invocation, entry, decoded, _response, config)
+       when status in 200..299 do
+    with {:ok, usage} <- response_usage(decoded),
+         {:ok, settled} <- config.budget.settle(entry, usage, config.pricing),
+         :ok <- safely_settled(settled),
+         {:ok, invocation} <- checkpoint_usage(invocation, config) do
+      classify_message(invocation, settled, decoded, config)
+    end
+  end
+
+  defp classify_http(status, _invocation, entry, _decoded, _response, config)
+       when status in [401, 403] do
+    retain_reservation(entry, config)
+    {:error, :provider_auth}
+  end
+
+  defp classify_http(status, invocation, entry, _decoded, response, config)
+       when status == 429 or status >= 500 do
+    retain_reservation(entry, config)
+    retry_http(invocation, response, config)
+  end
+
+  defp classify_http(status, _invocation, entry, _decoded, _response, config)
+       when status in 400..499 do
+    retain_reservation(entry, config)
+    {:error, :provider_response}
+  end
+
+  defp classify_http(_status, _invocation, entry, _decoded, _response, config) do
+    retain_reservation(entry, config)
+    {:error, :provider_response}
+  end
+
+  defp retry_http(invocation, response, config) do
+    retry_count = recorded_retry_count(invocation)
+
+    if retry_count < config.max_http_retries do
+      delay =
+        retry_delay_ms(
+          retry_count + 1,
+          retry_after_seconds(response["headers"], now(config)),
+          config
+        )
+
+      config.sleep.(delay)
+      start_attempt(Repo.reload!(invocation), :retry, config)
+    else
+      {:error, :provider_retries_exhausted}
+    end
+  end
+
+  defp classify_message(invocation, entry, decoded, config) do
+    with :ok <- within_tool_caps(invocation, config) do
+      classify_stop_reason(invocation, entry, decoded, config)
+    end
+  end
+
+  defp classify_stop_reason(
+         %Invocation{} = invocation,
+         _entry,
+         %{"stop_reason" => stop_reason} = decoded,
+         config
+       )
+       when stop_reason in ["pause_turn", :pause_turn] do
+    if repair_request?(invocation) do
+      {:error, :pause_turn}
+    else
+      continue_pause(invocation, decoded, config)
+    end
+  end
+
+  defp classify_stop_reason(invocation, _entry, decoded, config) do
+    case select_reply(decoded, invocation) do
+      {:ok, text} ->
+        {:ok,
+         %{
+           messages: invocation.anthropic_messages,
+           text: text,
+           usage: usage_evidence(invocation),
+           validation: %{"result" => "valid", "repair_used" => repair_request?(invocation)}
+         }}
+
+      {:repairable, _text, _reasons} ->
+        handle_repairable(invocation, decoded, config)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp handle_repairable(invocation, decoded, config) do
+    cond do
+      not repair_request?(invocation) -> start_repair(invocation, decoded, config)
+      repair_attempted?(invocation) -> {:error, :invalid_repair}
+      true -> start_attempt(invocation, :repair, config)
+    end
+  end
+
+  defp continue_pause(invocation, %{"content" => content}, config) when is_list(content) do
+    if continuation_count(invocation) > config.settings.max_tool_continuations do
+      {:error, :continuation_limit_exceeded}
+    else
+      request = continuation_request(invocation.anthropic_messages, content, config.settings)
+
+      with {:ok, checkpoint} <- checkpoint_request(invocation, request, config) do
+        start_attempt(checkpoint, :continuation, config)
+      end
+    end
+  end
+
+  defp continue_pause(_invocation, _decoded, _config),
+    do: {:error, :malformed_provider_response}
+
+  defp start_repair(invocation, %{"content" => content}, config) when is_list(content) do
+    request =
+      Request.repair(
+        invocation.anthropic_messages,
+        content,
+        config.settings.anthropic_length_repair_max_tokens
+      )
+
+    with {:ok, checkpoint} <- checkpoint_request(invocation, request, config) do
+      start_attempt(checkpoint, :repair, config)
+    end
+  end
+
+  defp start_repair(_invocation, _decoded, _config),
+    do: {:error, :malformed_provider_response}
+
+  defp checkpoint_request(invocation, request, config) do
+    case config.store.transition(
+           invocation,
+           :researching,
+           :researching,
+           %{anthropic_messages: request, anthropic_usage: usage_evidence(invocation)},
+           nil
+         ) do
+      {:ok, checkpoint} ->
+        with :ok <- crash(config, :after_checkpoint, checkpoint), do: {:ok, checkpoint}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp continuation_request(%{"messages" => messages} = request, content, settings) do
+    case List.last(messages) do
+      %{"role" => "assistant", "content" => ^content} ->
+        request
+
+      _not_checkpointed ->
+        Request.continue(request, content, settings.anthropic_research_max_tokens)
+    end
+  end
+
+  defp ensure_request(%Invocation{anthropic_messages: request} = invocation, _config)
+       when is_map(request),
+       do: {:ok, invocation, request}
+
+  defp ensure_request(%Invocation{} = invocation, config) do
+    request =
+      Request.initial(
+        %{"version" => 1, "text" => invocation.canonical_thread},
+        %{
+          model_id: config.settings.anthropic_model_id,
+          max_tokens: config.settings.anthropic_research_max_tokens,
+          max_web_search_uses: config.settings.max_web_search_uses,
+          max_web_fetch_uses: config.settings.max_web_fetch_uses,
+          max_web_fetch_content_tokens: config.settings.max_web_fetch_content_tokens
+        }
+      )
+
+    case config.store.transition(
+           invocation,
+           :researching,
+           :researching,
+           %{anthropic_messages: request},
+           nil
+         ) do
+      {:ok, persisted} -> {:ok, persisted, persisted.anthropic_messages}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp latest_attempt(invocation) do
+    BudgetEntry
+    |> where([entry], entry.invocation_id == ^invocation.id)
+    |> order_by([entry], desc: entry.id)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  defp stored_response(invocation, attempt_key) do
+    Enum.find(invocation.anthropic_responses, &(&1["attempt_key"] == attempt_key))
+  end
+
+  defp ambiguous_attempt_count(invocation) do
+    BudgetEntry
+    |> where(
+      [entry],
+      entry.invocation_id == ^invocation.id and entry.state == :indeterminate and
+        is_nil(entry.response_recorded_at)
+    )
+    |> Repo.aggregate(:count)
+  end
+
+  defp recorded_retry_count(invocation) do
+    BudgetEntry
+    |> where(
+      [entry],
+      entry.invocation_id == ^invocation.id and entry.kind == :retry and
+        not is_nil(entry.response_recorded_at)
+    )
+    |> Repo.aggregate(:count)
+  end
+
+  defp unrecorded_transport_retry_count(invocation) do
+    BudgetEntry
+    |> where(
+      [entry],
+      entry.invocation_id == ^invocation.id and entry.kind == :retry and
+        entry.state == :indeterminate and is_nil(entry.response_recorded_at)
+    )
+    |> Repo.aggregate(:count)
+  end
+
+  defp decode(config, raw_body) when is_binary(raw_body) do
+    case config.decoder.(raw_body) do
+      {:ok, decoded} when is_map(decoded) -> {:ok, decoded}
+      _invalid -> {:error, :malformed_provider_response}
+    end
+  end
+
+  defp decode(_config, _raw_body), do: {:error, :malformed_provider_response}
+
+  defp response_usage(%{"usage" => usage}) when is_map(usage), do: {:ok, usage}
+  defp response_usage(_response), do: {:error, :unsafe_provider_usage}
+
+  defp safely_settled(%{state: :settled}), do: :ok
+  defp safely_settled(_entry), do: {:error, :unsafe_provider_usage}
+
+  defp checkpoint_usage(invocation, config) do
+    case config.store.transition(
+           invocation,
+           :researching,
+           :researching,
+           %{anthropic_usage: usage_evidence(invocation)},
+           nil
+         ) do
+      {:ok, checkpoint} -> {:ok, checkpoint}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp select_reply(%{"content" => content, "stop_reason" => stop_reason}, invocation) do
+    Reply.select(content, %{
+      stop_reason: stop_reason,
+      pending_server_tools: pending_server_tools(invocation.anthropic_messages)
+    })
+  end
+
+  defp select_reply(_response, _invocation), do: {:error, :malformed_provider_response}
+
+  defp retain_reservation(entry, config) do
+    config.budget.settle(entry, %{}, config.pricing)
+    :ok
+  end
+
+  defp usage_evidence(invocation) do
+    decoded = decoded_responses(invocation)
+
+    attempts =
+      Enum.flat_map(decoded, fn {response, body} ->
+        case body do
+          %{"usage" => usage} when is_map(usage) ->
+            [
+              %{
+                "attempt_key" => response["attempt_key"],
+                "kind" => response["kind"],
+                "usage" => usage
+              }
+            ]
+
+          _missing ->
+            []
+        end
+      end)
+
+    tool_counts = tool_use_counts(decoded)
+
+    %{
+      "attempts" => attempts,
+      "continuations" => continuation_count(decoded),
+      "response_count" => length(invocation.anthropic_responses),
+      "tool_use_counts" => tool_counts,
+      "tool_uses" => Enum.sum(Map.values(tool_counts)),
+      "totals" => Enum.reduce(attempts, %{}, &merge_attempt_usage/2)
+    }
+  end
+
+  defp merge_attempt_usage(%{"usage" => usage}, totals), do: merge_counts(totals, usage)
+
+  defp merge_counts(left, right) when is_map(left) and is_map(right) do
+    Map.merge(left, right, fn _key, left_value, right_value ->
+      case {left_value, right_value} do
+        {left_count, right_count} when is_integer(left_count) and is_integer(right_count) ->
+          left_count + right_count
+
+        {%{} = left_map, %{} = right_map} ->
+          merge_counts(left_map, right_map)
+
+        {_left, right_value} ->
+          right_value
+      end
+    end)
+  end
+
+  defp decoded_responses(invocation) do
+    Enum.flat_map(invocation.anthropic_responses, fn response ->
+      case Jason.decode(response["raw_body"]) do
+        {:ok, body} when is_map(body) -> [{response, body}]
+        _invalid -> []
+      end
+    end)
+  end
+
+  defp continuation_count(%Invocation{} = invocation),
+    do: invocation |> decoded_responses() |> continuation_count()
+
+  defp continuation_count(decoded_responses) when is_list(decoded_responses) do
+    Enum.count(decoded_responses, fn {_response, body} ->
+      body["stop_reason"] in ["pause_turn", :pause_turn]
+    end)
+  end
+
+  defp within_tool_caps(invocation, config) do
+    counts = invocation |> decoded_responses() |> tool_use_counts()
+
+    if counts["web_search"] <= config.settings.max_web_search_uses and
+         counts["web_fetch"] <= config.settings.max_web_fetch_uses do
+      :ok
+    else
+      {:error, :tool_use_limit_exceeded}
+    end
+  end
+
+  defp tool_use_counts(decoded_responses) do
+    Enum.reduce(
+      decoded_responses,
+      %{"web_fetch" => 0, "web_search" => 0},
+      fn {_response, body}, counts -> count_response_tools(body, counts) end
+    )
+  end
+
+  defp count_response_tools(%{"content" => content}, counts) when is_list(content) do
+    Enum.reduce(content, counts, fn
+      %{"type" => "server_tool_use", "name" => name}, counts
+      when name in ["web_search", "web_fetch"] ->
+        Map.update!(counts, name, &(&1 + 1))
+
+      _block, counts ->
+        counts
+    end)
+  end
+
+  defp count_response_tools(_body, counts), do: counts
+
+  defp pending_server_tools(%{"messages" => messages}) when is_list(messages) do
+    Enum.reduce(messages, %{}, fn
+      %{"role" => "assistant", "content" => content}, pending when is_list(content) ->
+        update_pending_tools(content, pending)
+
+      _message, pending ->
+        pending
+    end)
+  end
+
+  defp pending_server_tools(_request), do: %{}
+
+  defp update_pending_tools(content, pending) do
+    Enum.reduce(content, pending, fn
+      %{"type" => "server_tool_use", "id" => id, "name" => name}, pending
+      when is_binary(id) and id != "" and name in ["web_search", "web_fetch"] ->
+        Map.put(pending, id, name)
+
+      %{"type" => "web_search_tool_result", "tool_use_id" => id}, pending ->
+        Map.delete(pending, id)
+
+      %{"type" => "web_fetch_tool_result", "tool_use_id" => id}, pending ->
+        Map.delete(pending, id)
+
+      _block, pending ->
+        pending
+    end)
+  end
+
+  defp repair_request?(%Invocation{anthropic_messages: %{"messages" => messages}}) do
+    case List.last(messages) do
+      %{"role" => "user", "content" => "LENGTH_REPAIR\n" <> _rest} -> true
+      _other -> false
+    end
+  end
+
+  defp repair_request?(_invocation), do: false
+
+  defp repair_attempted?(invocation) do
+    BudgetEntry
+    |> where([entry], entry.invocation_id == ^invocation.id and entry.kind == :repair)
+    |> Repo.exists?()
+  end
+
+  defp tag_envelope(envelope, entry) do
+    %{
+      "attempt_key" => entry.attempt_key,
+      "kind" => Atom.to_string(entry.kind),
+      "status" => envelope.status,
+      "headers" => envelope.headers,
+      "raw_body" => envelope.raw_body,
+      "received_at" => DateTime.to_iso8601(envelope.received_at),
+      "duration_ms" => envelope.duration_ms
+    }
+  end
+
+  defp metadata(entry), do: %{attempt_key: entry.attempt_key, kind: entry.kind}
+
+  defp retry_after_seconds(headers, now) when is_map(headers) do
+    case Map.get(headers, "retry-after") do
+      [value | _rest] when is_binary(value) -> parse_retry_after(value, now)
+      value when is_binary(value) -> parse_retry_after(value, now)
+      _missing -> nil
+    end
+  end
+
+  defp retry_after_seconds(_headers, _now), do: nil
+
+  defp parse_retry_after(value, now) do
+    case Integer.parse(value) do
+      {seconds, ""} when seconds >= 0 -> seconds
+      _not_delta_seconds -> parse_retry_after_date(value, now)
+    end
+  end
+
+  defp parse_retry_after_date(value, now) do
+    with %{} = parts <- Regex.named_captures(@http_date_regex, value),
+         {:ok, month} <- http_month(parts["month"]),
+         {:ok, date} <-
+           Date.new(component(parts["year"]), month, component(parts["day"])),
+         {:ok, time} <-
+           Time.new(
+             component(parts["hour"]),
+             component(parts["minute"]),
+             component(parts["second"])
+           ),
+         {:ok, retry_at} <- DateTime.new(date, time, "Etc/UTC") do
+      retry_at
+      |> DateTime.diff(DateTime.shift_zone!(now, "Etc/UTC"), :microsecond)
+      |> max(0)
+      |> ceil_seconds()
+    else
+      _invalid -> nil
+    end
+  end
+
+  defp component(value), do: String.to_integer(value)
+
+  defp http_month("Jan"), do: {:ok, 1}
+  defp http_month("Feb"), do: {:ok, 2}
+  defp http_month("Mar"), do: {:ok, 3}
+  defp http_month("Apr"), do: {:ok, 4}
+  defp http_month("May"), do: {:ok, 5}
+  defp http_month("Jun"), do: {:ok, 6}
+  defp http_month("Jul"), do: {:ok, 7}
+  defp http_month("Aug"), do: {:ok, 8}
+  defp http_month("Sep"), do: {:ok, 9}
+  defp http_month("Oct"), do: {:ok, 10}
+  defp http_month("Nov"), do: {:ok, 11}
+  defp http_month("Dec"), do: {:ok, 12}
+  defp http_month(_invalid), do: :error
+
+  defp ceil_seconds(0), do: 0
+  defp ceil_seconds(microseconds), do: div(microseconds + 999_999, 1_000_000)
+
+  defp retry_delay_ms(_attempt, seconds, config) when is_integer(seconds),
+    do: min(seconds * 1_000, config.retry_max_ms)
+
+  defp retry_delay_ms(attempt, nil, config) do
+    exponent = max(attempt - 1, 0)
+    min(config.retry_base_ms * Integer.pow(2, exponent), config.retry_max_ms)
+  end
+
+  defp reservation(settings, :research),
+    do: settings.anthropic_research_reservation_microdollars
+
+  defp reservation(settings, :continuation),
+    do: settings.anthropic_continuation_reservation_microdollars
+
+  defp reservation(settings, :repair), do: settings.anthropic_repair_reservation_microdollars
+  defp reservation(settings, :retry), do: settings.anthropic_retry_reservation_microdollars
+
+  defp next_utc_rollover(now) do
+    now
+    |> DateTime.shift_zone!("Etc/UTC")
+    |> DateTime.to_date()
+    |> Date.add(1)
+    |> DateTime.new!(~T[00:00:00.000000], "Etc/UTC")
+  end
+
+  defp now(%{now: now}) when is_function(now, 0), do: now.()
+  defp crash(%{crash: crash}, point, value), do: crash.(point, value)
+
+  defp config(options) do
+    options = if is_map(options), do: Map.to_list(options), else: options
+    settings = Keyword.fetch!(options, :settings)
+
+    %{
+      budget: Keyword.get(options, :budget, Budget),
+      client: Keyword.get(options, :client, AnthropicClient),
+      crash: Keyword.get(options, :crash, fn _point, _value -> :ok end),
+      decoder: Keyword.get(options, :decoder, &Jason.decode/1),
+      max_http_retries: settings.anthropic_max_http_retries,
+      now: Keyword.get(options, :now, &DateTime.utc_now/0),
+      pricing: Pricing.fetch!(settings.anthropic_pricing_version),
+      retry_base_ms: settings.anthropic_retry_base_ms,
+      retry_max_ms: settings.anthropic_retry_max_ms,
+      settings: settings,
+      sleep: Keyword.get(options, :sleep, &Process.sleep/1),
+      storage_limit: Keyword.get(options, :max_storage_bytes, settings.max_storage_bytes),
+      store: Keyword.get(options, :store, Store)
+    }
+  end
+end

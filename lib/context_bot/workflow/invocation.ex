@@ -63,6 +63,8 @@ defmodule ContextBot.Workflow.Invocation do
     :anthropic_messages,
     :anthropic_attempt_sequence,
     :anthropic_usage,
+    :research_claim_token,
+    :research_claimed_at,
     :selected_reply,
     :reply_validation,
     :reply_rkey,
@@ -114,6 +116,8 @@ defmodule ContextBot.Workflow.Invocation do
     field :anthropic_responses, {:array, :map}, default: []
     field :anthropic_attempt_sequence, :integer, default: 0
     field :anthropic_usage, :map
+    field :research_claim_token, :string
+    field :research_claimed_at, :utc_datetime_usec
     field :selected_reply, :string
     field :reply_validation, :map
     field :reply_rkey, :string

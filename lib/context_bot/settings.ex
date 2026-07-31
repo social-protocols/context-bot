@@ -16,7 +16,14 @@ defmodule ContextBot.Settings do
   @default_max_storage_bytes 64_000_000
   @default_anthropic_research_max_tokens 8_192
   @default_anthropic_length_repair_max_tokens 1_024
+  @default_anthropic_model_id "claude-sonnet-5"
   @default_max_web_search_uses 5
+  @default_max_web_fetch_uses 5
+  @default_max_web_fetch_content_tokens 50_000
+  @default_max_tool_continuations 3
+  @default_anthropic_max_http_retries 2
+  @default_anthropic_retry_base_ms 1_000
+  @default_anthropic_retry_max_ms 30_000
   @default_anthropic_reservation_usd "5.000000"
   @default_anthropic_pricing_version "sonnet-5-2026-07-28"
 
@@ -35,9 +42,16 @@ defmodule ContextBot.Settings do
     :queue_concurrency,
     :max_response_bytes,
     :max_storage_bytes,
+    :anthropic_model_id,
     :anthropic_research_max_tokens,
     :anthropic_length_repair_max_tokens,
     :max_web_search_uses,
+    :max_web_fetch_uses,
+    :max_web_fetch_content_tokens,
+    :max_tool_continuations,
+    :anthropic_max_http_retries,
+    :anthropic_retry_base_ms,
+    :anthropic_retry_max_ms,
     :anthropic_research_reservation_microdollars,
     :anthropic_continuation_reservation_microdollars,
     :anthropic_repair_reservation_microdollars,
@@ -48,15 +62,24 @@ defmodule ContextBot.Settings do
     :appview_url,
     :elder_label
   ]
+  # The workflow settings intentionally stay in one validated startup snapshot.
+  # credo:disable-for-next-line Credo.Check.Warning.StructFieldAmount
   defstruct [
     :bot_enabled,
     :bot_did,
     :bot_handle,
     :bot_pds_url,
     :anthropic_daily_budget_microdollars,
+    :anthropic_model_id,
     :anthropic_research_max_tokens,
     :anthropic_length_repair_max_tokens,
     :max_web_search_uses,
+    :max_web_fetch_uses,
+    :max_web_fetch_content_tokens,
+    :max_tool_continuations,
+    :anthropic_max_http_retries,
+    :anthropic_retry_base_ms,
+    :anthropic_retry_max_ms,
     :anthropic_research_reservation_microdollars,
     :anthropic_continuation_reservation_microdollars,
     :anthropic_repair_reservation_microdollars,
@@ -83,9 +106,16 @@ defmodule ContextBot.Settings do
           bot_handle: String.t() | nil,
           bot_pds_url: String.t() | nil,
           anthropic_daily_budget_microdollars: pos_integer() | nil,
+          anthropic_model_id: String.t(),
           anthropic_research_max_tokens: pos_integer(),
           anthropic_length_repair_max_tokens: pos_integer(),
           max_web_search_uses: pos_integer(),
+          max_web_fetch_uses: pos_integer(),
+          max_web_fetch_content_tokens: pos_integer(),
+          max_tool_continuations: pos_integer(),
+          anthropic_max_http_retries: pos_integer(),
+          anthropic_retry_base_ms: pos_integer(),
+          anthropic_retry_max_ms: pos_integer(),
           anthropic_research_reservation_microdollars: pos_integer(),
           anthropic_continuation_reservation_microdollars: pos_integer(),
           anthropic_repair_reservation_microdollars: pos_integer(),
@@ -116,6 +146,13 @@ defmodule ContextBot.Settings do
       bot_did: optional_string(environment, "BOT_DID", :bot_did),
       bot_handle: optional_string(environment, "BOT_HANDLE", :bot_handle),
       bot_pds_url: optional_url(environment, "BOT_PDS_URL", :bot_pds_url),
+      anthropic_model_id:
+        string!(
+          environment,
+          "ANTHROPIC_MODEL_ID",
+          :anthropic_model_id,
+          @default_anthropic_model_id
+        ),
       anthropic_daily_budget_microdollars:
         optional_microdollars(
           environment,
@@ -142,6 +179,48 @@ defmodule ContextBot.Settings do
           "MAX_WEB_SEARCH_USES",
           :max_web_search_uses,
           @default_max_web_search_uses
+        ),
+      max_web_fetch_uses:
+        positive_integer!(
+          environment,
+          "MAX_WEB_FETCH_USES",
+          :max_web_fetch_uses,
+          @default_max_web_fetch_uses
+        ),
+      max_web_fetch_content_tokens:
+        positive_integer!(
+          environment,
+          "MAX_WEB_FETCH_CONTENT_TOKENS",
+          :max_web_fetch_content_tokens,
+          @default_max_web_fetch_content_tokens
+        ),
+      max_tool_continuations:
+        positive_integer!(
+          environment,
+          "MAX_TOOL_CONTINUATIONS",
+          :max_tool_continuations,
+          @default_max_tool_continuations
+        ),
+      anthropic_max_http_retries:
+        positive_integer!(
+          environment,
+          "ANTHROPIC_MAX_HTTP_RETRIES",
+          :anthropic_max_http_retries,
+          @default_anthropic_max_http_retries
+        ),
+      anthropic_retry_base_ms:
+        positive_integer!(
+          environment,
+          "ANTHROPIC_RETRY_BASE_MS",
+          :anthropic_retry_base_ms,
+          @default_anthropic_retry_base_ms
+        ),
+      anthropic_retry_max_ms:
+        positive_integer!(
+          environment,
+          "ANTHROPIC_RETRY_MAX_MS",
+          :anthropic_retry_max_ms,
+          @default_anthropic_retry_max_ms
         ),
       anthropic_research_reservation_microdollars:
         microdollars!(
@@ -270,6 +349,22 @@ defmodule ContextBot.Settings do
       settings.max_web_search_uses,
       "MAX_WEB_SEARCH_USES"
     )
+
+    validate_positive!(settings.max_web_fetch_uses, "MAX_WEB_FETCH_USES")
+
+    validate_positive!(
+      settings.max_web_fetch_content_tokens,
+      "MAX_WEB_FETCH_CONTENT_TOKENS"
+    )
+
+    validate_positive!(settings.max_tool_continuations, "MAX_TOOL_CONTINUATIONS")
+    validate_positive!(settings.anthropic_max_http_retries, "ANTHROPIC_MAX_HTTP_RETRIES")
+    validate_positive!(settings.anthropic_retry_base_ms, "ANTHROPIC_RETRY_BASE_MS")
+    validate_positive!(settings.anthropic_retry_max_ms, "ANTHROPIC_RETRY_MAX_MS")
+
+    if settings.anthropic_retry_max_ms < settings.anthropic_retry_base_ms do
+      raise ArgumentError, "ANTHROPIC_RETRY_MAX_MS must be at least ANTHROPIC_RETRY_BASE_MS"
+    end
 
     validate_optional_positive!(
       settings.anthropic_daily_budget_microdollars,

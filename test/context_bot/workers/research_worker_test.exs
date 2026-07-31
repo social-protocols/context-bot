@@ -1,0 +1,417 @@
+defmodule ContextBot.Workers.ResearchWorkerTest.Runner do
+  @moduledoc false
+
+  def run(invocation, options) do
+    config = Application.fetch_env!(:context_bot, __MODULE__)
+
+    send(
+      config[:test_pid],
+      {:runner_called, invocation.stage, options, ContextBot.Repo.in_transaction?()}
+    )
+
+    case config[:result] do
+      result when is_function(result, 1) -> result.(invocation)
+      result -> result
+    end
+  end
+end
+
+defmodule ContextBot.Workers.ResearchWorkerTest.AnthropicClient do
+  @moduledoc false
+
+  def send_message(_request, metadata) do
+    test_pid = Process.get(:research_worker_integration_pid)
+
+    entry =
+      ContextBot.Repo.get_by!(ContextBot.Research.BudgetEntry, attempt_key: metadata.attempt_key)
+
+    send(test_pid, {:integrated_anthropic_call, entry.state, ContextBot.Repo.in_transaction?()})
+
+    {:ok,
+     %{
+       status: 200,
+       headers: %{"content-type" => ["application/json"], "request-id" => ["integrated"]},
+       raw_body: Process.get(:research_worker_integration_body),
+       received_at: ~U[2026-07-29 12:34:56.123456Z],
+       duration_ms: 12
+     }}
+  end
+end
+
+defmodule ContextBot.Workers.ResearchWorkerTest do
+  use ContextBot.DataCase, async: false
+
+  alias ContextBot.ATProto.TID
+  alias ContextBot.Settings
+  alias ContextBot.Workers.ResearchWorker
+  alias ContextBot.Workers.ResearchWorkerTest.{AnthropicClient, Runner}
+  alias ContextBot.Workflow.Invocation
+
+  @now ~U[2026-07-29 12:34:56.123456Z]
+  @rkey "3mzzzzzzzzzzz"
+
+  setup do
+    original_worker_config = Application.get_env(:context_bot, ResearchWorker, :missing)
+    original_runner_config = Application.get_env(:context_bot, Runner, :missing)
+
+    on_exit(fn ->
+      restore_env(ResearchWorker, original_worker_config)
+      restore_env(Runner, original_runner_config)
+      Process.delete(:research_worker_integration_pid)
+      Process.delete(:research_worker_integration_body)
+    end)
+
+    :ok
+  end
+
+  test "integrates the real durable runner and remains idempotent under a duplicate job" do
+    invocation = invocation("integrated", :thread_ready)
+    body = fixture("tool_success.json")
+    Process.put(:research_worker_integration_pid, self())
+    Process.put(:research_worker_integration_body, body)
+
+    settings = Settings.load(anthropic_daily_budget_usd: "20.000000")
+
+    configure_worker(
+      runner: ContextBot.Research.Runner,
+      runner_options: [
+        client: AnthropicClient,
+        decoder: &Jason.decode/1,
+        now: fn -> @now end,
+        sleep: fn _milliseconds -> :ok end
+      ],
+      settings: settings
+    )
+
+    assert :ok = perform(invocation)
+    assert_received {:integrated_anthropic_call, :sent, false}
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :reply_ready
+    assert persisted.selected_reply == "Useful context from primary sources."
+    assert [response] = persisted.anthropic_responses
+    assert response["raw_body"] == body
+    assert persisted.reply_record["text"] == persisted.selected_reply
+    assert [%Oban.Job{worker: "ContextBot.Workers.ReplyWorker"}] = Repo.all(Oban.Job)
+
+    assert :ok = perform(persisted)
+    refute_received {:integrated_anthropic_call, _state, _transaction}
+    assert Repo.aggregate(Oban.Job, :count) == 1
+  end
+
+  test "atomically freezes all research evidence and exact reply intent before queuing publication" do
+    invocation = invocation("success", :thread_ready)
+    configure_runner({:ok, runner_result()})
+    configure_worker()
+
+    assert :ok = perform(invocation)
+    assert_received {:runner_called, :researching, _options, false}
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.status == :reply_ready
+    assert persisted.stage == :reply_ready
+    assert persisted.anthropic_messages == runner_result().messages
+    assert persisted.anthropic_usage == runner_result().usage
+    assert persisted.selected_reply == "Frozen concise context."
+    assert persisted.reply_validation == %{"repair_used" => false, "result" => "valid"}
+    assert persisted.reply_rkey == @rkey
+
+    expected_record = %{
+      "$type" => "app.bsky.feed.post",
+      "text" => "Frozen concise context.",
+      "createdAt" => "2026-07-29T12:34:56.123456Z",
+      "reply" => %{
+        "parent" => %{
+          "uri" => invocation.invocation_uri,
+          "cid" => invocation.current_cid
+        },
+        "root" => %{
+          "uri" => invocation.root_uri,
+          "cid" => invocation.root_cid
+        }
+      }
+    }
+
+    assert persisted.reply_record == expected_record
+
+    assert [%Oban.Job{} = reply_job] = Repo.all(Oban.Job)
+    assert reply_job.worker == "ContextBot.Workers.ReplyWorker"
+    assert reply_job.queue == "reply"
+    assert reply_job.state == "available"
+
+    assert reply_job.args == %{
+             "uri" => invocation.invocation_uri,
+             "cid" => invocation.notification_cid
+           }
+
+    # The future PDS worker can only become visible in the same commit as this queryable intent.
+    assert Repo.get!(Invocation, invocation.id).reply_record == expected_record
+  end
+
+  test "rolls back reply evidence and job together when publication enqueue fails" do
+    invocation = invocation("rollback", :thread_ready)
+    configure_runner({:ok, runner_result()})
+
+    invalid_job_builder = fn claimed ->
+      %{"uri" => claimed.invocation_uri, "cid" => claimed.notification_cid}
+      |> Oban.Job.new(worker: "ContextBot.Workers.ReplyWorker", queue: :reply)
+      |> Ecto.Changeset.add_error(:args, "forced reply handoff failure")
+    end
+
+    configure_worker(reply_job_builder: invalid_job_builder)
+
+    assert_raise Ecto.InvalidChangesetError, fn -> perform(invocation) end
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :researching
+    assert persisted.selected_reply == nil
+    assert persisted.reply_rkey == nil
+    assert persisted.reply_record == nil
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "defers exhausted budget through the next UTC rollover without reply work" do
+    invocation = invocation("budget", :thread_ready)
+    rollover = ~U[2026-07-30 00:00:00.000000Z]
+    configure_runner({:deferred, rollover})
+    configure_worker()
+
+    assert :ok = perform(invocation)
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :deferred_budget
+    assert persisted.status == :deferred_budget
+    assert persisted.defer_until == rollover
+    assert persisted.reply_record == nil
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "claims eligible deferred work, resumes researching, and ignores future or completed work" do
+    eligible =
+      invocation("eligible-deferred", :deferred_budget, %{defer_until: DateTime.add(@now, -1)})
+
+    configure_runner({:ok, runner_result()})
+    configure_worker(tid_generator: &TID.generate/1)
+    assert :ok = perform(eligible)
+    assert Repo.reload!(eligible).stage == :reply_ready
+
+    future =
+      invocation("future-deferred", :deferred_budget, %{defer_until: DateTime.add(@now, 60)})
+
+    assert :ok = perform(future)
+    assert Repo.reload!(future).stage == :deferred_budget
+
+    researching = invocation("resume", :researching)
+    assert :ok = perform(researching)
+    assert Repo.reload!(researching).stage == :reply_ready
+
+    complete = invocation("complete", :complete)
+    assert :ok = perform(complete)
+    assert Repo.reload!(complete).stage == :complete
+
+    assert_received {:runner_called, :researching, _options, false}
+    assert_received {:runner_called, :researching, _options, false}
+    refute_received {:runner_called, _stage, _options, _transaction}
+  end
+
+  test "only one duplicate job can own an already researching invocation" do
+    invocation = invocation("concurrent-researching", :researching)
+    test_pid = self()
+    rollover = ~U[2026-07-30 00:00:00.000000Z]
+
+    configure_runner(fn _invocation ->
+      send(test_pid, {:runner_at_barrier, self()})
+
+      receive do
+        :release_runner -> {:deferred, rollover}
+      after
+        1_000 -> {:deferred, rollover}
+      end
+    end)
+
+    configure_worker()
+
+    tasks =
+      for job_id <- [101, 102] do
+        Task.async(fn -> perform(invocation, job_id) end)
+      end
+
+    assert_receive {:runner_called, :researching, _options, false}
+    assert_receive {:runner_at_barrier, runner_pid}
+    refute_receive {:runner_called, :researching, _options, false}, 100
+
+    send(runner_pid, :release_runner)
+    assert Task.await_many(tasks) == [:ok, :ok]
+    assert Repo.reload!(invocation).stage == :deferred_budget
+  end
+
+  test "the same Oban job resumes its lease after a crash while a duplicate remains blocked" do
+    invocation = invocation("lease-resume", :researching)
+    configure_runner(fn _invocation -> raise "injected runner crash" end)
+    configure_worker()
+
+    assert_raise RuntimeError, "injected runner crash", fn -> perform(invocation, 201) end
+    assert_received {:runner_called, :researching, _options, false}
+    assert Repo.reload!(invocation).research_claim_token == "research-job-201"
+
+    rollover = ~U[2026-07-30 00:00:00.000000Z]
+    configure_runner({:deferred, rollover})
+
+    assert :ok = perform(invocation, 202)
+    refute_received {:runner_called, _stage, _options, _transaction}
+
+    assert :ok = perform(invocation, 201)
+    assert_received {:runner_called, :researching, _options, false}
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :deferred_budget
+    assert persisted.research_claim_token == nil
+    assert persisted.research_claimed_at == nil
+  end
+
+  test "a different Oban job can take over a stale research lease" do
+    invocation = invocation("stale-lease", :researching)
+    configure_runner(fn _invocation -> raise "injected runner crash" end)
+    configure_worker(claim_lease_ms: 1_000)
+
+    assert_raise RuntimeError, "injected runner crash", fn -> perform(invocation, 301) end
+    assert_received {:runner_called, :researching, _options, false}
+    assert Repo.reload!(invocation).research_claim_token == "research-job-301"
+
+    rollover = ~U[2026-07-30 00:00:00.000000Z]
+    configure_runner({:deferred, rollover})
+
+    configure_worker(
+      now: fn -> DateTime.add(@now, 1_001, :millisecond) end,
+      claim_lease_ms: 1_000
+    )
+
+    assert :ok = perform(invocation, 302)
+    assert_received {:runner_called, :researching, _options, false}
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :deferred_budget
+    assert persisted.research_claim_token == nil
+    assert persisted.research_claimed_at == nil
+  end
+
+  test "maps terminal runner states to finite silent provider failures" do
+    for {suffix, runner_error, category} <- [
+          {"auth", :provider_auth, :provider_auth},
+          {"malformed", :malformed_provider_response, :provider_response},
+          {"tool-cap", :tool_use_limit_exceeded, :provider_response}
+        ] do
+      invocation = invocation(suffix, :thread_ready)
+      configure_runner({:error, runner_error})
+      configure_worker()
+
+      assert :ok = perform(invocation)
+      persisted = Repo.reload!(invocation)
+      assert persisted.stage == :failed
+      assert persisted.failure_category == category
+      assert persisted.failure_detail == %{"reason" => Atom.to_string(runner_error)}
+      assert persisted.completed_at == @now
+      assert persisted.reply_record == nil
+    end
+
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  defp configure_runner(result) do
+    Application.put_env(:context_bot, Runner, test_pid: self(), result: result)
+  end
+
+  defp configure_worker(overrides \\ []) do
+    defaults = [
+      now: fn -> @now end,
+      reply_job_builder: nil,
+      runner: Runner,
+      runner_options: [evidence: :runner_options_forwarded],
+      settings: Settings.load([]),
+      tid_generator: fn timestamp_us ->
+        assert timestamp_us == DateTime.to_unix(@now, :microsecond)
+        @rkey
+      end
+    ]
+
+    config = Keyword.merge(defaults, overrides)
+
+    config =
+      if is_nil(config[:reply_job_builder]) do
+        Keyword.delete(config, :reply_job_builder)
+      else
+        config
+      end
+
+    Application.put_env(:context_bot, ResearchWorker, config)
+  end
+
+  defp perform(invocation) do
+    perform(invocation, nil)
+  end
+
+  defp perform(invocation, job_id) do
+    ResearchWorker.perform(%Oban.Job{
+      id: job_id,
+      args: %{"uri" => invocation.invocation_uri, "cid" => invocation.notification_cid}
+    })
+  end
+
+  defp runner_result do
+    %{
+      messages: %{
+        "model" => "claude-sonnet-5",
+        "messages" => [%{"role" => "user", "content" => "canonical thread"}]
+      },
+      usage: %{
+        "attempts" => [
+          %{
+            "attempt_key" => "invocation-1-attempt-1-research",
+            "kind" => "research",
+            "usage" => %{"input_tokens" => 10, "output_tokens" => 5}
+          }
+        ],
+        "continuations" => 0,
+        "response_count" => 1,
+        "tool_uses" => 0,
+        "totals" => %{"input_tokens" => 10, "output_tokens" => 5}
+      },
+      text: "Frozen concise context.",
+      validation: %{"repair_used" => false, "result" => "valid"}
+    }
+  end
+
+  defp fixture(name) do
+    "../../fixtures/anthropic/#{name}"
+    |> Path.expand(__DIR__)
+    |> File.read!()
+  end
+
+  defp invocation(suffix, stage, extra \\ %{}) do
+    uri = "at://did:plc:actor/app.bsky.feed.post/#{suffix}"
+    cid = "bafy-#{suffix}"
+    root_uri = "at://did:plc:root/app.bsky.feed.post/root-#{suffix}"
+
+    attrs =
+      Map.merge(
+        %{
+          invocation_uri: uri,
+          notification_cid: cid,
+          current_cid: "#{cid}-current",
+          actor_did: "did:plc:actor",
+          raw_notification: %{"uri" => uri, "cid" => cid},
+          received_at: DateTime.add(@now, -60),
+          status: stage,
+          stage: stage,
+          canonical_thread: "ROOT\nClaim.\n\nINVOCATION\nPlease add context.",
+          canonical_thread_version: "1",
+          root_uri: root_uri,
+          root_cid: "bafy-root-#{suffix}"
+        },
+        extra
+      )
+
+    %Invocation{}
+    |> Invocation.changeset(attrs)
+    |> Repo.insert!()
+  end
+
+  defp restore_env(module, :missing), do: Application.delete_env(:context_bot, module)
+  defp restore_env(module, value), do: Application.put_env(:context_bot, module, value)
+end

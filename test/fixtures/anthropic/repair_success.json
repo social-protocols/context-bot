@@ -1,0 +1,54 @@
+{
+  "primary": {
+    "id": "msg_primary_too_long",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-5",
+    "content": [
+      {
+        "type": "thinking",
+        "thinking": "A completed analysis retained for repair.",
+        "signature": "opaque-signature"
+      },
+      {
+        "type": "text",
+        "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+    ],
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "usage": {
+      "input_tokens": 100,
+      "cache_creation_input_tokens": 100,
+      "cache_creation": {
+        "ephemeral_5m_input_tokens": 100,
+        "ephemeral_1h_input_tokens": 0
+      },
+      "cache_read_input_tokens": 0,
+      "output_tokens": 100,
+      "server_tool_use": {"web_search_requests": 0}
+    }
+  },
+  "repair": {
+    "id": "msg_repaired",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-5",
+    "content": [
+      {"type": "text", "text": "A concise repaired answer."}
+    ],
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "usage": {
+      "input_tokens": 190,
+      "cache_creation_input_tokens": 0,
+      "cache_creation": {
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 0
+      },
+      "cache_read_input_tokens": 0,
+      "output_tokens": 14,
+      "server_tool_use": {"web_search_requests": 0}
+    }
+  }
+}

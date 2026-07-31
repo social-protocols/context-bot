@@ -22,6 +22,13 @@ defmodule ContextBot.SettingsTest do
     assert is_integer(settings.anthropic_repair_reservation_microdollars)
     assert is_integer(settings.anthropic_retry_reservation_microdollars)
     assert settings.anthropic_pricing_version == "sonnet-5-2026-07-28"
+    assert settings.anthropic_model_id == "claude-sonnet-5"
+    assert settings.max_web_fetch_uses == 5
+    assert settings.max_web_fetch_content_tokens == 50_000
+    assert settings.max_tool_continuations == 3
+    assert settings.anthropic_max_http_retries == 2
+    assert settings.anthropic_retry_base_ms == 1_000
+    assert settings.anthropic_retry_max_ms == 30_000
   end
 
   test "rejects malformed non-secret settings" do
@@ -143,6 +150,31 @@ defmodule ContextBot.SettingsTest do
   test "loads the canonical public web-search cap from environment and options" do
     assert Settings.load(%{"MAX_WEB_SEARCH_USES" => "3"}).max_web_search_uses == 3
     assert Settings.load(max_web_search_uses: 4).max_web_search_uses == 4
+  end
+
+  test "loads and validates the approved research-runner bounds" do
+    settings =
+      Settings.load(
+        anthropic_model_id: "claude-sonnet-5-20260715",
+        max_web_fetch_uses: 2,
+        max_web_fetch_content_tokens: 12_000,
+        max_tool_continuations: 4,
+        anthropic_max_http_retries: 3,
+        anthropic_retry_base_ms: 250,
+        anthropic_retry_max_ms: 5_000
+      )
+
+    assert settings.anthropic_model_id == "claude-sonnet-5-20260715"
+    assert settings.max_web_fetch_uses == 2
+    assert settings.max_web_fetch_content_tokens == 12_000
+    assert settings.max_tool_continuations == 4
+    assert settings.anthropic_max_http_retries == 3
+    assert settings.anthropic_retry_base_ms == 250
+    assert settings.anthropic_retry_max_ms == 5_000
+
+    assert_raise ArgumentError, ~r/ANTHROPIC_RETRY_MAX_MS/, fn ->
+      Settings.load(anthropic_retry_base_ms: 5_001, anthropic_retry_max_ms: 5_000)
+    end
   end
 
   test "uses the canonical public web-search cap in maximum-exposure validation" do

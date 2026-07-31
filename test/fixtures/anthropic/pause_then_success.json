@@ -1,0 +1,73 @@
+{
+  "pause": {
+    "id": "msg_pause_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-5",
+    "content": [
+      {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01",
+        "name": "web_search",
+        "input": {"query": "disputed date primary source"},
+        "caller": {"type": "direct"}
+      },
+      {
+        "type": "future_encrypted_trace",
+        "ciphertext": "opaque+/==",
+        "provider_metadata": {"retain": true}
+      }
+    ],
+    "stop_reason": "pause_turn",
+    "stop_sequence": null,
+    "usage": {
+      "input_tokens": 140,
+      "cache_creation_input_tokens": 100,
+      "cache_creation": {
+        "ephemeral_5m_input_tokens": 100,
+        "ephemeral_1h_input_tokens": 0
+      },
+      "cache_read_input_tokens": 0,
+      "output_tokens": 36,
+      "server_tool_use": {"web_search_requests": 1}
+    }
+  },
+  "success": {
+    "id": "msg_after_pause",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-5",
+    "content": [
+      {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu_01",
+        "content": [
+          {
+            "type": "web_search_result",
+            "url": "https://primary.example/report",
+            "title": "Primary report",
+            "encrypted_content": "encrypted-result",
+            "page_age": null
+          }
+        ]
+      },
+      {
+        "type": "text",
+        "text": "The cited primary source resolves the disputed date."
+      }
+    ],
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "usage": {
+      "input_tokens": 180,
+      "cache_creation_input_tokens": 0,
+      "cache_creation": {
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 0
+      },
+      "cache_read_input_tokens": 140,
+      "output_tokens": 22,
+      "server_tool_use": {"web_search_requests": 0}
+    }
+  }
+}
