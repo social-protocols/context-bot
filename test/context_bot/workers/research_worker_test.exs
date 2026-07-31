@@ -48,6 +48,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
   alias ContextBot.Workflow.{Invocation, Store}
 
   @now ~U[2026-07-29 12:34:56.123456Z]
+  @bot_did "did:plc:contextbot123"
   @rkey "3mzzzzzzzzzzz"
 
   setup do
@@ -70,7 +71,8 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     Process.put(:research_worker_integration_pid, self())
     Process.put(:research_worker_integration_body, body)
 
-    settings = Settings.load(anthropic_daily_budget_usd: "20.000000")
+    settings =
+      Settings.load(bot_did: @bot_did, anthropic_daily_budget_usd: "20.000000")
 
     configure_worker(
       runner: ContextBot.Research.Runner,
@@ -114,6 +116,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert persisted.anthropic_usage == runner_result().usage
     assert persisted.selected_reply == "Frozen concise context."
     assert persisted.reply_validation == %{"repair_used" => false, "result" => "valid"}
+    assert Map.get(persisted, :reply_repo) == @bot_did
     assert persisted.reply_rkey == @rkey
 
     expected_record = %{
@@ -363,7 +366,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
       reply_job_builder: nil,
       runner: Runner,
       runner_options: [evidence: :runner_options_forwarded],
-      settings: Settings.load([]),
+      settings: Settings.load(bot_did: @bot_did),
       tid_generator: fn timestamp_us ->
         assert timestamp_us == DateTime.to_unix(@now, :microsecond)
         @rkey

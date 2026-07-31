@@ -102,3 +102,81 @@ Commit message: `feat: publish exactly one Bluesky reply`
   two visible records because both use the same persisted repository coordinate and exact record.
 - The existing finite failure taxonomy has no separate publication-exhaustion category, so bounded
   retry exhaustion is recorded as `publication_conflict` with safe reason `retry_exhausted`.
+
+## Fix Round 1: Durable Publication Fencing
+
+### Findings addressed
+
+- Added a durable publication lease with an owner token and microsecond timestamp. The same Oban
+  job renews its lease across retries, a different live job is rejected, and a stale lease may be
+  taken over. Every PDS GET and PUT boundary renews/fences the exact token; completion and failure
+  transitions are also atomically token-fenced, so a stale owner cannot publish or replace the
+  winner's terminal outcome.
+- Froze the validated reply repository during the `ResearchWorker` handoff. `ReplyWorker` now uses
+  only the persisted repository, rkey, and record; missing or corrupt frozen intent fails before
+  provider I/O, and runtime configuration drift cannot redirect a retry.
+- Reconciled all ambiguous non-auth, non-permanent PUT failures by GET, including exposed transport
+  failures on the final attempt. Permanent PDS 403 errors now use `publication_auth`.
+- Added strict, bounded `Retry-After` parsing for rate-limit backoff, with deterministic default
+  backoff for missing, malformed, or negative values.
+
+Migration `20260729004000_add_publication_claim_and_repo.exs` adds nullable `reply_repo`,
+`publication_claim_token`, and `publication_claimed_at` columns plus a claim-token index. Nullable
+columns preserve compatibility with existing rows, while the worker treats absent frozen intent as
+a finite pre-I/O failure.
+
+### TDD evidence
+
+RED command:
+
+```text
+direnv exec . mix test test/context_bot/workers/reply_worker_test.exs test/context_bot/workers/research_worker_test.exs
+```
+
+Result before production changes: `18/26 passed`; eight intended regressions failed for missing
+repository freeze, same-job lease resumption, live-owner exclusion, stale takeover/fencing,
+configuration-drift safety, exposed transport reconciliation, permanent-403 classification, and
+strict `Retry-After` handling.
+
+GREEN focused command:
+
+```text
+direnv exec . mix test test/context_bot/workers/reply_worker_test.exs test/context_bot/workers/research_worker_test.exs test/context_bot/workflow/store_test.exs
+```
+
+Result: `45 passed`, exit 0.
+
+The single authorized scoped audit confirmed that all PDS GET/PUT call sites are reached only after
+an atomic lease renewal, all publication terminal writes use the exact-token transition, the reply
+worker has no runtime repository fallback, and ambiguous PUT outcomes enter reconciliation.
+
+### Full gate
+
+Command:
+
+```text
+direnv exec . just check
+```
+
+Result: exit 0. Formatting, warnings-as-errors compilation, Credo strict, ShellCheck, and secrets
+tests passed; ExUnit reported `266 passed`; Dialyzer reported zero errors, zero skipped warnings,
+and zero unnecessary skips.
+
+### Fix commit and files
+
+Commit message: `fix: fence Bluesky reply publication`
+
+- `lib/context_bot/workers/reply_worker.ex`
+- `lib/context_bot/workers/research_worker.ex`
+- `lib/context_bot/workflow/invocation.ex`
+- `lib/context_bot/workflow/store.ex`
+- `priv/repo/migrations/20260729004000_add_publication_claim_and_repo.exs`
+- `test/context_bot/workers/reply_worker_test.exs`
+- `test/context_bot/workers/research_worker_test.exs`
+- `.superpowers/sdd/2026-07-29-context-bot-poc/task-12-report.md`
+
+### Remaining concerns
+
+- No open blocker. Lease duration is configurable for tests and defaults to five minutes in
+  production; takeover remains safe because every provider boundary and terminal transition is
+  fenced against the current persisted token.

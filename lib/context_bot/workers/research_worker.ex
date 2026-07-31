@@ -17,6 +17,7 @@ defmodule ContextBot.Workers.ResearchWorker do
 
   @reply_worker "ContextBot.Workers.ReplyWorker"
   @default_claim_lease_ms 21_600_000
+  @did_regex ~r/\Adid:[a-z0-9]+:[A-Za-z0-9._:%-]+\z/
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"uri" => uri, "cid" => cid}} = job)
@@ -78,47 +79,56 @@ defmodule ContextBot.Workers.ResearchWorker do
     parent = %{"uri" => invocation.invocation_uri, "cid" => invocation.current_cid}
     root = root_ref(invocation)
 
-    case Post.build(result.text, parent, root, created_at) do
-      {:ok, record} ->
-        attrs = %{
-          anthropic_messages: result.messages,
-          anthropic_usage: result.usage,
-          selected_reply: result.text,
-          reply_validation: result.validation,
-          reply_rkey: rkey,
-          reply_record: record,
-          defer_until: nil,
-          failure_category: nil,
-          failure_detail: nil,
-          research_claim_token: nil,
-          research_claimed_at: nil,
-          completed_at: nil
-        }
+    with {:ok, reply_repo} <- publication_repo(dependencies.settings.bot_did),
+         {:ok, record} <- Post.build(result.text, parent, root, created_at) do
+      attrs = %{
+        anthropic_messages: result.messages,
+        anthropic_usage: result.usage,
+        selected_reply: result.text,
+        reply_validation: result.validation,
+        reply_repo: reply_repo,
+        reply_rkey: rkey,
+        reply_record: record,
+        publication_claim_token: nil,
+        publication_claimed_at: nil,
+        defer_until: nil,
+        failure_category: nil,
+        failure_detail: nil,
+        research_claim_token: nil,
+        research_claimed_at: nil,
+        completed_at: nil
+      }
 
-        next_job = dependencies.reply_job_builder.(invocation)
+      next_job = dependencies.reply_job_builder.(invocation)
 
-        case Store.transition_research(
-               invocation,
-               token,
-               :reply_ready,
-               attrs,
-               next_job,
-               created_at
-             ) do
-          {:ok, _reply_ready} ->
-            :ok
+      case Store.transition_research(
+             invocation,
+             token,
+             :reply_ready,
+             attrs,
+             next_job,
+             created_at
+           ) do
+        {:ok, _reply_ready} ->
+          :ok
 
-          {:error, :stale_claim} ->
-            :ok
+        {:error, :stale_claim} ->
+          :ok
 
-          {:error, changeset} ->
-            raise Ecto.InvalidChangesetError, action: :update, changeset: changeset
-        end
-
+        {:error, changeset} ->
+          raise Ecto.InvalidChangesetError, action: :update, changeset: changeset
+      end
+    else
       {:error, reason} ->
         fail_research(invocation, reason, created_at, token)
     end
   end
+
+  defp publication_repo(repo) when is_binary(repo) and repo != "" do
+    if Regex.match?(@did_regex, repo), do: {:ok, repo}, else: {:error, :invalid_publication_repo}
+  end
+
+  defp publication_repo(_repo), do: {:error, :invalid_publication_repo}
 
   defp root_ref(%Invocation{root_uri: root_uri, root_cid: root_cid})
        when is_binary(root_uri) and is_binary(root_cid),

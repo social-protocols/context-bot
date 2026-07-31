@@ -172,6 +172,123 @@ defmodule ContextBot.Workflow.Store do
     end
   end
 
+  @doc """
+  Atomically acquires or renews one publication lease for the frozen reply intent.
+
+  The same Oban job token resumes immediately. Another token may take over only after the current
+  lease is stale.
+  """
+  @spec claim_publication(Invocation.t(), String.t(), DateTime.t(), DateTime.t()) ::
+          {:ok, Invocation.t()} | {:error, :busy | :stale_stage | Ecto.Changeset.t()}
+  def claim_publication(
+        %Invocation{id: id},
+        token,
+        %DateTime{} = now,
+        %DateTime{} = stale_before
+      )
+      when is_binary(token) and token != "" do
+    result =
+      Repo.transaction(
+        fn ->
+          invocation = Repo.get!(Invocation, id)
+
+          if publication_claimable?(invocation, token, stale_before) do
+            persist_publication_claim(invocation, token, now)
+          else
+            Repo.rollback(publication_claim_error(invocation))
+          end
+        end,
+        mode: :immediate
+      )
+
+    case result do
+      {:ok, invocation} -> {:ok, invocation}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc "Renews the exact current publication claim before external I/O."
+  @spec renew_publication_claim(Invocation.t(), String.t(), DateTime.t()) ::
+          {:ok, Invocation.t()} | {:error, :stale_claim}
+  def renew_publication_claim(%Invocation{id: id}, token, %DateTime{} = now)
+      when is_binary(token) and token != "" do
+    result =
+      Repo.transaction(
+        fn ->
+          case publication_claim_context(id) do
+            %{stage: :publishing, token: ^token, claimed_at: claimed_at} ->
+              Invocation
+              |> where(
+                [invocation],
+                invocation.id == ^id and invocation.stage == :publishing and
+                  invocation.publication_claim_token == ^token
+              )
+              |> Repo.update_all(set: [publication_claimed_at: latest_timestamp(claimed_at, now)])
+
+              Repo.get!(Invocation, id)
+
+            _stale ->
+              Repo.rollback(:stale_claim)
+          end
+        end,
+        mode: :immediate
+      )
+
+    case result do
+      {:ok, invocation} -> {:ok, invocation}
+      {:error, :stale_claim} -> {:error, :stale_claim}
+    end
+  end
+
+  @doc "Fences a publication terminal transition by the exact persisted claim token."
+  @spec transition_publication(Invocation.t(), String.t(), atom(), map(), DateTime.t()) ::
+          {:ok, Invocation.t()} | {:error, :stale_claim | Ecto.Changeset.t()}
+  def transition_publication(
+        %Invocation{id: id},
+        token,
+        to_stage,
+        attrs,
+        %DateTime{} = completed_at
+      )
+      when is_binary(token) and token != "" and to_stage in [:complete, :failed] do
+    transition_attrs =
+      attrs
+      |> Map.drop([
+        :status,
+        "status",
+        :stage,
+        "stage",
+        :publication_claim_token,
+        "publication_claim_token",
+        :publication_claimed_at,
+        "publication_claimed_at"
+      ])
+      |> Map.merge(%{
+        status: to_stage,
+        stage: to_stage,
+        publication_claim_token: nil,
+        publication_claimed_at: nil,
+        completed_at: completed_at
+      })
+
+    result =
+      Repo.transaction(
+        fn ->
+          case compare_and_update_publication(Repo, id, token, transition_attrs) do
+            {:ok, updated} -> updated
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end,
+        mode: :immediate
+      )
+
+    case result do
+      {:ok, invocation} -> {:ok, invocation}
+      {:error, :stale_claim} -> {:error, :stale_claim}
+      {:error, %Changeset{} = changeset} -> {:error, changeset}
+    end
+  end
+
   @spec append_anthropic_response(Invocation.t(), map(), pos_integer()) ::
           {:ok, Invocation.t()} | {:error, :provider_storage_limit | :stale_claim}
   def append_anthropic_response(%Invocation{id: id}, response, storage_limit)
@@ -380,6 +497,22 @@ defmodule ContextBot.Workflow.Store do
     end
   end
 
+  defp compare_and_update_publication(repo, id, token, attrs) do
+    case repo.get(Invocation, id) do
+      %Invocation{stage: :publishing, publication_claim_token: ^token} = invocation ->
+        case repo.update(Invocation.transition_changeset(invocation, attrs)) do
+          {:ok, updated} -> {:ok, updated}
+          {:error, changeset} -> {:error, changeset}
+        end
+
+      %Invocation{} ->
+        {:error, :stale_claim}
+
+      nil ->
+        {:error, :stale_claim}
+    end
+  end
+
   defp research_transition_attrs(attrs, token, :researching, now) do
     attrs
     |> Map.drop([:status, "status", :stage, "stage", :research_claim_token])
@@ -429,6 +562,23 @@ defmodule ContextBot.Workflow.Store do
 
   defp research_claimable?(_invocation, _token, _now, _stale_before), do: false
 
+  defp publication_claimable?(%Invocation{stage: :reply_ready}, _token, _stale_before), do: true
+
+  defp publication_claimable?(
+         %Invocation{
+           stage: :publishing,
+           publication_claim_token: existing_token,
+           publication_claimed_at: claimed_at
+         },
+         token,
+         stale_before
+       ) do
+    is_nil(existing_token) or existing_token == token or is_nil(claimed_at) or
+      DateTime.compare(claimed_at, stale_before) in [:lt, :eq]
+  end
+
+  defp publication_claimable?(_invocation, _token, _stale_before), do: false
+
   defp persist_research_claim(invocation, token, now) do
     result =
       invocation
@@ -438,6 +588,26 @@ defmodule ContextBot.Workflow.Store do
         defer_until: nil,
         research_claim_token: token,
         research_claimed_at: now,
+        failure_category: nil,
+        failure_detail: nil,
+        completed_at: nil
+      })
+      |> Repo.update()
+
+    case result do
+      {:ok, claimed} -> claimed
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
+  end
+
+  defp persist_publication_claim(invocation, token, now) do
+    result =
+      invocation
+      |> Invocation.transition_changeset(%{
+        status: :publishing,
+        stage: :publishing,
+        publication_claim_token: token,
+        publication_claimed_at: latest_timestamp(invocation.publication_claimed_at, now),
         failure_category: nil,
         failure_detail: nil,
         completed_at: nil
@@ -461,6 +631,9 @@ defmodule ContextBot.Workflow.Store do
 
   defp research_claim_error(_invocation, _now), do: :stale_stage
 
+  defp publication_claim_error(%Invocation{stage: :publishing}), do: :busy
+  defp publication_claim_error(_invocation), do: :stale_stage
+
   defp maybe_insert_job(_repo, false, _next_job), do: {:ok, nil}
   defp maybe_insert_job(_repo, true, nil), do: {:ok, nil}
   defp maybe_insert_job(repo, true, %Changeset{} = next_job), do: repo.insert(next_job)
@@ -472,6 +645,17 @@ defmodule ContextBot.Workflow.Store do
       stage: invocation.stage,
       token: invocation.research_claim_token,
       claimed_at: invocation.research_claimed_at
+    })
+    |> Repo.one!()
+  end
+
+  defp publication_claim_context(invocation_id) do
+    Invocation
+    |> where([invocation], invocation.id == ^invocation_id)
+    |> select([invocation], %{
+      stage: invocation.stage,
+      token: invocation.publication_claim_token,
+      claimed_at: invocation.publication_claimed_at
     })
     |> Repo.one!()
   end

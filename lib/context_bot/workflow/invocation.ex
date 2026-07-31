@@ -35,6 +35,8 @@ defmodule ContextBot.Workflow.Invocation do
     :publication_conflict
   ]
 
+  @did_regex ~r/\Adid:[a-z0-9]+:[A-Za-z0-9._:%-]+\z/
+
   @receipt_fields [
     :invocation_uri,
     :notification_cid,
@@ -67,8 +69,11 @@ defmodule ContextBot.Workflow.Invocation do
     :research_claimed_at,
     :selected_reply,
     :reply_validation,
+    :reply_repo,
     :reply_rkey,
     :reply_record,
+    :publication_claim_token,
+    :publication_claimed_at,
     :reply_uri,
     :reply_cid,
     :failure_category,
@@ -120,8 +125,11 @@ defmodule ContextBot.Workflow.Invocation do
     field :research_claimed_at, :utc_datetime_usec
     field :selected_reply, :string
     field :reply_validation, :map
+    field :reply_repo, :string
     field :reply_rkey, :string
     field :reply_record, :map
+    field :publication_claim_token, :string
+    field :publication_claimed_at, :utc_datetime_usec
     field :reply_uri, :string
     field :reply_cid, :string
     field :failure_category, Ecto.Enum, values: @failure_categories
@@ -151,6 +159,7 @@ defmodule ContextBot.Workflow.Invocation do
     ])
     |> unique_constraint([:invocation_uri, :notification_cid])
     |> unique_constraint(:reply_rkey)
+    |> validate_format(:reply_repo, @did_regex)
     |> check_constraint(:status, name: :invocations_status_check)
     |> check_constraint(:stage, name: :invocations_stage_check)
     |> check_constraint(:failure_category, name: :invocations_failure_category_check)
@@ -162,6 +171,7 @@ defmodule ContextBot.Workflow.Invocation do
     |> cast(attrs, @transition_fields)
     |> validate_required([:status, :stage])
     |> unique_constraint(:reply_rkey)
+    |> validate_format(:reply_repo, @did_regex)
     |> check_constraint(:status, name: :invocations_status_check)
     |> check_constraint(:stage, name: :invocations_stage_check)
     |> check_constraint(:failure_category, name: :invocations_failure_category_check)

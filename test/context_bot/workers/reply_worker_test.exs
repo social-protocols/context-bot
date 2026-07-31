@@ -5,13 +5,20 @@ defmodule ContextBot.Workers.ReplyWorkerTest.PDS do
 
   def get_record(repo, collection, rkey) do
     config = Application.fetch_env!(:context_bot, __MODULE__)
-    maybe_run_hook(config[:get_hook])
-    Remote.get(config[:remote], repo, collection, rkey)
+
+    case maybe_run_hook(config[:get_hook]) do
+      {:return, result} -> result
+      _continue -> Remote.get(config[:remote], repo, collection, rkey)
+    end
   end
 
   def put_record(repo, collection, rkey, record) do
     config = Application.fetch_env!(:context_bot, __MODULE__)
-    Remote.put(config[:remote], repo, collection, rkey, record)
+
+    case maybe_run_hook(config[:put_hook]) do
+      {:return, result} -> result
+      _continue -> Remote.put(config[:remote], repo, collection, rkey, record)
+    end
   end
 
   defp maybe_run_hook(nil), do: :ok
@@ -64,6 +71,18 @@ defmodule ContextBot.Workers.ReplyWorkerTest.Remote do
   defp next_get(%{visible: visible} = state, _repo, _collection, _rkey),
     do: {{:ok, 200, %{}, visible}, state}
 
+  defp next_put(
+         %{put_results: [{:exposed, result} | rest], visible: nil} = state,
+         repo,
+         collection,
+         rkey,
+         record
+       ) do
+    uri = "at://#{repo}/#{collection}/#{rkey}"
+    visible = %{"uri" => uri, "cid" => state.next_cid, "value" => record}
+    {result, %{state | put_results: rest, visible: visible}}
+  end
+
   defp next_put(%{put_results: [result | rest]} = state, _repo, _collection, _rkey, _record),
     do: {result, %{state | put_results: rest}}
 
@@ -85,7 +104,7 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
   alias ContextBot.Settings
   alias ContextBot.Workers.ReplyWorker
   alias ContextBot.Workers.ReplyWorkerTest.{PDS, Remote}
-  alias ContextBot.Workflow.Invocation
+  alias ContextBot.Workflow.{Invocation, Store}
 
   @bot_did "did:plc:contextbot123"
   @collection "app.bsky.feed.post"
@@ -227,13 +246,13 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
         put_results: [{:error, :timeout}, {:error, :invalid_swap}]
       )
 
-    assert {:error, :timeout} = perform(invocation, 1)
+    assert {:error, :timeout} = perform(invocation, 1, 111)
     retryable = Repo.reload!(invocation)
     assert retryable.stage == :publishing
     assert retryable.reply_rkey == @rkey
     assert retryable.reply_record == invocation.reply_record
 
-    assert :ok = perform(invocation, 2)
+    assert :ok = perform(invocation, 2, 111)
     assert Repo.reload!(invocation).stage == :complete
 
     put_calls =
@@ -298,6 +317,282 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
     end
   end
 
+  test "a live publication owner prevents a duplicate auth failure from racing an exact success" do
+    invocation = invocation("fenced-race", :publishing)
+    exact = remote_record(invocation, "bafy-fenced-race")
+    test_pid = self()
+    {:ok, visits} = Agent.start_link(fn -> 0 end)
+
+    get_hook = fn ->
+      visit = Agent.get_and_update(visits, fn count -> {count + 1, count + 1} end)
+
+      case visit do
+        1 ->
+          send(test_pid, {:publication_get_waiting, self()})
+
+          receive do
+            :release_publication_get -> :ok
+          end
+
+        2 ->
+          {:return, {:error, :unauthorized}}
+      end
+    end
+
+    configure_remote(visible: exact, get_hook: get_hook)
+
+    owner = Task.async(fn -> perform(invocation, 1, 501) end)
+    assert_receive {:publication_get_waiting, owner_pid}
+
+    duplicate = Task.async(fn -> perform(invocation, 10, 502) end)
+    assert Task.await(duplicate) == :ok
+
+    send(owner_pid, :release_publication_get)
+    assert Task.await(owner) == :ok
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert persisted.reply_cid == "bafy-fenced-race"
+    assert persisted.failure_category == nil
+    assert Agent.get(visits, & &1) == 1
+  end
+
+  test "the same job resumes a live publication lease while a duplicate remains blocked" do
+    invocation = invocation("lease-resume", :publishing)
+    exact = remote_record(invocation, "bafy-lease-resume")
+
+    remote =
+      configure_remote(get_results: [{:error, :timeout}, {:ok, 200, %{}, exact}])
+
+    assert {:error, :timeout} = perform(invocation, 1, 601)
+    claimed = Repo.reload!(invocation)
+    assert Map.get(claimed, :publication_claim_token) == "publication-job-601"
+
+    calls_after_crash = Remote.snapshot(remote).calls
+    assert :ok = perform(invocation, 1, 602)
+    assert Remote.snapshot(remote).calls == calls_after_crash
+
+    assert :ok = perform(invocation, 2, 601)
+    assert Repo.reload!(invocation).stage == :complete
+  end
+
+  test "a different job takes over a stale bounded publication lease" do
+    invocation = invocation("stale-takeover", :publishing)
+    exact = remote_record(invocation, "bafy-stale-takeover")
+
+    configure_remote(get_results: [{:error, :timeout}, {:ok, 200, %{}, exact}])
+    configure_worker(claim_lease_ms: 1_000)
+
+    assert {:error, :timeout} = perform(invocation, 1, 701)
+    assert Map.get(Repo.reload!(invocation), :publication_claim_token) == "publication-job-701"
+
+    configure_worker(
+      now: fn -> DateTime.add(@now, 1_001, :millisecond) end,
+      claim_lease_ms: 1_000
+    )
+
+    assert :ok = perform(invocation, 2, 702)
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert persisted.reply_cid == "bafy-stale-takeover"
+    assert Map.get(persisted, :publication_claim_token) == nil
+  end
+
+  test "a stale owner is fenced before PUT when takeover happens during its GET" do
+    invocation = invocation("fenced-before-put", :publishing)
+    takeover_now = DateTime.add(@now, 2_000, :millisecond)
+
+    get_hook = fn ->
+      assert {:ok, taken_over} =
+               Store.claim_publication(
+                 invocation,
+                 "publication-job-1102",
+                 takeover_now,
+                 DateTime.add(takeover_now, -1_000, :millisecond)
+               )
+
+      assert taken_over.publication_claim_token == "publication-job-1102"
+    end
+
+    remote = configure_remote(get_hook: get_hook)
+    configure_worker(claim_lease_ms: 1_000)
+
+    assert :ok = perform(invocation, 1, 1_101)
+    refute Enum.any?(Remote.snapshot(remote).calls, &match?({:put, _, _, _, _}, &1))
+
+    pds_config = Application.fetch_env!(:context_bot, PDS)
+    Application.put_env(:context_bot, PDS, Keyword.put(pds_config, :get_hook, nil))
+    configure_worker(now: fn -> takeover_now end, claim_lease_ms: 1_000)
+
+    assert :ok = perform(invocation, 2, 1_102)
+    assert Repo.reload!(invocation).stage == :complete
+    assert visible_count(remote) == 1
+  end
+
+  test "a stale in-flight auth loser cannot replace a takeover's exact completion" do
+    invocation = invocation("stale-auth-race", :publishing)
+    exact = remote_record(invocation, "bafy-stale-auth-race")
+    takeover_now = DateTime.add(@now, 2_000, :millisecond)
+    test_pid = self()
+    {:ok, visits} = Agent.start_link(fn -> 0 end)
+
+    get_hook = fn ->
+      visit = Agent.get_and_update(visits, fn count -> {count + 1, count + 1} end)
+
+      case visit do
+        1 ->
+          send(test_pid, {:stale_auth_get_waiting, self()})
+
+          receive do
+            :release_stale_auth_get -> {:return, {:error, :unauthorized}}
+          end
+
+        2 ->
+          :ok
+      end
+    end
+
+    configure_remote(visible: exact, get_hook: get_hook)
+    configure_worker(claim_lease_ms: 1_000)
+
+    old_owner = Task.async(fn -> perform(invocation, 10, 1_201) end)
+    assert_receive {:stale_auth_get_waiting, old_pid}
+
+    configure_worker(now: fn -> takeover_now end, claim_lease_ms: 1_000)
+    assert :ok = perform(invocation, 1, 1_202)
+    assert Repo.reload!(invocation).stage == :complete
+
+    send(old_pid, :release_stale_auth_get)
+    assert Task.await(old_owner) == :ok
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert persisted.reply_cid == "bafy-stale-auth-race"
+    assert persisted.failure_category == nil
+  end
+
+  test "a stale owner is fenced before reconciliation after an exposed PUT" do
+    invocation = invocation("fenced-after-put", :publishing)
+    takeover_now = DateTime.add(@now, 2_000, :millisecond)
+
+    put_hook = fn ->
+      assert {:ok, taken_over} =
+               Store.claim_publication(
+                 invocation,
+                 "publication-job-1302",
+                 takeover_now,
+                 DateTime.add(takeover_now, -1_000, :millisecond)
+               )
+
+      assert taken_over.publication_claim_token == "publication-job-1302"
+    end
+
+    remote = configure_remote(put_hook: put_hook)
+    configure_worker(claim_lease_ms: 1_000)
+
+    assert :ok = perform(invocation, 1, 1_301)
+    assert Repo.reload!(invocation).stage == :publishing
+    assert visible_count(remote) == 1
+
+    assert Enum.count(Remote.snapshot(remote).calls, &match?({:get, _, _, _}, &1)) == 1
+
+    pds_config = Application.fetch_env!(:context_bot, PDS)
+    Application.put_env(:context_bot, PDS, Keyword.put(pds_config, :put_hook, nil))
+    configure_worker(now: fn -> takeover_now end, claim_lease_ms: 1_000)
+
+    assert :ok = perform(invocation, 2, 1_302)
+    assert Repo.reload!(invocation).stage == :complete
+    assert Enum.count(Remote.snapshot(remote).calls, &match?({:put, _, _, _, _}, &1)) == 1
+  end
+
+  test "missing or corrupt frozen repos fail before any PDS I/O" do
+    for {suffix, reply_repo} <- [{"missing", nil}, {"corrupt", "not-a-did"}] do
+      invocation = invocation("invalid-repo-#{suffix}")
+
+      Invocation
+      |> where([stored], stored.id == ^invocation.id)
+      |> Repo.update_all(set: [reply_repo: reply_repo])
+
+      remote = configure_remote()
+      assert :ok = perform(invocation, 1, 1_401)
+
+      persisted = Repo.reload!(invocation)
+      assert persisted.stage == :failed
+      assert persisted.failure_category == :publication_conflict
+      assert persisted.failure_detail == %{"reason" => "invalid_frozen_intent"}
+      assert Remote.snapshot(remote).calls == []
+      Repo.delete!(persisted)
+    end
+  end
+
+  test "a retry keeps the frozen publication repo despite configured bot DID drift" do
+    invocation = invocation("repo-drift")
+    exact = remote_record(invocation, "bafy-repo-drift")
+
+    remote =
+      configure_remote(
+        get_results: [
+          {:error, :record_not_found},
+          {:error, :record_not_found},
+          {:ok, 200, %{}, exact}
+        ],
+        put_results: [{:error, :timeout}]
+      )
+
+    assert {:error, :timeout} = perform(invocation, 1, 801)
+
+    configure_worker(settings: Settings.load(bot_did: "did:plc:driftedbot456"))
+
+    assert :ok = perform(invocation, 2, 801)
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert Map.get(persisted, :reply_repo) == @bot_did
+
+    assert Enum.all?(Remote.snapshot(remote).calls, fn
+             {_method, repo, _collection, _rkey} -> repo == @bot_did
+             {:put, repo, _collection, _rkey, _record} -> repo == @bot_did
+           end)
+  end
+
+  test "an exposed transport error reconciles the created record even on the final attempt" do
+    invocation = invocation("exposed-transport")
+
+    remote =
+      configure_remote(put_results: [{:exposed, {:error, {:transient, :transport}}}])
+
+    assert :ok = perform(invocation, 10, 901)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert persisted.reply_cid == "bafy-remote-created"
+    assert visible_count(remote) == 1
+  end
+
+  test "permanent 403 GET and PUT failures wait for operator authorization repair" do
+    for {suffix, get_results, put_results} <- [
+          {"get", [{:error, {:permanent, 403}}], []},
+          {"put", [{:error, :record_not_found}], [{:error, {:permanent, 403}}]}
+        ] do
+      invocation = invocation("permanent-403-#{suffix}")
+      configure_remote(get_results: get_results, put_results: put_results)
+
+      assert :ok = perform(invocation, 1, 1_001)
+
+      persisted = Repo.reload!(invocation)
+      assert persisted.stage == :failed
+      assert persisted.failure_category == :publication_auth
+      assert persisted.failure_detail == %{"reason" => "authorization_required"}
+      Repo.delete!(persisted)
+    end
+  end
+
+  test "contextual backoff preserves strict Retry-After seconds and bounds malformed values" do
+    assert ReplyWorker.backoff(rate_limited_job("47")) == 47
+    assert ReplyWorker.backoff(rate_limited_job("999999")) == 3_600
+    assert ReplyWorker.backoff(rate_limited_job("47 seconds")) == 15
+    assert ReplyWorker.backoff(rate_limited_job(nil)) == 15
+  end
+
   test "repeated completed jobs never issue another PDS request" do
     invocation = invocation("repeated")
     remote = configure_remote()
@@ -317,7 +612,7 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
     get_hook = fn ->
       visit = Agent.get_and_update(barrier, fn count -> {count + 1, count + 1} end)
 
-      if visit <= 2 do
+      if visit == 1 do
         send(test_pid, {:get_waiting, self()})
 
         receive do
@@ -331,9 +626,8 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
     tasks = for attempt <- [1, 2], do: Task.async(fn -> perform(invocation, attempt) end)
 
     assert_receive {:get_waiting, first}
-    assert_receive {:get_waiting, second}
+    refute_receive {:get_waiting, _duplicate}, 100
     send(first, :release_get)
-    send(second, :release_get)
 
     assert Task.await_many(tasks) == [:ok, :ok]
     assert Repo.reload!(invocation).stage == :complete
@@ -341,32 +635,56 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
 
     snapshot = Remote.snapshot(remote)
     assert snapshot.visible["value"] == invocation.reply_record
-    assert Enum.count(snapshot.calls, &match?({:put, _, _, _, _}, &1)) == 2
+    assert Enum.count(snapshot.calls, &match?({:put, _, _, _, _}, &1)) == 1
   end
 
   defp configure_remote(options \\ []) do
     get_hook = Keyword.get(options, :get_hook)
-    options = Keyword.delete(options, :get_hook)
+    put_hook = Keyword.get(options, :put_hook)
+    options = Keyword.drop(options, [:get_hook, :put_hook])
     {:ok, remote} = Remote.start_link(options)
-    Application.put_env(:context_bot, PDS, remote: remote, get_hook: get_hook)
 
-    settings = Settings.load(bot_did: @bot_did)
-
-    Application.put_env(:context_bot, ReplyWorker,
-      client: PDS,
-      now: fn -> @now end,
-      settings: settings
+    Application.put_env(:context_bot, PDS,
+      remote: remote,
+      get_hook: get_hook,
+      put_hook: put_hook
     )
+
+    configure_worker()
 
     remote
   end
 
-  defp perform(invocation, attempt \\ 1) do
+  defp configure_worker(overrides \\ []) do
+    defaults = [
+      claim_lease_ms: 300_000,
+      client: PDS,
+      now: fn -> @now end,
+      settings: Settings.load(bot_did: @bot_did)
+    ]
+
+    Application.put_env(:context_bot, ReplyWorker, Keyword.merge(defaults, overrides))
+  end
+
+  defp perform(invocation, attempt \\ 1, job_id \\ nil) do
     ReplyWorker.perform(%Oban.Job{
+      id: job_id,
       attempt: attempt,
       max_attempts: 10,
       args: %{"uri" => invocation.invocation_uri, "cid" => invocation.notification_cid}
     })
+  end
+
+  defp rate_limited_job(retry_after) do
+    %Oban.Job{
+      attempt: 1,
+      max_attempts: 10,
+      unsaved_error: %{
+        kind: :error,
+        reason: %Oban.PerformError{reason: {:error, {:rate_limited, retry_after}}},
+        stacktrace: []
+      }
+    }
   end
 
   defp invocation(suffix, stage \\ :reply_ready) do
@@ -382,6 +700,7 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
       status: stage,
       stage: stage,
       selected_reply: "Frozen context for #{suffix}.",
+      reply_repo: @bot_did,
       reply_rkey: @rkey,
       reply_record: %{
         "$type" => "app.bsky.feed.post",
