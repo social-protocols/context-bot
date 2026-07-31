@@ -19,6 +19,20 @@ defmodule ContextBot.Admission do
     pending_count() < maximum
   end
 
+  @doc "Checks capacity while excluding the workflow that is being reconsidered."
+  @spec capacity_available?(Settings.t(), pos_integer()) :: boolean()
+  def capacity_available?(%Settings{max_pending: maximum}, excluded_invocation_id)
+      when is_integer(excluded_invocation_id) and excluded_invocation_id > 0 do
+    pending_count(excluded_invocation_id) < maximum
+  end
+
+  @doc "Read-only admission gate for an already accepted workflow resuming after deferral."
+  @spec resume_available?(Invocation.t(), DateTime.t(), Settings.t()) :: boolean()
+  def resume_available?(%Invocation{id: id, actor_did: actor_did}, %DateTime{} = now, settings) do
+    capacity_available?(settings, id) and
+      is_nil(rate_defer_until(actor_did, now, settings, id))
+  end
+
   @spec admit(Invocation.t(), DateTime.t(), Settings.t(), Changeset.t()) ::
           {:ok, Invocation.t()} | {:deferred, :rate | :capacity, Invocation.t()}
   def admit(
@@ -89,18 +103,24 @@ defmodule ContextBot.Admission do
     |> Repo.update!()
   end
 
-  defp rate_defer_until(actor_did, now, settings) do
+  defp rate_defer_until(actor_did, now, settings, excluded_invocation_id \\ nil) do
     [
-      breached_window(actor_did, now, :hour, settings.actor_hourly_limit),
-      breached_window(actor_did, now, :day, settings.actor_daily_limit),
-      breached_window(nil, now, :hour, settings.global_hourly_limit),
-      breached_window(nil, now, :day, settings.global_daily_limit)
+      breached_window(
+        actor_did,
+        now,
+        :hour,
+        settings.actor_hourly_limit,
+        excluded_invocation_id
+      ),
+      breached_window(actor_did, now, :day, settings.actor_daily_limit, excluded_invocation_id),
+      breached_window(nil, now, :hour, settings.global_hourly_limit, excluded_invocation_id),
+      breached_window(nil, now, :day, settings.global_daily_limit, excluded_invocation_id)
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.min(DateTime, fn -> nil end)
   end
 
-  defp breached_window(actor_did, now, window, limit) do
+  defp breached_window(actor_did, now, window, limit, excluded_invocation_id) do
     window_seconds = window_seconds(window)
     cutoff = DateTime.add(now, -window_seconds, :second)
 
@@ -114,6 +134,13 @@ defmodule ContextBot.Admission do
     query =
       if actor_did do
         where(query, [invocation], invocation.actor_did == ^actor_did)
+      else
+        query
+      end
+
+    query =
+      if excluded_invocation_id do
+        where(query, [invocation], invocation.id != ^excluded_invocation_id)
       else
         query
       end

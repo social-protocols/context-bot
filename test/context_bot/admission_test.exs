@@ -156,6 +156,29 @@ defmodule ContextBot.AdmissionTest do
     assert Repo.aggregate(Invocation, :count) == 26
   end
 
+  test "read-only recovery gates exclude the resumed invocation from capacity and rate windows" do
+    invocation =
+      insert_invocation("recovery-self", @actor_did, :deferred_budget, %{
+        admitted_at: DateTime.add(@now, -10, :minute)
+      })
+
+    restrictive =
+      settings(
+        max_pending: 1,
+        actor_hourly_limit: 1,
+        actor_daily_limit: 1,
+        global_hourly_limit: 1,
+        global_daily_limit: 1
+      )
+
+    refute Admission.capacity_available?(restrictive)
+    assert Admission.capacity_available?(restrictive, invocation.id)
+    assert Admission.resume_available?(invocation, @now, restrictive)
+
+    historical("recovery-other", @actor_did, DateTime.add(@now, -5, :minute))
+    refute Admission.resume_available?(invocation, @now, restrictive)
+  end
+
   test "defers without a thread job when pending capacity is already full" do
     current = eligible_invocation("capacity-current", @actor_did)
 
