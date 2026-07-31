@@ -12,7 +12,7 @@ defmodule ContextBot.Workflow.Store do
   import Ecto.Query
 
   alias ContextBot.Repo
-  alias ContextBot.Research.BudgetEntry
+  alias ContextBot.Research.{BudgetEntry, ResponseEnvelope}
   alias ContextBot.Workflow.{Failure, Invocation}
   alias Ecto.{Changeset, Multi}
 
@@ -73,6 +73,71 @@ defmodule ContextBot.Workflow.Store do
   end
 
   @doc """
+  Fences a research checkpoint or terminal handoff by the currently persisted claim token.
+  """
+  @spec transition_research(
+          Invocation.t(),
+          String.t(),
+          atom(),
+          map(),
+          Ecto.Changeset.t() | nil,
+          DateTime.t()
+        ) :: {:ok, Invocation.t()} | {:error, :stale_claim | Ecto.Changeset.t()}
+  def transition_research(
+        %Invocation{id: id},
+        token,
+        to_stage,
+        attrs,
+        next_job,
+        %DateTime{} = now
+      )
+      when is_binary(token) and token != "" do
+    transition_attrs = research_transition_attrs(attrs, token, to_stage, now)
+
+    multi =
+      Multi.new()
+      |> Multi.run(:invocation, fn repo, _changes ->
+        compare_and_update_research(repo, id, token, transition_attrs)
+      end)
+      |> Multi.run(:next_job, fn repo, _changes -> maybe_insert_job(repo, true, next_job) end)
+
+    case Repo.transaction(multi, mode: :immediate) do
+      {:ok, %{invocation: invocation}} -> {:ok, invocation}
+      {:error, _operation, :stale_claim, _changes} -> {:error, :stale_claim}
+      {:error, _operation, %Changeset{} = changeset, _changes} -> {:error, changeset}
+    end
+  end
+
+  @doc "Renews the current research claim or returns a finite stale-claim result."
+  @spec renew_research_claim(Invocation.t(), String.t(), DateTime.t()) ::
+          {:ok, Invocation.t()} | {:error, :stale_claim}
+  def renew_research_claim(%Invocation{id: id}, token, %DateTime{} = now)
+      when is_binary(token) and token != "" do
+    result =
+      Repo.transaction(
+        fn ->
+          case research_claim_context(id) do
+            %{stage: :researching, token: ^token, claimed_at: claimed_at} ->
+              Invocation
+              |> where([invocation], invocation.id == ^id)
+              |> Repo.update_all(set: [research_claimed_at: latest_timestamp(claimed_at, now)])
+
+              Repo.get!(Invocation, id)
+
+            _stale ->
+              Repo.rollback(:stale_claim)
+          end
+        end,
+        mode: :immediate
+      )
+
+    case result do
+      {:ok, invocation} -> {:ok, invocation}
+      {:error, :stale_claim} -> {:error, :stale_claim}
+    end
+  end
+
+  @doc """
   Atomically acquires or renews one research-worker lease while claiming an eligible stage.
 
   A stable token lets the same Oban job resume immediately after a crash. A different job may
@@ -108,23 +173,26 @@ defmodule ContextBot.Workflow.Store do
   end
 
   @spec append_anthropic_response(Invocation.t(), map(), pos_integer()) ::
-          {:ok, Invocation.t()} | {:error, :provider_storage_limit}
+          {:ok, Invocation.t()} | {:error, :provider_storage_limit | :stale_claim}
   def append_anthropic_response(%Invocation{id: id}, response, storage_limit)
       when is_map(response) and is_integer(storage_limit) and storage_limit > 0 do
+    prepared = ResponseEnvelope.prepare(response)
+
     result =
       Repo.transaction(
         fn ->
-          invocation = Repo.get!(Invocation, id)
-          persisted_response = json_round_trip(response)
-          responses = invocation.anthropic_responses ++ [persisted_response]
-
-          if encoded_size(responses) > storage_limit do
-            Repo.rollback(:provider_storage_limit)
+          case research_claim_context(id) do
+            %{stage: :researching} -> Repo.rollback(:stale_claim)
+            _not_researching -> :ok
           end
 
-          invocation
-          |> Invocation.anthropic_responses_changeset(responses)
-          |> Repo.update!()
+          enforce_response_storage_limit!(id, prepared.storage_bytes, storage_limit)
+
+          %ResponseEnvelope{}
+          |> ResponseEnvelope.changeset(Map.put(prepared, :invocation_id, id))
+          |> Repo.insert!()
+
+          Repo.get!(Invocation, id)
         end,
         mode: :immediate
       )
@@ -132,6 +200,7 @@ defmodule ContextBot.Workflow.Store do
     case result do
       {:ok, invocation} -> {:ok, invocation}
       {:error, :provider_storage_limit} -> {:error, :provider_storage_limit}
+      {:error, :stale_claim} -> {:error, :stale_claim}
     end
   end
 
@@ -144,58 +213,79 @@ defmodule ContextBot.Workflow.Store do
           BudgetEntry.t(),
           map(),
           pos_integer(),
-          DateTime.t()
+          DateTime.t(),
+          String.t()
         ) ::
-          {:ok, Invocation.t(), BudgetEntry.t()}
-          | {:error, :provider_storage_limit | :invalid_attempt_state}
+          {:ok, map(), BudgetEntry.t()}
+          | {:error, :provider_storage_limit | :invalid_attempt_state | :stale_claim}
   def record_anthropic_response(
         %Invocation{id: invocation_id},
-        %BudgetEntry{id: entry_id},
+        %BudgetEntry{id: entry_id} = entry_snapshot,
         response,
         storage_limit,
-        %DateTime{} = recorded_at
-      )
-      when is_map(response) and is_integer(storage_limit) and storage_limit > 0 do
+        %DateTime{} = recorded_at,
+        token
+      ) do
+    prepared =
+      ResponseEnvelope.prepare(response, %{
+        attempt_key: entry_snapshot.attempt_key,
+        kind: entry_snapshot.kind
+      })
+
     result =
       Repo.transaction(
         fn ->
-          invocation = Repo.get!(Invocation, invocation_id)
+          authorize_research_claim!(invocation_id, token)
           entry = Repo.get!(BudgetEntry, entry_id)
 
-          if entry.invocation_id != invocation.id or entry.state != :sent or
-               entry.response_recorded_at != nil do
+          if entry.invocation_id != invocation_id or entry.state != :sent or
+               entry.response_recorded_at != nil or entry.research_claim_token != token do
             Repo.rollback(:invalid_attempt_state)
           end
 
-          persisted_response = json_round_trip(response)
-          responses = invocation.anthropic_responses ++ [persisted_response]
+          enforce_response_storage_limit!(invocation_id, prepared.storage_bytes, storage_limit)
 
-          if encoded_size(responses) > storage_limit do
-            Repo.rollback(:provider_storage_limit)
-          end
-
-          invocation =
-            invocation
-            |> Invocation.anthropic_responses_changeset(responses)
-            |> Repo.update!()
+          stored =
+            %ResponseEnvelope{}
+            |> ResponseEnvelope.changeset(
+              prepared
+              |> Map.put(:invocation_id, invocation_id)
+              |> Map.put(:budget_entry_id, entry_id)
+            )
+            |> Repo.insert!()
 
           entry =
             entry
             |> BudgetEntry.changeset(%{response_recorded_at: recorded_at})
             |> Repo.update!()
 
-          {invocation, entry}
+          renew_research_claim_at(invocation_id, token, recorded_at)
+          {stored, entry}
         end,
         mode: :immediate
       )
 
     case result do
-      {:ok, {invocation, entry}} ->
-        {:ok, invocation, entry}
+      {:ok, {stored, entry}} ->
+        {:ok, ResponseEnvelope.to_map(stored), entry}
 
       {:error, reason} when reason in [:provider_storage_limit, :invalid_attempt_state] ->
         {:error, reason}
+
+      {:error, :stale_claim} ->
+        {:error, :stale_claim}
     end
+  end
+
+  @doc "Returns the complete provider envelope ledger in insertion order."
+  @spec anthropic_responses(Invocation.t()) :: [map()]
+  def anthropic_responses(%Invocation{id: id}) do
+    legacy_responses(id) ++
+      (ResponseEnvelope
+       |> where([response], response.invocation_id == ^id)
+       |> order_by([response], asc: response.id)
+       |> Repo.all()
+       |> Enum.map(&ResponseEnvelope.to_map/1))
   end
 
   @spec pending_capacity_available?(pos_integer()) :: boolean()
@@ -274,6 +364,44 @@ defmodule ContextBot.Workflow.Store do
     end
   end
 
+  defp compare_and_update_research(repo, id, token, attrs) do
+    case repo.get(Invocation, id) do
+      %Invocation{stage: :researching, research_claim_token: ^token} = invocation ->
+        case repo.update(Invocation.transition_changeset(invocation, attrs)) do
+          {:ok, updated} -> {:ok, updated}
+          {:error, changeset} -> {:error, changeset}
+        end
+
+      %Invocation{} ->
+        {:error, :stale_claim}
+
+      nil ->
+        {:error, :stale_claim}
+    end
+  end
+
+  defp research_transition_attrs(attrs, token, :researching, now) do
+    attrs
+    |> Map.drop([:status, "status", :stage, "stage", :research_claim_token])
+    |> Map.merge(%{
+      status: :researching,
+      stage: :researching,
+      research_claim_token: token,
+      research_claimed_at: now
+    })
+  end
+
+  defp research_transition_attrs(attrs, _token, to_stage, _now) do
+    attrs
+    |> Map.drop([:status, "status", :stage, "stage", :research_claim_token])
+    |> Map.merge(%{
+      status: to_stage,
+      stage: to_stage,
+      research_claim_token: nil,
+      research_claimed_at: nil
+    })
+  end
+
   defp research_claimable?(%Invocation{stage: :thread_ready}, _token, _now, _stale_before),
     do: true
 
@@ -337,16 +465,68 @@ defmodule ContextBot.Workflow.Store do
   defp maybe_insert_job(_repo, true, nil), do: {:ok, nil}
   defp maybe_insert_job(repo, true, %Changeset{} = next_job), do: repo.insert(next_job)
 
-  defp encoded_size(value) do
-    value
-    |> Jason.encode_to_iodata!()
-    |> IO.iodata_length()
+  defp research_claim_context(invocation_id) do
+    Invocation
+    |> where([invocation], invocation.id == ^invocation_id)
+    |> select([invocation], %{
+      stage: invocation.stage,
+      token: invocation.research_claim_token,
+      claimed_at: invocation.research_claimed_at
+    })
+    |> Repo.one!()
   end
 
-  defp json_round_trip(value) do
-    value
-    |> Jason.encode!()
-    |> Jason.decode!()
+  defp authorize_research_claim!(invocation_id, token) do
+    case research_claim_context(invocation_id) do
+      %{stage: :researching, token: ^token} -> :ok
+      _stale -> Repo.rollback(:stale_claim)
+    end
+  end
+
+  defp renew_research_claim_at(invocation_id, token, now) do
+    %{claimed_at: claimed_at} = research_claim_context(invocation_id)
+
+    Invocation
+    |> where(
+      [invocation],
+      invocation.id == ^invocation_id and invocation.stage == :researching and
+        invocation.research_claim_token == ^token
+    )
+    |> Repo.update_all(set: [research_claimed_at: latest_timestamp(claimed_at, now)])
+
+    :ok
+  end
+
+  defp enforce_response_storage_limit!(invocation_id, new_size, storage_limit) do
+    persisted_size =
+      ResponseEnvelope
+      |> where([response], response.invocation_id == ^invocation_id)
+      |> select([response], coalesce(sum(response.storage_bytes), 0))
+      |> Repo.one()
+
+    if legacy_storage_bytes(invocation_id) + persisted_size > storage_limit - new_size do
+      Repo.rollback(:provider_storage_limit)
+    end
+  end
+
+  defp legacy_storage_bytes(invocation_id) do
+    Invocation
+    |> where([invocation], invocation.id == ^invocation_id)
+    |> select([invocation], fragment("COALESCE(length(?), 0)", invocation.anthropic_responses))
+    |> Repo.one()
+  end
+
+  defp legacy_responses(invocation_id) do
+    Invocation
+    |> where([invocation], invocation.id == ^invocation_id)
+    |> select([invocation], invocation.anthropic_responses)
+    |> Repo.one()
+  end
+
+  defp latest_timestamp(nil, now), do: now
+
+  defp latest_timestamp(claimed_at, now) do
+    if DateTime.compare(claimed_at, now) == :gt, do: claimed_at, else: now
   end
 
   defp fetch(map, key), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))

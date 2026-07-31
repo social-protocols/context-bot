@@ -27,6 +27,7 @@ defmodule ContextBot.Research.BudgetEntry do
     field :pricing_version, :string
     field :sent_at, :utc_datetime_usec
     field :response_recorded_at, :utc_datetime_usec
+    field :research_claim_token, :string
 
     belongs_to :invocation, Invocation
 
@@ -48,7 +49,8 @@ defmodule ContextBot.Research.BudgetEntry do
         :usage,
         :pricing_version,
         :sent_at,
-        :response_recorded_at
+        :response_recorded_at,
+        :research_claim_token
       ])
       |> validate_required([
         :attempt_key,

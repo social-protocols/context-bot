@@ -113,7 +113,7 @@ defmodule ContextBot.Workflow.Invocation do
     field :root_uri, :string
     field :root_cid, :string
     field :anthropic_messages, :map
-    field :anthropic_responses, {:array, :map}, default: []
+    field :anthropic_responses, {:array, :map}, default: [], load_in_query: false
     field :anthropic_attempt_sequence, :integer, default: 0
     field :anthropic_usage, :map
     field :research_claim_token, :string

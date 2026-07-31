@@ -47,7 +47,7 @@ defmodule ContextBot.Workers.ResearchWorker do
 
     case Store.claim_research(invocation, token, now, stale_before) do
       {:ok, claimed} ->
-        run(claimed, dependencies)
+        run(claimed, token, dependencies)
 
       {:error, reason} when reason in [:busy, :stale_stage] ->
         :ok
@@ -57,17 +57,21 @@ defmodule ContextBot.Workers.ResearchWorker do
     end
   end
 
-  defp run(invocation, dependencies) do
-    options = put_runner_setting(dependencies.runner_options, dependencies.settings)
+  defp run(invocation, token, dependencies) do
+    options =
+      dependencies.runner_options
+      |> put_runner_setting(dependencies.settings)
+      |> put_runner_claim(token)
 
     case dependencies.runner.run(invocation, options) do
-      {:ok, result} -> freeze_handoff(Repo.reload!(invocation), result, dependencies)
-      {:deferred, %DateTime{} = defer_until} -> defer_budget(invocation, defer_until)
-      {:error, reason} -> fail_research(invocation, reason, dependencies.now.())
+      {:ok, result} -> freeze_handoff(Repo.reload!(invocation), result, token, dependencies)
+      {:deferred, %DateTime{} = defer_until} -> defer_budget(invocation, defer_until, token)
+      {:error, :stale_claim} -> :ok
+      {:error, reason} -> fail_research(invocation, reason, dependencies.now.(), token)
     end
   end
 
-  defp freeze_handoff(invocation, result, dependencies) do
+  defp freeze_handoff(invocation, result, token, dependencies) do
     created_at = dependencies.now.()
     rkey = dependencies.tid_generator.(DateTime.to_unix(created_at, :microsecond))
 
@@ -93,11 +97,18 @@ defmodule ContextBot.Workers.ResearchWorker do
 
         next_job = dependencies.reply_job_builder.(invocation)
 
-        case Store.transition(invocation, :researching, :reply_ready, attrs, next_job) do
+        case Store.transition_research(
+               invocation,
+               token,
+               :reply_ready,
+               attrs,
+               next_job,
+               created_at
+             ) do
           {:ok, _reply_ready} ->
             :ok
 
-          {:error, :stale_stage} ->
+          {:error, :stale_claim} ->
             :ok
 
           {:error, changeset} ->
@@ -105,7 +116,7 @@ defmodule ContextBot.Workers.ResearchWorker do
         end
 
       {:error, reason} ->
-        fail_research(invocation, reason, created_at)
+        fail_research(invocation, reason, created_at, token)
     end
   end
 
@@ -115,22 +126,23 @@ defmodule ContextBot.Workers.ResearchWorker do
 
   defp root_ref(_invocation), do: nil
 
-  defp defer_budget(invocation, defer_until) do
-    case Store.transition(
+  defp defer_budget(invocation, defer_until, token) do
+    case Store.transition_research(
            Repo.reload!(invocation),
-           :researching,
+           token,
            :deferred_budget,
            %{
              defer_until: defer_until,
              research_claim_token: nil,
              research_claimed_at: nil
            },
-           nil
+           nil,
+           defer_until
          ) do
       {:ok, _deferred} ->
         :ok
 
-      {:error, :stale_stage} ->
+      {:error, :stale_claim} ->
         :ok
 
       {:error, changeset} ->
@@ -138,12 +150,12 @@ defmodule ContextBot.Workers.ResearchWorker do
     end
   end
 
-  defp fail_research(invocation, reason, completed_at) do
+  defp fail_research(invocation, reason, completed_at, token) do
     reason_string = safe_reason(reason)
 
-    case Store.transition(
+    case Store.transition_research(
            Repo.reload!(invocation),
-           :researching,
+           token,
            :failed,
            %{
              failure_category: failure_category(reason),
@@ -152,12 +164,13 @@ defmodule ContextBot.Workers.ResearchWorker do
              research_claimed_at: nil,
              completed_at: completed_at
            },
-           nil
+           nil,
+           completed_at
          ) do
       {:ok, _failed} ->
         :ok
 
-      {:error, :stale_stage} ->
+      {:error, :stale_claim} ->
         :ok
 
       {:error, changeset} ->
@@ -185,6 +198,12 @@ defmodule ContextBot.Workers.ResearchWorker do
 
   defp put_runner_setting(options, settings) when is_map(options),
     do: Map.put(options, :settings, settings)
+
+  defp put_runner_claim(options, token) when is_list(options),
+    do: Keyword.put(options, :claim_token, token)
+
+  defp put_runner_claim(options, token) when is_map(options),
+    do: Map.put(options, :claim_token, token)
 
   defp reply_job(invocation) do
     Oban.Job.new(

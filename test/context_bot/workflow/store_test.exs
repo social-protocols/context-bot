@@ -1,6 +1,7 @@
 defmodule ContextBot.Workflow.StoreTest do
   use ContextBot.DataCase, async: false
 
+  alias ContextBot.Research.Budget
   alias ContextBot.Workflow.{Failure, Invocation, Store}
 
   defmodule Worker do
@@ -292,10 +293,10 @@ defmodule ContextBot.Workflow.StoreTest do
     assert {:ok, _updated} =
              Store.append_anthropic_response(invocation, response, settings.max_storage_bytes)
 
-    [persisted_response] = Repo.reload!(invocation).anthropic_responses
-    assert persisted_response["raw_body"] == raw_body
-    assert byte_size(persisted_response["raw_body"]) == settings.max_response_bytes
-    assert persisted_response["parsed"] == %{"content" => ["projection"]}
+    [persisted_response] = Store.anthropic_responses(invocation)
+    assert persisted_response.raw_body == raw_body
+    assert byte_size(persisted_response.raw_body) == settings.max_response_bytes
+    assert persisted_response.parsed == %{"content" => ["projection"]}
   end
 
   test "rejects only when the complete cumulative provider ledger exceeds its larger cap" do
@@ -318,8 +319,109 @@ defmodule ContextBot.Workflow.StoreTest do
     assert {:error, :provider_storage_limit} =
              Store.append_anthropic_response(with_one_response, response, storage_cap)
 
-    [persisted_response] = Repo.reload!(invocation).anthropic_responses
-    assert persisted_response["raw_body"] == raw_body
+    [persisted_response] = Store.anthropic_responses(invocation)
+    assert persisted_response.raw_body == raw_body
+  end
+
+  test "atomically stores arbitrary response bytes in an ordered BLOB ledger with the marker" do
+    invocation = researching_invocation("blob-ledger")
+    raw_body = <<0, 255, 128, 65, 0, 254>>
+
+    response = %{
+      status: 503,
+      headers: %{"content-type" => ["text/html"], "retry-after" => ["7"]},
+      raw_body: raw_body,
+      received_at: @received_at,
+      duration_ms: 19
+    }
+
+    assert {:ok, reserved} =
+             Budget.reserve_next(
+               invocation,
+               :research,
+               @received_at,
+               100,
+               1_000,
+               "blob-owner"
+             )
+
+    assert {:ok, sent} = Budget.mark_sent(reserved, @received_at, "blob-owner")
+
+    assert {:ok, stored, recorded} =
+             Store.record_anthropic_response(
+               invocation,
+               sent,
+               response,
+               1_000,
+               @received_at,
+               "blob-owner"
+             )
+
+    assert stored.raw_body == raw_body
+    assert stored.attempt_key == sent.attempt_key
+    assert stored.kind == :research
+    assert stored.status == 503
+    assert stored.headers == response.headers
+    assert recorded.response_recorded_at == @received_at
+    assert Repo.reload!(invocation).anthropic_responses == []
+
+    assert [ledger_response] = Store.anthropic_responses(invocation)
+    assert ledger_response.raw_body == raw_body
+  end
+
+  test "cumulative BLOB-ledger cap and response marker remain atomic" do
+    invocation = researching_invocation("blob-cap")
+
+    assert {:ok, first_entry} =
+             Budget.reserve_next(
+               invocation,
+               :research,
+               @received_at,
+               100,
+               1_000,
+               "blob-owner"
+             )
+
+    assert {:ok, first_entry} =
+             Budget.mark_sent(first_entry, @received_at, "blob-owner")
+
+    assert {:ok, first, _recorded} =
+             Store.record_anthropic_response(
+               invocation,
+               first_entry,
+               response_envelope("first"),
+               1_000,
+               @received_at,
+               "blob-owner"
+             )
+
+    assert {:ok, second_entry} =
+             Budget.reserve_next(
+               invocation,
+               :retry,
+               @received_at,
+               100,
+               1_000,
+               "blob-owner"
+             )
+
+    assert {:ok, second_entry} =
+             Budget.mark_sent(second_entry, @received_at, "blob-owner")
+
+    assert {:error, :provider_storage_limit} =
+             Store.record_anthropic_response(
+               invocation,
+               second_entry,
+               response_envelope("second"),
+               first.storage_bytes + byte_size("second"),
+               @received_at,
+               "blob-owner"
+             )
+
+    assert [%{attempt_key: attempt_key}] = Store.anthropic_responses(invocation)
+    assert attempt_key == first_entry.attempt_key
+    assert Repo.reload!(second_entry).response_recorded_at == nil
+    assert length(Store.anthropic_responses(invocation)) == 1
   end
 
   defp mention(uri, cid) do
@@ -333,6 +435,33 @@ defmodule ContextBot.Workflow.StoreTest do
         "cid" => cid,
         "author" => %{"did" => "did:plc:actor", "handle" => "actor.example"}
       }
+    }
+  end
+
+  defp researching_invocation(suffix) do
+    assert {:ok, invocation, :inserted} =
+             Store.receive_mention(
+               mention("at://did:plc:actor/app.bsky.feed.post/#{suffix}", "bafy-#{suffix}"),
+               @received_at,
+               nil
+             )
+
+    assert {:ok, ready} =
+             Store.transition(invocation, :deferred_capacity, :thread_ready, %{}, nil)
+
+    assert {:ok, claimed} =
+             Store.claim_research(ready, "blob-owner", @received_at, @received_at)
+
+    claimed
+  end
+
+  defp response_envelope(body) do
+    %{
+      status: 200,
+      headers: %{"content-type" => ["application/json"]},
+      raw_body: body,
+      received_at: @received_at,
+      duration_ms: 1
     }
   end
 end

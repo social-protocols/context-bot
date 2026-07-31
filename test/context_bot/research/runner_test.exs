@@ -20,10 +20,11 @@ end
 defmodule ContextBot.Research.RunnerTest do
   use ContextBot.DataCase, async: false
 
-  alias ContextBot.Research.{BudgetEntry, Runner}
-  alias ContextBot.Workflow.Invocation
+  alias ContextBot.Research.{Budget, BudgetEntry, Runner}
+  alias ContextBot.Workflow.{Invocation, Store}
 
   @now ~U[2026-07-29 12:00:00.123456Z]
+  @claim_token "runner-test-claim"
 
   setup do
     Process.put(:runner_test_pid, self())
@@ -42,14 +43,13 @@ defmodule ContextBot.Research.RunnerTest do
     Process.put(:runner_client_results, [{:ok, envelope(200, raw_body)}])
 
     decoder = fn body ->
-      persisted = Repo.reload!(invocation)
-      [stored] = persisted.anthropic_responses
-      entry = Repo.get_by!(BudgetEntry, attempt_key: stored["attempt_key"])
+      [stored] = responses(invocation)
+      entry = Repo.get_by!(BudgetEntry, attempt_key: stored.attempt_key)
 
       send(self(), {
         :decode_observed,
-        stored["raw_body"],
-        stored["status"],
+        stored.raw_body,
+        stored.status,
         entry.response_recorded_at
       })
 
@@ -62,12 +62,12 @@ defmodule ContextBot.Research.RunnerTest do
     assert_received {:attempt_at_send, :sent, %DateTime{}, nil}
     assert_received {:decode_observed, ^raw_body, 200, %DateTime{}}
 
-    [stored] = Repo.reload!(invocation).anthropic_responses
-    assert stored["raw_body"] == raw_body
-    assert stored["attempt_key"] =~ "-attempt-1-research"
-    assert stored["kind"] == "research"
+    [stored] = responses(invocation)
+    assert stored.raw_body == raw_body
+    assert stored.attempt_key =~ "-attempt-1-research"
+    assert stored.kind == :research
 
-    entry = Repo.get_by!(BudgetEntry, attempt_key: stored["attempt_key"])
+    entry = Repo.get_by!(BudgetEntry, attempt_key: stored.attempt_key)
     assert entry.state == :settled
     assert entry.response_recorded_at != nil
   end
@@ -88,7 +88,7 @@ defmodule ContextBot.Research.RunnerTest do
     assert_received {:anthropic_call, _request, _metadata, false}
     refute_received :decoder_called
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
-    assert Repo.reload!(invocation).anthropic_responses == []
+    assert responses(invocation) == []
 
     entry = Repo.one!(BudgetEntry)
     assert entry.state == :sent
@@ -106,8 +106,8 @@ defmodule ContextBot.Research.RunnerTest do
     ])
 
     sleep = fn milliseconds ->
-      [persisted_error] = Repo.reload!(invocation).anthropic_responses
-      send(self(), {:retry_sleep, milliseconds, persisted_error["raw_body"]})
+      [persisted_error] = responses(invocation)
+      send(self(), {:retry_sleep, milliseconds, persisted_error.raw_body})
     end
 
     assert {:ok, result} = Runner.run(invocation, options(sleep: sleep))
@@ -124,7 +124,7 @@ defmodule ContextBot.Research.RunnerTest do
 
     assert Enum.all?(entries, &(&1.response_recorded_at != nil))
 
-    assert Enum.map(Repo.reload!(invocation).anthropic_responses, & &1["raw_body"]) == [
+    assert Enum.map(responses(invocation), & &1.raw_body) == [
              error_body,
              success_body
            ]
@@ -141,8 +141,8 @@ defmodule ContextBot.Research.RunnerTest do
     ])
 
     sleep = fn milliseconds ->
-      [persisted_error] = Repo.reload!(invocation).anthropic_responses
-      send(self(), {:http_date_retry_sleep, milliseconds, persisted_error["raw_body"]})
+      [persisted_error] = responses(invocation)
+      send(self(), {:http_date_retry_sleep, milliseconds, persisted_error.raw_body})
     end
 
     assert {:ok, _result} = Runner.run(invocation, options(sleep: sleep))
@@ -160,8 +160,45 @@ defmodule ContextBot.Research.RunnerTest do
       assert {:error, ^expected_reason} = Runner.run(invocation, options())
       assert_received {:anthropic_call, _request, _metadata, false}
       refute_received {:anthropic_call, _request, _metadata, _in_transaction}
-      assert [stored] = Repo.reload!(invocation).anthropic_responses
-      assert stored["raw_body"] == body
+      assert [stored] = responses(invocation)
+      assert stored.raw_body == body
+    end
+  end
+
+  test "classifies malformed non-retryable HTTP errors without decoding their bodies" do
+    for {suffix, status, body, expected_reason} <- [
+          {"empty-auth", 401, "", :provider_auth},
+          {"html-auth", 403, "<html>forbidden</html>", :provider_auth},
+          {"empty-client-error", 400, "", :provider_response},
+          {"invalid-client-error", 422, <<255, 0, 254>>, :provider_response}
+        ] do
+      invocation = invocation(suffix)
+      Process.put(:runner_client_results, [{:ok, envelope(status, body)}])
+
+      decoder = fn _raw_body -> flunk("non-2xx response body must not be decoded") end
+
+      assert {:error, ^expected_reason} = Runner.run(invocation, options(decoder: decoder))
+      assert_received {:anthropic_call, _request, _metadata, false}
+      refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+    end
+  end
+
+  test "retries malformed 429 and 5xx bodies and still honors Retry-After" do
+    for {suffix, status, body} <- [
+          {"empty-429", 429, ""},
+          {"html-503", 503, "<html>temporarily unavailable</html>"}
+        ] do
+      invocation = invocation(suffix)
+
+      Process.put(:runner_client_results, [
+        {:ok, envelope(status, body, %{"retry-after" => ["7"]})},
+        {:ok, envelope(200, fixture("tool_success.json"))}
+      ])
+
+      sleep = fn milliseconds -> send(self(), {:malformed_retry_sleep, suffix, milliseconds}) end
+
+      assert {:ok, _result} = Runner.run(invocation, options(sleep: sleep))
+      assert_received {:malformed_retry_sleep, ^suffix, 7_000}
     end
   end
 
@@ -219,7 +256,7 @@ defmodule ContextBot.Research.RunnerTest do
       Runner.run(invocation, options(crash: crash))
     end
 
-    assert Repo.reload!(invocation).anthropic_responses == []
+    assert responses(invocation) == []
     assert [%BudgetEntry{state: :sent, response_recorded_at: nil}] = Repo.all(BudgetEntry)
 
     assert {:ok, _result} = Runner.run(invocation, options(crash: crash))
@@ -242,13 +279,177 @@ defmodule ContextBot.Research.RunnerTest do
     assert [%BudgetEntry{state: :sent, response_recorded_at: %DateTime{}}] =
              Repo.all(BudgetEntry)
 
-    assert [stored] = Repo.reload!(invocation).anthropic_responses
-    assert stored["raw_body"] == body
+    assert [stored] = responses(invocation)
+    assert stored.raw_body == body
     assert_received {:anthropic_call, _request, _metadata, false}
 
     assert {:ok, _result} = Runner.run(invocation, options(crash: crash))
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
     assert [%BudgetEntry{state: :settled}] = Repo.all(BudgetEntry)
+  end
+
+  test "a stale owner cannot send an unexposed reservation after lease takeover" do
+    invocation = invocation("stale-reserved")
+
+    assert {:ok, reserved} =
+             Budget.reserve_next(
+               invocation,
+               :research,
+               @now,
+               1_000_000,
+               5_000_000,
+               @claim_token
+             )
+
+    assert {:ok, _new_owner} = take_over(invocation, "new-owner")
+    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+
+    assert {:error, :stale_claim} = Runner.run(invocation, options())
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+    assert Repo.reload!(reserved).state == :reserved
+
+    assert {:ok, _result} = Runner.run(invocation, options(claim_token: "new-owner"))
+    assert_received {:anthropic_call, _request, %{attempt_key: attempt_key}, false}
+    assert attempt_key == reserved.attempt_key
+  end
+
+  test "a new owner replays an exposed attempt only under a new reservation and key" do
+    invocation = invocation("stale-sent")
+    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+    crash = crash_once(:after_sent)
+
+    assert_raise RuntimeError, "injected crash after_sent", fn ->
+      Runner.run(invocation, options(crash: crash))
+    end
+
+    assert [%BudgetEntry{state: :sent, attempt_key: exposed_key}] = Repo.all(BudgetEntry)
+    assert {:ok, _new_owner} = take_over(invocation, "new-owner")
+
+    assert {:error, :stale_claim} = Runner.run(invocation, options(crash: crash))
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+
+    assert {:ok, _result} =
+             Runner.run(
+               invocation,
+               options(claim_token: "new-owner", crash: crash)
+             )
+
+    assert_received {:anthropic_call, _request, %{attempt_key: replay_key}, false}
+    refute replay_key == exposed_key
+
+    assert Enum.map(Repo.all(from entry in BudgetEntry, order_by: entry.id), & &1.state) == [
+             :indeterminate,
+             :settled
+           ]
+  end
+
+  test "a takeover after the sent marker stops the stale owner before POST" do
+    invocation = invocation("stale-between-sent-and-post")
+    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+
+    takeover_after_sent = fn
+      :after_sent, _entry ->
+        assert {:ok, _new_owner} = take_over(invocation, "new-owner")
+        :ok
+
+      _point, _value ->
+        :ok
+    end
+
+    assert {:error, :stale_claim} =
+             Runner.run(invocation, options(crash: takeover_after_sent))
+
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+    assert [%BudgetEntry{state: :sent, response_recorded_at: nil}] = Repo.all(BudgetEntry)
+  end
+
+  test "a stale owner cannot append an envelope after takeover during its HTTP call" do
+    invocation = invocation("stale-after-http")
+    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+
+    takeover_after_http = fn
+      :after_http, _envelope ->
+        assert {:ok, _new_owner} = take_over(invocation, "new-owner")
+        :ok
+
+      _point, _value ->
+        :ok
+    end
+
+    assert {:error, :stale_claim} =
+             Runner.run(invocation, options(crash: takeover_after_http))
+
+    assert responses(invocation) == []
+    assert [%BudgetEntry{state: :sent, response_recorded_at: nil}] = Repo.all(BudgetEntry)
+  end
+
+  test "a stale owner cannot settle or checkpoint after persisted response takeover" do
+    invocation = invocation("stale-after-persistence")
+    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+
+    takeover_after_persistence = fn
+      :after_persistence, _entry ->
+        assert {:ok, _new_owner} = take_over(invocation, "new-owner")
+        :ok
+
+      _point, _value ->
+        :ok
+    end
+
+    assert {:error, :stale_claim} =
+             Runner.run(invocation, options(crash: takeover_after_persistence))
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.anthropic_usage == nil
+
+    assert [%BudgetEntry{state: :sent, response_recorded_at: %DateTime{}}] =
+             Repo.all(BudgetEntry)
+  end
+
+  test "a takeover after settlement fences the usage checkpoint" do
+    invocation = invocation("stale-usage-checkpoint")
+    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+
+    takeover_after_settlement = fn
+      :after_settlement, _entry ->
+        assert {:ok, _new_owner} = take_over(invocation, "new-owner")
+        :ok
+
+      _point, _value ->
+        :ok
+    end
+
+    assert {:error, :stale_claim} =
+             Runner.run(invocation, options(crash: takeover_after_settlement))
+
+    assert Repo.reload!(invocation).anthropic_usage == nil
+    assert [%BudgetEntry{state: :settled}] = Repo.all(BudgetEntry)
+  end
+
+  test "a takeover before a continuation request checkpoint stops without another POST" do
+    invocation = invocation("stale-request-checkpoint")
+    fixture = decoded_fixture("pause_then_success.json")
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(fixture["pause"]))},
+      {:ok, envelope(200, Jason.encode!(fixture["success"]))}
+    ])
+
+    takeover_before_checkpoint = fn
+      :before_request_checkpoint, _request ->
+        assert {:ok, _new_owner} = take_over(invocation, "new-owner")
+        :ok
+
+      _point, _value ->
+        :ok
+    end
+
+    assert {:error, :stale_claim} =
+             Runner.run(invocation, options(crash: takeover_before_checkpoint))
+
+    assert_received {:anthropic_call, initial_request, %{kind: :research}, false}
+    refute_received {:anthropic_call, _request, %{kind: :continuation}, false}
+    assert Repo.reload!(invocation).anthropic_messages == initial_request
   end
 
   test "an ambiguous timeout retries only once and retains both reservations" do
@@ -320,7 +521,7 @@ defmodule ContextBot.Research.RunnerTest do
 
     assert Enum.at(fixture["pause"]["content"], 1)["type"] == "future_encrypted_trace"
 
-    assert Enum.map(Repo.reload!(invocation).anthropic_responses, & &1["raw_body"]) == [
+    assert Enum.map(responses(invocation), & &1.raw_body) == [
              pause_raw,
              success_raw
            ]
@@ -362,7 +563,7 @@ defmodule ContextBot.Research.RunnerTest do
     assert_received {:anthropic_call, _request, %{kind: :research}, false}
     assert_received {:anthropic_call, _request, %{kind: :continuation}, false}
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
-    assert length(Repo.reload!(invocation).anthropic_responses) == 2
+    assert length(responses(invocation)) == 2
   end
 
   test "fails before continuation when aggregate server-tool use exceeds its cap" do
@@ -377,8 +578,8 @@ defmodule ContextBot.Research.RunnerTest do
 
     assert_received {:anthropic_call, _request, %{kind: :research}, false}
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
-    assert [stored] = Repo.reload!(invocation).anthropic_responses
-    assert stored["raw_body"] == Jason.encode!(fixture)
+    assert [stored] = responses(invocation)
+    assert stored.raw_body == Jason.encode!(fixture)
   end
 
   test "sends exactly one cached repair for an over-limit normal completion" do
@@ -416,7 +617,7 @@ defmodule ContextBot.Research.RunnerTest do
     assert repair_instruction["role"] == "user"
     assert String.starts_with?(repair_instruction["content"], "LENGTH_REPAIR\n")
 
-    assert Enum.map(Repo.reload!(invocation).anthropic_responses, & &1["raw_body"]) == [
+    assert Enum.map(responses(invocation), & &1.raw_body) == [
              primary_raw,
              repair_raw
            ]
@@ -462,7 +663,7 @@ defmodule ContextBot.Research.RunnerTest do
       assert_received {:anthropic_call, _request, %{kind: :repair}, false}
       refute_received {:anthropic_call, _request, _metadata, _in_transaction}
       persisted = Repo.reload!(invocation)
-      assert length(persisted.anthropic_responses) == 2
+      assert length(responses(invocation)) == 2
       assert length(persisted.anthropic_usage["attempts"]) == 2
     end
   end
@@ -498,6 +699,7 @@ defmodule ContextBot.Research.RunnerTest do
   defp options(overrides \\ []) do
     defaults = [
       client: ContextBot.Research.RunnerTest.Client,
+      claim_token: @claim_token,
       decoder: &Jason.decode/1,
       now: fn -> @now end,
       sleep: fn _milliseconds -> :ok end,
@@ -543,6 +745,8 @@ defmodule ContextBot.Research.RunnerTest do
       received_at: @now,
       status: :researching,
       stage: :researching,
+      research_claim_token: @claim_token,
+      research_claimed_at: @now,
       canonical_thread: "ROOT\nClaim needing context.\n\nINVOCATION\nPlease add context.",
       canonical_thread_version: "1",
       root_uri: uri,
@@ -586,11 +790,22 @@ defmodule ContextBot.Research.RunnerTest do
     end
   end
 
+  defp take_over(invocation, token) do
+    Store.claim_research(
+      invocation,
+      token,
+      DateTime.add(@now, 2, :second),
+      DateTime.add(@now, 1, :second)
+    )
+  end
+
   defp fixture(name) do
     "../../fixtures/anthropic/#{name}"
     |> Path.expand(__DIR__)
     |> File.read!()
   end
+
+  defp responses(invocation), do: Store.anthropic_responses(invocation)
 
   defp decoded_fixture(name), do: name |> fixture() |> Jason.decode!()
 

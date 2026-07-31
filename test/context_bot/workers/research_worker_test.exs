@@ -45,7 +45,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
   alias ContextBot.Settings
   alias ContextBot.Workers.ResearchWorker
   alias ContextBot.Workers.ResearchWorkerTest.{AnthropicClient, Runner}
-  alias ContextBot.Workflow.Invocation
+  alias ContextBot.Workflow.{Invocation, Store}
 
   @now ~U[2026-07-29 12:34:56.123456Z]
   @rkey "3mzzzzzzzzzzz"
@@ -89,8 +89,8 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     persisted = Repo.reload!(invocation)
     assert persisted.stage == :reply_ready
     assert persisted.selected_reply == "Useful context from primary sources."
-    assert [response] = persisted.anthropic_responses
-    assert response["raw_body"] == body
+    assert [response] = Store.anthropic_responses(persisted)
+    assert response.raw_body == body
     assert persisted.reply_record["text"] == persisted.selected_reply
     assert [%Oban.Job{worker: "ContextBot.Workers.ReplyWorker"}] = Repo.all(Oban.Job)
 
@@ -249,7 +249,8 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     configure_worker()
 
     assert_raise RuntimeError, "injected runner crash", fn -> perform(invocation, 201) end
-    assert_received {:runner_called, :researching, _options, false}
+    assert_received {:runner_called, :researching, options, false}
+    assert options[:claim_token] == "research-job-201"
     assert Repo.reload!(invocation).research_claim_token == "research-job-201"
 
     rollover = ~U[2026-07-30 00:00:00.000000Z]
@@ -259,7 +260,8 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     refute_received {:runner_called, _stage, _options, _transaction}
 
     assert :ok = perform(invocation, 201)
-    assert_received {:runner_called, :researching, _options, false}
+    assert_received {:runner_called, :researching, resumed_options, false}
+    assert resumed_options[:claim_token] == "research-job-201"
     persisted = Repo.reload!(invocation)
     assert persisted.stage == :deferred_budget
     assert persisted.research_claim_token == nil
@@ -289,6 +291,44 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert persisted.stage == :deferred_budget
     assert persisted.research_claim_token == nil
     assert persisted.research_claimed_at == nil
+  end
+
+  test "a stale worker cannot win final, defer, or fail after another job takes over" do
+    outcomes = [
+      {"final", {:ok, runner_result()}},
+      {"defer", {:deferred, ~U[2026-07-30 00:00:00.000000Z]}},
+      {"fail", {:error, :provider_auth}}
+    ]
+
+    for {suffix, outcome} <- outcomes do
+      invocation = invocation("stale-terminal-#{suffix}", :researching)
+      new_token = "research-job-new-#{suffix}"
+
+      configure_runner(fn claimed ->
+        assert {:ok, taken_over} =
+                 Store.claim_research(
+                   claimed,
+                   new_token,
+                   DateTime.add(@now, 2, :second),
+                   DateTime.add(@now, 1, :second)
+                 )
+
+        assert taken_over.research_claim_token == new_token
+        outcome
+      end)
+
+      configure_worker(claim_lease_ms: 1_000)
+
+      assert :ok = perform(invocation, 401)
+      persisted = Repo.reload!(invocation)
+      assert persisted.stage == :researching
+      assert persisted.research_claim_token == new_token
+      assert persisted.selected_reply == nil
+      assert persisted.failure_category == nil
+      assert persisted.defer_until == nil
+    end
+
+    assert Repo.aggregate(Oban.Job, :count) == 0
   end
 
   test "maps terminal runner states to finite silent provider failures" do

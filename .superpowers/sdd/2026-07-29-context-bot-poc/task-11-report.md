@@ -149,3 +149,112 @@ Result: exit 0.
   preserve and therefore fails closed; its sent reservation remains retained as exposure.
 - HTTP-date retry parsing intentionally accepts the current IMF-fixdate HTTP-date form. Invalid or
   obsolete date forms fall back to the bounded exponential policy.
+
+## Fix Round 1: Claim Fencing, Status Classification, and Raw BLOB Ledger
+
+### Findings addressed
+
+- The acquired research claim token now travels from `ResearchWorker` into `Runner`. Every
+  provider-capable mutation is fenced atomically against the persisted `:researching` stage and
+  exact token: initial/request/usage checkpoints, reservation, reservation adoption, sent marker,
+  indeterminate marking, reconciliation, settlement, raw response plus marker, final reply
+  handoff, budget deferral, and terminal failure.
+- A current claim is renewed immediately before the Anthropic client boundary. If ownership is
+  lost after the sent marker but before that check, the stale owner returns `:stale_claim` without
+  making the POST. Mutations after an in-flight response returns are independently fenced.
+- Each budget entry records the token that owned its reservation. A new owner may atomically adopt
+  a reserved-but-unexposed attempt. A sent/exposed attempt is instead retained as indeterminate,
+  and any replay uses a new monotonically sequenced reservation and attempt key.
+- `ResearchWorker` treats `:stale_claim` as a finite no-op. Token-aware workflow transitions ensure
+  an old worker cannot win reply handoff, defer, or fail after another job takes over. Stable Oban
+  job tokens still allow legitimate same-job crash recovery.
+- HTTP status is classified only after the raw envelope is durable and before provider-body JSON
+  decoding. Malformed, empty, HTML, and invalid-UTF-8 401/403 bodies still yield provider auth;
+  other 4xx responses terminate as provider response failures; 429/5xx responses still retry and
+  honor `Retry-After`. Only 2xx interpretation requires JSON.
+- Raw envelopes now live in an ordered normalized SQLite ledger. `raw_body` is a BLOB, so arbitrary
+  bytes round-trip exactly. Envelope metadata is encoded before the immediate transaction and
+  decoded only after it; the transaction performs no provider JSON normalization, provider decode,
+  or full-ledger reserialization.
+- The raw row insert, cumulative storage-limit check, and matching
+  `response_recorded_at` marker remain one immediate transaction. Indexed invocation, budget-entry,
+  attempt-key, kind, and status columns keep order and attempt tags queryable. The old invocation
+  JSON column is no longer loaded by ordinary invocation queries; a read-only fallback preserves
+  existing pre-migration rows where needed.
+
+### Migration notes
+
+`20260729003000_create_anthropic_response_envelopes.exs` is the next ordered migration. It:
+
+- adds `research_claim_token` to `api_budget_entries` so reserved attempts have a durable owner;
+- creates `anthropic_response_envelopes` with invocation/budget foreign keys, unique budget-entry
+  and attempt-key indexes, an invocation/order index, queryable kind/status fields, pre-encoded
+  metadata BLOB, exact raw-body BLOB, and an atomic per-row storage-byte contribution;
+- leaves the legacy invocation response column in place only for read compatibility. All new
+  response writes use the normalized ledger.
+
+### TDD evidence
+
+Each review finding was reproduced before its production change:
+
+- fencing RED: `0/4` runner regressions showed old owners still sending reserved/sent attempts,
+  appending after HTTP return, and settling/checkpointing after takeover;
+- worker terminal RED: `0/1` showed an old worker reaching `reply_ready` after another job acquired
+  the lease;
+- status-order RED: `0/2` showed non-2xx bodies reaching the decoder and malformed retryable
+  responses terminating rather than retrying;
+- ledger RED: `0/2` at the new token-aware boundary covered invalid UTF-8 BLOB round-trip and
+  cumulative-limit/marker atomicity;
+- checkpoint RED: `0/2` reproduced takeover exactly after settlement and immediately before a
+  continuation request checkpoint;
+- scoped-audit RED: a takeover after the sent marker still allowed the stale owner to reach the
+  Anthropic client before raw persistence rejected it.
+
+The corresponding GREEN runs proved stale owners stop without POST/mutation/handoff, current
+owners recover, exposed replay uses a new key, malformed non-2xx classification is independent of
+JSON, arbitrary bytes remain exact, storage-limit rollback leaves no marker, and both usage and
+request checkpoints are fenced. The final expanded focused suites were:
+
+```text
+direnv exec . mix test test/context_bot/research/runner_test.exs test/context_bot/workers/research_worker_test.exs
+```
+
+Result: `36 passed`, exit 0.
+
+```text
+direnv exec . mix test test/context_bot/workflow/store_test.exs test/context_bot/research/budget_test.exs
+```
+
+Result: `26 passed`, exit 0.
+
+### Scoped static audit
+
+One bounded static audit reviewed only the formal findings and changed call paths. It found the
+post-sent/pre-client window described above; the behavior-specific regression failed because the
+client received the call, then passed after an exact-token renewal was added immediately before
+POST. Targeted Credo over all changed modules and tests then found no issues. No open-ended review
+cycle was performed.
+
+### Full gate
+
+The first full gate passed formatting, lint, warnings-as-errors compilation, all tests, and shell
+tests, then Dialyzer reported that five legacy Budget wrapper specs excluded their intentional
+internal `nil` owner token. Widening the shared token type to match the already-tested compatibility
+path resolved all derivative warnings.
+
+Fresh final command:
+
+```text
+direnv exec . just check
+```
+
+Result: exit 0.
+
+- format and shell-format checks passed;
+- compilation with warnings as errors passed;
+- Credo strict and ShellCheck found no issues;
+- ExUnit: `246 passed`, 0 failures;
+- secrets shell tests passed;
+- Dialyzer: 0 errors, 0 skipped, 0 unnecessary skips.
+
+Fix commit message: `fix: fence durable research execution`

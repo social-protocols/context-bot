@@ -2,7 +2,9 @@ defmodule ContextBot.Research.Budget do
   @moduledoc """
   Atomic UTC-day Anthropic budget reservations and exposure settlement.
 
-  Network I/O never belongs inside these short immediate SQLite transactions.
+  Claimed research uses token-aware operations so a worker that lost its lease cannot reserve,
+  expose, reconcile, or settle an attempt. Network I/O never belongs inside these short immediate
+  SQLite transactions.
   """
 
   import Ecto.Query
@@ -11,36 +13,59 @@ defmodule ContextBot.Research.Budget do
   alias ContextBot.Research.{BudgetEntry, Pricing}
   alias ContextBot.Workflow.Invocation
 
+  @type mutation_error :: :daily_budget_exhausted | :stale_claim
+  @type claim_token :: String.t() | nil
+
   @spec reserve_next(
           Invocation.t(),
           BudgetEntry.kind(),
           DateTime.t(),
           pos_integer(),
           pos_integer()
-        ) :: {:ok, BudgetEntry.t()} | {:error, :daily_budget_exhausted}
+        ) ::
+          {:ok, BudgetEntry.t()} | {:error, mutation_error()}
+  def reserve_next(invocation, kind, now, amount, daily_limit),
+    do: reserve_next(invocation, kind, now, amount, daily_limit, nil)
+
+  @spec reserve_next(
+          Invocation.t(),
+          BudgetEntry.kind(),
+          DateTime.t(),
+          pos_integer(),
+          pos_integer(),
+          claim_token()
+        ) :: {:ok, BudgetEntry.t()} | {:error, mutation_error()}
   def reserve_next(
         %Invocation{id: invocation_id},
         kind,
         %DateTime{} = now,
         amount,
-        daily_limit
+        daily_limit,
+        claim_token
       )
-      when is_integer(amount) and amount > 0 and is_integer(daily_limit) and daily_limit > 0 do
+      when is_integer(amount) and amount > 0 and is_integer(daily_limit) and daily_limit > 0 and
+             (is_nil(claim_token) or (is_binary(claim_token) and claim_token != "")) do
     budget_date = utc_date(now)
 
     result =
       Repo.transaction(
         fn ->
+          context = claim_context(invocation_id)
+          authorize_claim!(context, claim_token)
+
           if charged_on(budget_date) > daily_limit - amount do
             Repo.rollback(:daily_budget_exhausted)
           end
 
-          invocation = Repo.get!(Invocation, invocation_id)
-          sequence = invocation.anthropic_attempt_sequence + 1
+          sequence = context.sequence + 1
 
-          invocation
-          |> Ecto.Changeset.change(anthropic_attempt_sequence: sequence)
-          |> Repo.update!()
+          persist_sequence_and_renew(
+            invocation_id,
+            sequence,
+            context.claimed_at,
+            claim_token,
+            now
+          )
 
           attempt_key = "invocation-#{invocation_id}-attempt-#{sequence}-#{kind}"
 
@@ -51,6 +76,7 @@ defmodule ContextBot.Research.Budget do
             budget_date: budget_date,
             kind: kind,
             reserved_microdollars: amount,
+            research_claim_token: claim_token,
             state: :reserved
           })
           |> Repo.insert!()
@@ -58,10 +84,7 @@ defmodule ContextBot.Research.Budget do
         mode: :immediate
       )
 
-    case result do
-      {:ok, entry} -> {:ok, entry}
-      {:error, :daily_budget_exhausted} -> {:error, :daily_budget_exhausted}
-    end
+    normalize_mutation_result(result)
   end
 
   @spec remaining(DateTime.t(), non_neg_integer()) :: non_neg_integer()
@@ -70,22 +93,32 @@ defmodule ContextBot.Research.Budget do
     max(daily_limit - charged_on(utc_date(now)), 0)
   end
 
-  @spec mark_sent(BudgetEntry.t(), DateTime.t()) :: {:ok, BudgetEntry.t()}
-  def mark_sent(%BudgetEntry{id: id}, %DateTime{} = sent_at) do
-    update_immediately(id, fn
-      %BudgetEntry{state: :reserved} = entry ->
-        entry
-        |> BudgetEntry.changeset(%{state: :sent, sent_at: sent_at})
-        |> Repo.update!()
+  @spec mark_sent(BudgetEntry.t(), DateTime.t()) ::
+          {:ok, BudgetEntry.t()} | {:error, :stale_claim}
+  def mark_sent(entry, sent_at), do: mark_sent(entry, sent_at, nil)
 
-      entry ->
-        entry
+  @spec mark_sent(BudgetEntry.t(), DateTime.t(), claim_token()) ::
+          {:ok, BudgetEntry.t()} | {:error, :stale_claim}
+  def mark_sent(%BudgetEntry{id: id}, %DateTime{} = sent_at, claim_token) do
+    update_immediately(id, claim_token, sent_at, fn entry ->
+      authorize_attempt_owner!(entry, claim_token)
+
+      case entry do
+        %BudgetEntry{state: :reserved} ->
+          entry
+          |> BudgetEntry.changeset(%{state: :sent, sent_at: sent_at})
+          |> Repo.update!()
+
+        entry ->
+          entry
+      end
     end)
   end
 
-  @spec mark_response_recorded(BudgetEntry.t(), DateTime.t()) :: {:ok, BudgetEntry.t()}
+  @spec mark_response_recorded(BudgetEntry.t(), DateTime.t()) ::
+          {:ok, BudgetEntry.t()} | {:error, :stale_claim}
   def mark_response_recorded(%BudgetEntry{id: id}, %DateTime{} = recorded_at) do
-    update_immediately(id, fn
+    update_immediately(id, nil, recorded_at, fn
       %BudgetEntry{state: :sent, response_recorded_at: nil} = entry ->
         entry
         |> BudgetEntry.changeset(%{response_recorded_at: recorded_at})
@@ -96,11 +129,18 @@ defmodule ContextBot.Research.Budget do
     end)
   end
 
-  @spec settle(BudgetEntry.t(), map(), Pricing.t()) :: {:ok, BudgetEntry.t()}
-  def settle(%BudgetEntry{id: id}, usage, %Pricing{} = pricing) when is_map(usage) do
+  @spec settle(BudgetEntry.t(), map(), Pricing.t()) ::
+          {:ok, BudgetEntry.t()} | {:error, :stale_claim}
+  def settle(entry, usage, pricing),
+    do: settle(entry, usage, pricing, DateTime.utc_now(), nil)
+
+  @spec settle(BudgetEntry.t(), map(), Pricing.t(), DateTime.t(), claim_token()) ::
+          {:ok, BudgetEntry.t()} | {:error, :stale_claim}
+  def settle(%BudgetEntry{id: id}, usage, %Pricing{} = pricing, %DateTime{} = now, claim_token)
+      when is_map(usage) do
     calculated = Pricing.calculate(usage, pricing)
 
-    update_immediately(id, fn
+    update_immediately(id, claim_token, now, fn
       %BudgetEntry{state: :sent, response_recorded_at: %DateTime{}} = entry ->
         settlement_attrs(entry, usage, pricing, calculated)
         |> then(&BudgetEntry.changeset(entry, &1))
@@ -111,16 +151,26 @@ defmodule ContextBot.Research.Budget do
     end)
   end
 
-  @spec mark_indeterminate(BudgetEntry.t()) :: {:ok, BudgetEntry.t()}
-  def mark_indeterminate(%BudgetEntry{id: id}) do
-    update_immediately(id, fn
-      %BudgetEntry{state: :sent, response_recorded_at: nil} = entry ->
-        entry
-        |> BudgetEntry.changeset(%{state: :indeterminate, settled_microdollars: nil})
-        |> Repo.update!()
+  @spec mark_indeterminate(BudgetEntry.t()) ::
+          {:ok, BudgetEntry.t()} | {:error, :stale_claim}
+  def mark_indeterminate(entry),
+    do: mark_indeterminate(entry, DateTime.utc_now(), nil)
 
-      entry ->
-        entry
+  @spec mark_indeterminate(BudgetEntry.t(), DateTime.t(), claim_token()) ::
+          {:ok, BudgetEntry.t()} | {:error, :stale_claim}
+  def mark_indeterminate(%BudgetEntry{id: id}, %DateTime{} = now, claim_token) do
+    update_immediately(id, claim_token, now, fn entry ->
+      authorize_attempt_owner!(entry, claim_token)
+
+      case entry do
+        %BudgetEntry{state: :sent, response_recorded_at: nil} ->
+          entry
+          |> BudgetEntry.changeset(%{state: :indeterminate, settled_microdollars: nil})
+          |> Repo.update!()
+
+        entry ->
+          entry
+      end
     end)
   end
 
@@ -129,37 +179,64 @@ defmodule ContextBot.Research.Budget do
           | {:resume, BudgetEntry.t()}
           | {:indeterminate, BudgetEntry.t()}
           | {:complete, BudgetEntry.t()}
-  def reconcile_attempt(%BudgetEntry{id: id}) do
-    {:ok, result} =
+          | {:error, :stale_claim}
+  def reconcile_attempt(entry),
+    do: reconcile_attempt(entry, DateTime.utc_now(), nil)
+
+  @spec reconcile_attempt(BudgetEntry.t(), DateTime.t(), claim_token()) ::
+          {:reuse, BudgetEntry.t()}
+          | {:resume, BudgetEntry.t()}
+          | {:indeterminate, BudgetEntry.t()}
+          | {:complete, BudgetEntry.t()}
+          | {:error, :stale_claim}
+  def reconcile_attempt(%BudgetEntry{id: id}, %DateTime{} = now, claim_token) do
+    result =
       Repo.transaction(
         fn ->
-          case Repo.get!(BudgetEntry, id) do
-            %BudgetEntry{state: :reserved} = entry ->
-              {:reuse, entry}
-
-            %BudgetEntry{state: :sent, response_recorded_at: nil} = entry ->
-              entry =
-                entry
-                |> BudgetEntry.changeset(%{
-                  state: :indeterminate,
-                  settled_microdollars: nil
-                })
-                |> Repo.update!()
-
-              {:indeterminate, entry}
-
-            %BudgetEntry{state: :sent} = entry ->
-              {:resume, entry}
-
-            entry ->
-              {:complete, entry}
-          end
+          entry = Repo.get!(BudgetEntry, id)
+          context = claim_context(entry.invocation_id)
+          authorize_claim!(context, claim_token)
+          renew_claim(entry.invocation_id, context.claimed_at, claim_token, now)
+          reconcile_entry(entry, claim_token)
         end,
         mode: :immediate
       )
 
-    result
+    case result do
+      {:ok, reconciliation} -> reconciliation
+      {:error, :stale_claim} -> {:error, :stale_claim}
+    end
   end
+
+  defp reconcile_entry(%BudgetEntry{state: :reserved} = entry, claim_token) do
+    entry =
+      if entry.research_claim_token == claim_token do
+        entry
+      else
+        entry
+        |> BudgetEntry.changeset(%{research_claim_token: claim_token})
+        |> Repo.update!()
+      end
+
+    {:reuse, entry}
+  end
+
+  defp reconcile_entry(
+         %BudgetEntry{state: :sent, response_recorded_at: nil} = entry,
+         _claim_token
+       ) do
+    entry =
+      entry
+      |> BudgetEntry.changeset(%{state: :indeterminate, settled_microdollars: nil})
+      |> Repo.update!()
+
+    {:indeterminate, entry}
+  end
+
+  defp reconcile_entry(%BudgetEntry{state: :sent} = entry, _claim_token),
+    do: {:resume, entry}
+
+  defp reconcile_entry(entry, _claim_token), do: {:complete, entry}
 
   defp settlement_attrs(entry, usage, pricing, {:ok, settled})
        when settled <= entry.reserved_microdollars do
@@ -196,15 +273,90 @@ defmodule ContextBot.Research.Budget do
     |> Repo.one()
   end
 
-  defp update_immediately(id, update) do
-    {:ok, entry} =
+  defp update_immediately(id, claim_token, now, update) do
+    result =
       Repo.transaction(
-        fn -> id |> then(&Repo.get!(BudgetEntry, &1)) |> update.() end,
+        fn ->
+          entry = Repo.get!(BudgetEntry, id)
+          context = claim_context(entry.invocation_id)
+          authorize_claim!(context, claim_token)
+          renew_claim(entry.invocation_id, context.claimed_at, claim_token, now)
+          update.(entry)
+        end,
         mode: :immediate
       )
 
-    {:ok, entry}
+    normalize_mutation_result(result)
   end
+
+  defp claim_context(invocation_id) do
+    Invocation
+    |> where([invocation], invocation.id == ^invocation_id)
+    |> select([invocation], %{
+      stage: invocation.stage,
+      token: invocation.research_claim_token,
+      claimed_at: invocation.research_claimed_at,
+      sequence: invocation.anthropic_attempt_sequence
+    })
+    |> Repo.one!()
+  end
+
+  defp authorize_claim!(%{token: nil}, nil), do: :ok
+
+  defp authorize_claim!(%{stage: :researching, token: token}, token)
+       when is_binary(token) and token != "",
+       do: :ok
+
+  defp authorize_claim!(_context, _claim_token), do: Repo.rollback(:stale_claim)
+
+  defp authorize_attempt_owner!(%BudgetEntry{research_claim_token: token}, token), do: :ok
+  defp authorize_attempt_owner!(_entry, _claim_token), do: Repo.rollback(:stale_claim)
+
+  defp persist_sequence_and_renew(
+         invocation_id,
+         sequence,
+         claimed_at,
+         claim_token,
+         now
+       ) do
+    updates =
+      if is_nil(claim_token) do
+        [set: [anthropic_attempt_sequence: sequence]]
+      else
+        [
+          set: [
+            anthropic_attempt_sequence: sequence,
+            research_claimed_at: latest_timestamp(claimed_at, now)
+          ]
+        ]
+      end
+
+    Invocation
+    |> where([invocation], invocation.id == ^invocation_id)
+    |> Repo.update_all(updates)
+  end
+
+  defp renew_claim(_invocation_id, _claimed_at, nil, _now), do: :ok
+
+  defp renew_claim(invocation_id, claimed_at, _claim_token, now) do
+    Invocation
+    |> where([invocation], invocation.id == ^invocation_id)
+    |> Repo.update_all(set: [research_claimed_at: latest_timestamp(claimed_at, now)])
+
+    :ok
+  end
+
+  defp latest_timestamp(nil, now), do: now
+
+  defp latest_timestamp(claimed_at, now) do
+    if DateTime.compare(claimed_at, now) == :gt, do: claimed_at, else: now
+  end
+
+  defp normalize_mutation_result({:ok, value}), do: {:ok, value}
+  defp normalize_mutation_result({:error, :stale_claim}), do: {:error, :stale_claim}
+
+  defp normalize_mutation_result({:error, :daily_budget_exhausted}),
+    do: {:error, :daily_budget_exhausted}
 
   defp utc_date(now) do
     now

@@ -30,7 +30,9 @@ defmodule ContextBot.Research.Runner do
     config = config(options)
     invocation = Repo.reload!(invocation)
 
-    with {:ok, invocation, _request} <- ensure_request(invocation, config) do
+    with {:ok, invocation} <-
+           config.store.renew_research_claim(invocation, config.claim_token, now(config)),
+         {:ok, invocation, _request} <- ensure_request(invocation, config) do
       resume(invocation, config)
     end
   end
@@ -43,16 +45,22 @@ defmodule ContextBot.Research.Runner do
   defp resume_attempt(invocation, nil, config),
     do: start_attempt(invocation, :research, config)
 
-  defp resume_attempt(invocation, %BudgetEntry{state: :reserved} = entry, config),
-    do: send_attempt(invocation, entry, config)
+  defp resume_attempt(invocation, %BudgetEntry{state: :reserved} = entry, config) do
+    case config.budget.reconcile_attempt(entry, now(config), config.claim_token) do
+      {:reuse, reusable} -> send_attempt(invocation, reusable, config)
+      {:error, :stale_claim} -> {:error, :stale_claim}
+      _unexpected -> {:error, :invalid_attempt_state}
+    end
+  end
 
   defp resume_attempt(
          invocation,
          %BudgetEntry{state: :sent, response_recorded_at: nil} = entry,
          config
        ) do
-    case config.budget.reconcile_attempt(entry) do
+    case config.budget.reconcile_attempt(entry, now(config), config.claim_token) do
       {:indeterminate, indeterminate} -> retry_exposed(invocation, indeterminate, config)
+      {:error, :stale_claim} -> {:error, :stale_claim}
       _unexpected -> {:error, :invalid_attempt_state}
     end
   end
@@ -65,7 +73,7 @@ defmodule ContextBot.Research.Runner do
        do: retry_exposed(invocation, entry, config)
 
   defp resume_attempt(invocation, %BudgetEntry{} = entry, config) do
-    case stored_response(invocation, entry.attempt_key) do
+    case stored_response(invocation, entry.attempt_key, config) do
       nil -> {:error, :invalid_attempt_state}
       response -> process_recorded(invocation, entry, response, config)
     end
@@ -79,7 +87,8 @@ defmodule ContextBot.Research.Runner do
            kind,
            now(config),
            amount,
-           config.settings.anthropic_daily_budget_microdollars
+           config.settings.anthropic_daily_budget_microdollars,
+           config.claim_token
          ) do
       {:ok, entry} ->
         with :ok <- crash(config, :after_reservation, entry) do
@@ -88,14 +97,19 @@ defmodule ContextBot.Research.Runner do
 
       {:error, :daily_budget_exhausted} ->
         {:deferred, next_utc_rollover(now(config))}
+
+      {:error, :stale_claim} ->
+        {:error, :stale_claim}
     end
   end
 
   defp send_attempt(invocation, entry, config) do
     request = invocation.anthropic_messages
 
-    with {:ok, sent} <- config.budget.mark_sent(entry, now(config)),
-         :ok <- crash(config, :after_sent, sent) do
+    with {:ok, sent} <- config.budget.mark_sent(entry, now(config), config.claim_token),
+         :ok <- crash(config, :after_sent, sent),
+         {:ok, _current_claim} <-
+           config.store.renew_research_claim(invocation, config.claim_token, now(config)) do
       case config.client.send_message(request, metadata(sent)) do
         {:ok, envelope} -> persist_envelope(invocation, sent, envelope, config)
         {:error, reason} -> handle_transport_error(invocation, sent, reason, config)
@@ -105,52 +119,59 @@ defmodule ContextBot.Research.Runner do
 
   defp persist_envelope(invocation, sent, envelope, config) do
     with :ok <- crash(config, :after_http, envelope),
-         {:ok, invocation, recorded} <-
+         {:ok, response, recorded} <-
            config.store.record_anthropic_response(
              invocation,
              sent,
-             tag_envelope(envelope, sent),
+             envelope,
              config.storage_limit,
-             now(config)
+             now(config),
+             config.claim_token
            ),
          :ok <- crash(config, :after_persistence, recorded) do
-      process_recorded(
-        invocation,
-        recorded,
-        stored_response(invocation, sent.attempt_key),
-        config
-      )
+      process_recorded(Repo.reload!(invocation), recorded, response, config)
     end
   end
 
   defp handle_transport_error(invocation, sent, :timeout, config) do
-    {:ok, _indeterminate} = config.budget.mark_indeterminate(sent)
-
-    if ambiguous_attempt_count(invocation) <= 1 do
-      config.sleep.(retry_delay_ms(ambiguous_attempt_count(invocation), nil, config))
-      start_attempt(Repo.reload!(invocation), :retry, config)
-    else
-      {:error, :ambiguous_timeout}
+    with {:ok, _indeterminate} <-
+           config.budget.mark_indeterminate(sent, now(config), config.claim_token) do
+      if ambiguous_attempt_count(invocation) <= 1 do
+        config.sleep.(retry_delay_ms(ambiguous_attempt_count(invocation), nil, config))
+        start_attempt(Repo.reload!(invocation), :retry, config)
+      else
+        {:error, :ambiguous_timeout}
+      end
     end
   end
 
   defp handle_transport_error(invocation, sent, :transport, config) do
-    {:ok, _indeterminate} = config.budget.mark_indeterminate(sent)
-    retry_count = unrecorded_transport_retry_count(invocation)
+    with {:ok, _indeterminate} <-
+           config.budget.mark_indeterminate(sent, now(config), config.claim_token) do
+      retry_count = unrecorded_transport_retry_count(invocation)
 
-    if retry_count < config.max_http_retries do
-      config.sleep.(retry_delay_ms(retry_count + 1, nil, config))
-      start_attempt(Repo.reload!(invocation), :retry, config)
-    else
-      {:error, :provider_transport}
+      if retry_count < config.max_http_retries do
+        config.sleep.(retry_delay_ms(retry_count + 1, nil, config))
+        start_attempt(Repo.reload!(invocation), :retry, config)
+      else
+        {:error, :provider_transport}
+      end
     end
   end
 
-  defp handle_transport_error(_invocation, _sent, :response_too_large, _config),
-    do: {:error, :provider_response_too_large}
+  defp handle_transport_error(_invocation, sent, :response_too_large, config) do
+    with {:ok, _indeterminate} <-
+           config.budget.mark_indeterminate(sent, now(config), config.claim_token) do
+      {:error, :provider_response_too_large}
+    end
+  end
 
-  defp handle_transport_error(_invocation, _sent, _reason, _config),
-    do: {:error, :provider_transport}
+  defp handle_transport_error(_invocation, sent, _reason, config) do
+    with {:ok, _indeterminate} <-
+           config.budget.mark_indeterminate(sent, now(config), config.claim_token) do
+      {:error, :provider_transport}
+    end
+  end
 
   defp retry_exposed(invocation, _entry, config) do
     if ambiguous_attempt_count(invocation) <= 1 do
@@ -162,42 +183,59 @@ defmodule ContextBot.Research.Runner do
   end
 
   defp process_recorded(invocation, entry, response, config) when is_map(response) do
-    with {:ok, decoded} <- decode(config, response["raw_body"]) do
-      classify_http(response["status"], invocation, entry, decoded, response, config)
+    status = response_value(response, :status)
+
+    if status in 200..299 do
+      with {:ok, decoded} <- decode(config, response_value(response, :raw_body)) do
+        classify_success(invocation, entry, decoded, config)
+      end
+    else
+      classify_http_error(status, invocation, entry, response, config)
     end
   end
 
-  defp classify_http(status, invocation, entry, decoded, _response, config)
-       when status in 200..299 do
+  defp classify_success(invocation, entry, decoded, config) do
     with {:ok, usage} <- response_usage(decoded),
-         {:ok, settled} <- config.budget.settle(entry, usage, config.pricing),
+         {:ok, settled} <-
+           config.budget.settle(
+             entry,
+             usage,
+             config.pricing,
+             now(config),
+             config.claim_token
+           ),
          :ok <- safely_settled(settled),
+         :ok <- crash(config, :after_settlement, settled),
          {:ok, invocation} <- checkpoint_usage(invocation, config) do
       classify_message(invocation, settled, decoded, config)
     end
   end
 
-  defp classify_http(status, _invocation, entry, _decoded, _response, config)
+  defp classify_http_error(status, _invocation, entry, _response, config)
        when status in [401, 403] do
-    retain_reservation(entry, config)
-    {:error, :provider_auth}
+    with {:ok, _retained} <- retain_reservation(entry, config) do
+      {:error, :provider_auth}
+    end
   end
 
-  defp classify_http(status, invocation, entry, _decoded, response, config)
+  defp classify_http_error(status, invocation, entry, response, config)
        when status == 429 or status >= 500 do
-    retain_reservation(entry, config)
-    retry_http(invocation, response, config)
+    with {:ok, _retained} <- retain_reservation(entry, config) do
+      retry_http(invocation, response, config)
+    end
   end
 
-  defp classify_http(status, _invocation, entry, _decoded, _response, config)
+  defp classify_http_error(status, _invocation, entry, _response, config)
        when status in 400..499 do
-    retain_reservation(entry, config)
-    {:error, :provider_response}
+    with {:ok, _retained} <- retain_reservation(entry, config) do
+      {:error, :provider_response}
+    end
   end
 
-  defp classify_http(_status, _invocation, entry, _decoded, _response, config) do
-    retain_reservation(entry, config)
-    {:error, :provider_response}
+  defp classify_http_error(_status, _invocation, entry, _response, config) do
+    with {:ok, _retained} <- retain_reservation(entry, config) do
+      {:error, :provider_response}
+    end
   end
 
   defp retry_http(invocation, response, config) do
@@ -207,7 +245,7 @@ defmodule ContextBot.Research.Runner do
       delay =
         retry_delay_ms(
           retry_count + 1,
-          retry_after_seconds(response["headers"], now(config)),
+          retry_after_seconds(response_value(response, :headers), now(config)),
           config
         )
 
@@ -245,7 +283,7 @@ defmodule ContextBot.Research.Runner do
          %{
            messages: invocation.anthropic_messages,
            text: text,
-           usage: usage_evidence(invocation),
+           usage: usage_evidence(invocation, config),
            validation: %{"result" => "valid", "repair_used" => repair_request?(invocation)}
          }}
 
@@ -266,7 +304,7 @@ defmodule ContextBot.Research.Runner do
   end
 
   defp continue_pause(invocation, %{"content" => content}, config) when is_list(content) do
-    if continuation_count(invocation) > config.settings.max_tool_continuations do
+    if continuation_count(invocation, config) > config.settings.max_tool_continuations do
       {:error, :continuation_limit_exceeded}
     else
       request = continuation_request(invocation.anthropic_messages, content, config.settings)
@@ -297,12 +335,24 @@ defmodule ContextBot.Research.Runner do
     do: {:error, :malformed_provider_response}
 
   defp checkpoint_request(invocation, request, config) do
-    case config.store.transition(
+    with :ok <- crash(config, :before_request_checkpoint, request) do
+      persist_request_checkpoint(invocation, request, config)
+    end
+  end
+
+  defp persist_request_checkpoint(invocation, request, config) do
+    attrs = %{
+      anthropic_messages: request,
+      anthropic_usage: usage_evidence(invocation, config)
+    }
+
+    case config.store.transition_research(
            invocation,
+           config.claim_token,
            :researching,
-           :researching,
-           %{anthropic_messages: request, anthropic_usage: usage_evidence(invocation)},
-           nil
+           attrs,
+           nil,
+           now(config)
          ) do
       {:ok, checkpoint} ->
         with :ok <- crash(config, :after_checkpoint, checkpoint), do: {:ok, checkpoint}
@@ -339,12 +389,13 @@ defmodule ContextBot.Research.Runner do
         }
       )
 
-    case config.store.transition(
+    case config.store.transition_research(
            invocation,
-           :researching,
+           config.claim_token,
            :researching,
            %{anthropic_messages: request},
-           nil
+           nil,
+           now(config)
          ) do
       {:ok, persisted} -> {:ok, persisted, persisted.anthropic_messages}
       {:error, reason} -> {:error, reason}
@@ -359,8 +410,11 @@ defmodule ContextBot.Research.Runner do
     |> Repo.one()
   end
 
-  defp stored_response(invocation, attempt_key) do
-    Enum.find(invocation.anthropic_responses, &(&1["attempt_key"] == attempt_key))
+  defp stored_response(invocation, attempt_key, config) do
+    Enum.find(
+      config.store.anthropic_responses(invocation),
+      &(response_value(&1, :attempt_key) == attempt_key)
+    )
   end
 
   defp ambiguous_attempt_count(invocation) do
@@ -409,12 +463,13 @@ defmodule ContextBot.Research.Runner do
   defp safely_settled(_entry), do: {:error, :unsafe_provider_usage}
 
   defp checkpoint_usage(invocation, config) do
-    case config.store.transition(
+    case config.store.transition_research(
            invocation,
+           config.claim_token,
            :researching,
-           :researching,
-           %{anthropic_usage: usage_evidence(invocation)},
-           nil
+           %{anthropic_usage: usage_evidence(invocation, config)},
+           nil,
+           now(config)
          ) do
       {:ok, checkpoint} -> {:ok, checkpoint}
       {:error, reason} -> {:error, reason}
@@ -430,13 +485,19 @@ defmodule ContextBot.Research.Runner do
 
   defp select_reply(_response, _invocation), do: {:error, :malformed_provider_response}
 
-  defp retain_reservation(entry, config) do
-    config.budget.settle(entry, %{}, config.pricing)
-    :ok
-  end
+  defp retain_reservation(entry, config),
+    do:
+      config.budget.settle(
+        entry,
+        %{},
+        config.pricing,
+        now(config),
+        config.claim_token
+      )
 
-  defp usage_evidence(invocation) do
-    decoded = decoded_responses(invocation)
+  defp usage_evidence(invocation, config) do
+    responses = config.store.anthropic_responses(invocation)
+    decoded = decoded_responses(responses)
 
     attempts =
       Enum.flat_map(decoded, fn {response, body} ->
@@ -444,8 +505,8 @@ defmodule ContextBot.Research.Runner do
           %{"usage" => usage} when is_map(usage) ->
             [
               %{
-                "attempt_key" => response["attempt_key"],
-                "kind" => response["kind"],
+                "attempt_key" => response_value(response, :attempt_key),
+                "kind" => response_value(response, :kind) |> kind_string(),
                 "usage" => usage
               }
             ]
@@ -460,7 +521,7 @@ defmodule ContextBot.Research.Runner do
     %{
       "attempts" => attempts,
       "continuations" => continuation_count(decoded),
-      "response_count" => length(invocation.anthropic_responses),
+      "response_count" => length(responses),
       "tool_use_counts" => tool_counts,
       "tool_uses" => Enum.sum(Map.values(tool_counts)),
       "totals" => Enum.reduce(attempts, %{}, &merge_attempt_usage/2)
@@ -484,17 +545,19 @@ defmodule ContextBot.Research.Runner do
     end)
   end
 
-  defp decoded_responses(invocation) do
-    Enum.flat_map(invocation.anthropic_responses, fn response ->
-      case Jason.decode(response["raw_body"]) do
+  defp decoded_responses(responses) when is_list(responses) do
+    Enum.flat_map(responses, fn response ->
+      case Jason.decode(response_value(response, :raw_body)) do
         {:ok, body} when is_map(body) -> [{response, body}]
         _invalid -> []
       end
     end)
   end
 
-  defp continuation_count(%Invocation{} = invocation),
-    do: invocation |> decoded_responses() |> continuation_count()
+  defp continuation_count(%Invocation{} = invocation, config) do
+    responses = config.store.anthropic_responses(invocation)
+    responses |> decoded_responses() |> continuation_count()
+  end
 
   defp continuation_count(decoded_responses) when is_list(decoded_responses) do
     Enum.count(decoded_responses, fn {_response, body} ->
@@ -503,7 +566,8 @@ defmodule ContextBot.Research.Runner do
   end
 
   defp within_tool_caps(invocation, config) do
-    counts = invocation |> decoded_responses() |> tool_use_counts()
+    responses = config.store.anthropic_responses(invocation)
+    counts = responses |> decoded_responses() |> tool_use_counts()
 
     if counts["web_search"] <= config.settings.max_web_search_uses and
          counts["web_fetch"] <= config.settings.max_web_fetch_uses do
@@ -578,19 +642,13 @@ defmodule ContextBot.Research.Runner do
     |> Repo.exists?()
   end
 
-  defp tag_envelope(envelope, entry) do
-    %{
-      "attempt_key" => entry.attempt_key,
-      "kind" => Atom.to_string(entry.kind),
-      "status" => envelope.status,
-      "headers" => envelope.headers,
-      "raw_body" => envelope.raw_body,
-      "received_at" => DateTime.to_iso8601(envelope.received_at),
-      "duration_ms" => envelope.duration_ms
-    }
-  end
-
   defp metadata(entry), do: %{attempt_key: entry.attempt_key, kind: entry.kind}
+
+  defp response_value(response, key),
+    do: Map.get(response, key, Map.get(response, Atom.to_string(key)))
+
+  defp kind_string(kind) when is_atom(kind), do: Atom.to_string(kind)
+  defp kind_string(kind), do: kind
 
   defp retry_after_seconds(headers, now) when is_map(headers) do
     case Map.get(headers, "retry-after") do
@@ -683,6 +741,7 @@ defmodule ContextBot.Research.Runner do
 
     %{
       budget: Keyword.get(options, :budget, Budget),
+      claim_token: Keyword.fetch!(options, :claim_token),
       client: Keyword.get(options, :client, AnthropicClient),
       crash: Keyword.get(options, :crash, fn _point, _value -> :ok end),
       decoder: Keyword.get(options, :decoder, &Jason.decode/1),
