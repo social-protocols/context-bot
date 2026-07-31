@@ -25,6 +25,7 @@ defmodule ContextBot.Workers.ReplyWorker do
   @maximum_backoff_seconds 300
   @maximum_retry_after_seconds 3_600
   @did_regex ~r/\Adid:[a-z0-9]+:[A-Za-z0-9._:%-]+\z/
+  @retry_after_regex ~r/\A[0-9]+\z/
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"uri" => uri, "cid" => cid}} = job)
@@ -309,10 +310,7 @@ defmodule ContextBot.Workers.ReplyWorker do
   defp retry_after(_unsaved_error), do: :error
 
   defp parse_retry_after(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {seconds, ""} when seconds >= 0 -> {:ok, seconds}
-      _invalid -> :error
-    end
+    if Regex.match?(@retry_after_regex, value), do: {:ok, String.to_integer(value)}, else: :error
   end
 
   defp parse_retry_after(_value), do: :error

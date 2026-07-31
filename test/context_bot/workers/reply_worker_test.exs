@@ -588,9 +588,20 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
 
   test "contextual backoff preserves strict Retry-After seconds and bounds malformed values" do
     assert ReplyWorker.backoff(rate_limited_job("47")) == 47
+    assert ReplyWorker.backoff(rate_limited_job(" 47")) == 15
+    assert ReplyWorker.backoff(rate_limited_job("47 ")) == 15
     assert ReplyWorker.backoff(rate_limited_job("999999")) == 3_600
+    assert ReplyWorker.backoff(rate_limited_job("999999999999999999999999999999999999")) == 3_600
     assert ReplyWorker.backoff(rate_limited_job("47 seconds")) == 15
     assert ReplyWorker.backoff(rate_limited_job(nil)) == 15
+  end
+
+  test "contextual backoff rejects a plus-signed Retry-After value" do
+    assert ReplyWorker.backoff(rate_limited_job("+47")) == 15
+  end
+
+  test "contextual backoff rejects a minus-signed zero Retry-After value" do
+    assert ReplyWorker.backoff(rate_limited_job("-0")) == 15
   end
 
   test "repeated completed jobs never issue another PDS request" do

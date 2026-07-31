@@ -180,3 +180,46 @@ Commit message: `fix: fence Bluesky reply publication`
 - No open blocker. Lease duration is configurable for tests and defaults to five minutes in
   production; takeover remains safe because every provider boundary and terminal transition is
   fenced against the current persisted token.
+
+## Fix Round 2/5: Strict Retry-After Delta-Seconds
+
+The contextual backoff parser now validates the complete Retry-After value against
+`\A[0-9]+\z` before integer conversion. This rejects signed forms such as `+47` and `-0`, which
+`Integer.parse/1` previously accepted even with an empty remainder, while preserving the default
+for whitespace or malformed values and the existing 3,600-second cap for arbitrarily large digit
+strings.
+
+### TDD evidence
+
+Focused RED command:
+
+```text
+direnv exec . mix test test/context_bot/workers/reply_worker_test.exs
+```
+
+Result before the parser change: `20/22 passed`. The two intended failures showed `+47` returning
+`47` instead of the default `15`, and `-0` returning `0` instead of `15`.
+
+Focused GREEN command:
+
+```text
+direnv exec . mix test test/context_bot/workers/reply_worker_test.exs
+```
+
+Result after digits-only validation: `22 passed`, exit 0. The same test group covers valid digits,
+leading and trailing whitespace, malformed suffixes, nil, the ordinary upper bound, and a very
+large all-digit value.
+
+### Full gate
+
+```text
+direnv exec . just check
+```
+
+Result: exit 0. Formatting, warnings-as-errors compilation, Credo strict, ShellCheck, and secrets
+tests passed; ExUnit reported `268 passed`; Dialyzer reported zero errors, zero skipped warnings,
+and zero unnecessary skips.
+
+### Fix commit
+
+Commit message: `fix: parse ATProto retry delays strictly`
