@@ -49,3 +49,13 @@ config :context_bot, ContextBot.ATProto.Session,
   timeout: 1_000,
   reauthentication_cooldown_ms: 60_000,
   req_options: [plug: {Req.Test, ContextBot.ATProto.Session}]
+
+config :context_bot, :anthropic_api_key, "anthropic-test-key-never-expose"
+
+config :context_bot, ContextBot.Research.AnthropicClient,
+  base_url: "https://api.anthropic.test",
+  timeout: 1_000,
+  req_options: [
+    plug: {Req.Test, ContextBot.Research.AnthropicClient},
+    plugins: [ContextBot.Research.AnthropicClientTest.RequestCapture]
+  ]

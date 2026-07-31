@@ -1,0 +1,1 @@
+{"id":"msg_pause","type":"message","role":"assistant","content":[{"type":"server_tool_use","id":"srvtoolu_01","name":"web_search","input":{"query":"primary source"}},{"type":"encrypted_unknown_block","ciphertext":"opaque+/=="}],"stop_reason":"pause_turn","usage":{"input_tokens":145,"output_tokens":36}}
