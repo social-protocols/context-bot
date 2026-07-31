@@ -14,12 +14,23 @@ defmodule ContextBot.Research.AnthropicClientTest.RequestCapture do
   end
 end
 
+defmodule ContextBot.Research.AnthropicClientTest.PoolCheckoutFailureAdapter do
+  @moduledoc false
+
+  @error_message """
+  Finch was unable to provide a connection within the timeout due to excess queuing for connections. Consider adjusting the pool size, count, timeout or reducing the rate of requests if it is possible that the downstream service is unable to keep up with the current rate.
+  """
+
+  def run(_request), do: raise(@error_message)
+end
+
 defmodule ContextBot.Research.AnthropicClientTest do
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
 
   alias ContextBot.Research.AnthropicClient
+  alias ContextBot.Research.AnthropicClientTest.PoolCheckoutFailureAdapter
 
   @api_key "anthropic-test-key-never-expose"
   @attempt_metadata %{invocation_id: "invocation-123", attempt_number: 2}
@@ -152,6 +163,38 @@ defmodule ContextBot.Research.AnthropicClientTest do
     assert_receive {:client_result, {:error, :transport}}
     refute transport_log =~ @api_key
     refute inspect({:error, :transport}) =~ @api_key
+  end
+
+  test "normalizes only Finch pool checkout exhaustion without leaking the API key" do
+    original_config = Application.fetch_env!(:context_bot, AnthropicClient)
+    original_api_key = Application.fetch_env!(:context_bot, :anthropic_api_key)
+
+    Application.put_env(
+      :context_bot,
+      AnthropicClient,
+      Keyword.put(original_config, :req_options, adapter: PoolCheckoutFailureAdapter)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:context_bot, AnthropicClient, original_config)
+      Application.put_env(:context_bot, :anthropic_api_key, original_api_key)
+    end)
+
+    log =
+      capture_log(fn ->
+        send(self(), {:client_result, AnthropicClient.send_message(@request, @attempt_metadata)})
+      end)
+
+    assert_receive {:client_result, result}
+    assert result == {:error, :transport}
+    refute log =~ @api_key
+    refute inspect(result) =~ @api_key
+
+    Application.delete_env(:context_bot, :anthropic_api_key)
+
+    assert_raise ArgumentError, fn ->
+      AnthropicClient.send_message(@request, @attempt_metadata)
+    end
   end
 
   defp fixture(name) do

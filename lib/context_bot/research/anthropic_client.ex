@@ -10,6 +10,7 @@ defmodule ContextBot.Research.AnthropicClient do
   @base_url "https://api.anthropic.com"
   @default_timeout 300_000
   @anthropic_version "2023-06-01"
+  @pool_checkout_error_prefix "Finch was unable to provide a connection within the timeout due to excess queuing for connections."
   @safe_response_headers ["content-type", "request-id", "retry-after"]
 
   @impl true
@@ -26,7 +27,7 @@ defmodule ContextBot.Research.AnthropicClient do
     result =
       request(attempt_metadata)
       |> BodyLimit.attach(settings.max_response_bytes)
-      |> Req.post(url: "/v1/messages", json: request_map)
+      |> execute_request(request_map)
 
     duration_ms = max(System.monotonic_time(:millisecond) - started_at, 0)
     normalize_response(result, duration_ms)
@@ -59,6 +60,17 @@ defmodule ContextBot.Research.AnthropicClient do
     Req.new(options)
   end
 
+  defp execute_request(request, request_map) do
+    Req.post(request, url: "/v1/messages", json: request_map)
+  rescue
+    error in RuntimeError ->
+      if String.starts_with?(error.message, @pool_checkout_error_prefix) do
+        {:error, :pool_checkout_exhausted}
+      else
+        reraise(error, __STACKTRACE__)
+      end
+  end
+
   defp normalize_response(
          {:ok, %Req.Response{status: status, headers: headers, body: raw_body}},
          duration_ms
@@ -82,6 +94,9 @@ defmodule ContextBot.Research.AnthropicClient do
 
   defp normalize_response({:error, %{reason: :timeout}}, _duration_ms),
     do: {:error, :timeout}
+
+  defp normalize_response({:error, :pool_checkout_exhausted}, _duration_ms),
+    do: {:error, :transport}
 
   defp normalize_response({:error, _exception}, _duration_ms), do: {:error, :transport}
 
