@@ -114,7 +114,7 @@ defmodule ContextBot.Research.Budget do
   @spec mark_indeterminate(BudgetEntry.t()) :: {:ok, BudgetEntry.t()}
   def mark_indeterminate(%BudgetEntry{id: id}) do
     update_immediately(id, fn
-      %BudgetEntry{state: :sent} = entry ->
+      %BudgetEntry{state: :sent, response_recorded_at: nil} = entry ->
         entry
         |> BudgetEntry.changeset(%{state: :indeterminate, settled_microdollars: nil})
         |> Repo.update!()

@@ -16,7 +16,7 @@ defmodule ContextBot.Settings do
   @default_max_storage_bytes 64_000_000
   @default_anthropic_research_max_tokens 8_192
   @default_anthropic_length_repair_max_tokens 1_024
-  @default_anthropic_web_search_max_uses 5
+  @default_max_web_search_uses 5
   @default_anthropic_reservation_usd "5.000000"
   @default_anthropic_pricing_version "sonnet-5-2026-07-28"
 
@@ -37,7 +37,7 @@ defmodule ContextBot.Settings do
     :max_storage_bytes,
     :anthropic_research_max_tokens,
     :anthropic_length_repair_max_tokens,
-    :anthropic_web_search_max_uses,
+    :max_web_search_uses,
     :anthropic_research_reservation_microdollars,
     :anthropic_continuation_reservation_microdollars,
     :anthropic_repair_reservation_microdollars,
@@ -56,7 +56,7 @@ defmodule ContextBot.Settings do
     :anthropic_daily_budget_microdollars,
     :anthropic_research_max_tokens,
     :anthropic_length_repair_max_tokens,
-    :anthropic_web_search_max_uses,
+    :max_web_search_uses,
     :anthropic_research_reservation_microdollars,
     :anthropic_continuation_reservation_microdollars,
     :anthropic_repair_reservation_microdollars,
@@ -85,7 +85,7 @@ defmodule ContextBot.Settings do
           anthropic_daily_budget_microdollars: pos_integer() | nil,
           anthropic_research_max_tokens: pos_integer(),
           anthropic_length_repair_max_tokens: pos_integer(),
-          anthropic_web_search_max_uses: pos_integer(),
+          max_web_search_uses: pos_integer(),
           anthropic_research_reservation_microdollars: pos_integer(),
           anthropic_continuation_reservation_microdollars: pos_integer(),
           anthropic_repair_reservation_microdollars: pos_integer(),
@@ -136,12 +136,12 @@ defmodule ContextBot.Settings do
           :anthropic_length_repair_max_tokens,
           @default_anthropic_length_repair_max_tokens
         ),
-      anthropic_web_search_max_uses:
+      max_web_search_uses:
         positive_integer!(
           environment,
-          "ANTHROPIC_WEB_SEARCH_MAX_USES",
-          :anthropic_web_search_max_uses,
-          @default_anthropic_web_search_max_uses
+          "MAX_WEB_SEARCH_USES",
+          :max_web_search_uses,
+          @default_max_web_search_uses
         ),
       anthropic_research_reservation_microdollars:
         microdollars!(
@@ -267,8 +267,8 @@ defmodule ContextBot.Settings do
     )
 
     validate_positive!(
-      settings.anthropic_web_search_max_uses,
-      "ANTHROPIC_WEB_SEARCH_MAX_USES"
+      settings.max_web_search_uses,
+      "MAX_WEB_SEARCH_USES"
     )
 
     validate_optional_positive!(
@@ -527,7 +527,7 @@ defmodule ContextBot.Settings do
       },
       cache_read_input_tokens: 0,
       output_tokens: output_tokens,
-      server_tool_use: %{web_search_requests: settings.anthropic_web_search_max_uses}
+      server_tool_use: %{web_search_requests: settings.max_web_search_uses}
     }
 
     {:ok, maximum} = Pricing.maximum_cost(usage, pricing)

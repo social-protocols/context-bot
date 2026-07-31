@@ -110,7 +110,7 @@ defmodule ContextBot.SettingsTest do
         anthropic_daily_budget_usd: "10.00",
         anthropic_research_max_tokens: 100,
         anthropic_length_repair_max_tokens: 50,
-        anthropic_web_search_max_uses: 2,
+        max_web_search_uses: 2,
         anthropic_research_reservation_usd: "4.020999",
         anthropic_continuation_reservation_usd: "5.000000",
         anthropic_repair_reservation_usd: "5.000000",
@@ -125,7 +125,7 @@ defmodule ContextBot.SettingsTest do
         anthropic_daily_budget_usd: "10.00",
         anthropic_research_max_tokens: 100,
         anthropic_length_repair_max_tokens: 50,
-        anthropic_web_search_max_uses: 2,
+        max_web_search_uses: 2,
         anthropic_research_reservation_usd: "5.000000",
         anthropic_continuation_reservation_usd: "5.000000",
         anthropic_repair_reservation_usd: "5.000000",
@@ -137,6 +137,17 @@ defmodule ContextBot.SettingsTest do
   test "rejects an unknown pricing table before startup" do
     assert_raise ArgumentError, ~r/ANTHROPIC_PRICING_VERSION/, fn ->
       Settings.load(anthropic_pricing_version: "future-prices")
+    end
+  end
+
+  test "loads the canonical public web-search cap from environment and options" do
+    assert Settings.load(%{"MAX_WEB_SEARCH_USES" => "3"}).max_web_search_uses == 3
+    assert Settings.load(max_web_search_uses: 4).max_web_search_uses == 4
+  end
+
+  test "uses the canonical public web-search cap in maximum-exposure validation" do
+    assert_raise ArgumentError, ~r/ANTHROPIC_RESEARCH_RESERVATION_USD.*maximum exposure/, fn ->
+      Settings.load(max_web_search_uses: 101)
     end
   end
 end

@@ -130,6 +130,18 @@ defmodule ContextBot.Research.BudgetTest do
     assert {:resume, ^recorded} = Budget.reconcile_attempt(recorded)
   end
 
+  test "does not mark a response-recorded sent attempt indeterminate" do
+    invocation = invocation("recorded-indeterminate")
+    recorded_at = DateTime.add(@now, 1, :second)
+
+    assert {:ok, entry} = Budget.reserve_next(invocation, :research, @now, 250, 1_000)
+    assert {:ok, sent} = Budget.mark_sent(entry, @now)
+    assert {:ok, recorded} = Budget.mark_response_recorded(sent, recorded_at)
+    assert {:ok, unchanged} = Budget.mark_indeterminate(recorded)
+    assert unchanged.state == :sent
+    assert unchanged.response_recorded_at == recorded_at
+  end
+
   test "settlement never invents response durability or charges an unsent attempt" do
     invocation = invocation("state-order")
     pricing = Pricing.fetch!("sonnet-5-2026-07-28")
