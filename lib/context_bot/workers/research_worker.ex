@@ -11,7 +11,7 @@ defmodule ContextBot.Workers.ResearchWorker do
   import Ecto.Query
 
   alias ContextBot.ATProto.{Post, TID}
-  alias ContextBot.Repo
+  alias ContextBot.{Operations, Repo}
   alias ContextBot.Research.Runner
   alias ContextBot.Workflow.{Invocation, Store}
 
@@ -48,7 +48,7 @@ defmodule ContextBot.Workers.ResearchWorker do
 
     case Store.claim_research(invocation, token, now, stale_before) do
       {:ok, claimed} ->
-        run(claimed, token, dependencies)
+        logged_run(claimed, job, token, dependencies)
 
       {:error, reason} when reason in [:busy, :stale_stage] ->
         :ok
@@ -58,6 +58,20 @@ defmodule ContextBot.Workers.ResearchWorker do
     end
   end
 
+  defp logged_run(invocation, job, token, dependencies) do
+    started_at = System.monotonic_time(:millisecond)
+    result = run(invocation, token, dependencies)
+
+    Operations.log_attempt(invocation,
+      attempt_kind: :research,
+      attempt_index: job.attempt,
+      duration_ms: System.monotonic_time(:millisecond) - started_at,
+      failure_category: research_failure(invocation)
+    )
+
+    result
+  end
+
   defp run(invocation, token, dependencies) do
     options =
       dependencies.runner_options
@@ -65,10 +79,20 @@ defmodule ContextBot.Workers.ResearchWorker do
       |> put_runner_claim(token)
 
     case dependencies.runner.run(invocation, options) do
-      {:ok, result} -> freeze_handoff(Repo.reload!(invocation), result, token, dependencies)
-      {:deferred, %DateTime{} = defer_until} -> defer_budget(invocation, defer_until, token)
-      {:error, :stale_claim} -> :ok
-      {:error, reason} -> fail_research(invocation, reason, dependencies.now.(), token)
+      {:ok, result} ->
+        freeze_handoff(Repo.reload!(invocation), result, token, dependencies)
+
+      {:deferred, %DateTime{} = defer_until, kind} ->
+        defer_budget(invocation, defer_until, kind, token)
+
+      {:deferred, %DateTime{} = defer_until} ->
+        defer_budget(invocation, defer_until, :research, token)
+
+      {:error, :stale_claim} ->
+        :ok
+
+      {:error, reason} ->
+        fail_research(invocation, reason, dependencies.now.(), token)
     end
   end
 
@@ -96,7 +120,8 @@ defmodule ContextBot.Workers.ResearchWorker do
         failure_detail: nil,
         research_claim_token: nil,
         research_claimed_at: nil,
-        completed_at: nil
+        completed_at: nil,
+        deferred_attempt_kind: nil
       }
 
       next_job = dependencies.reply_job_builder.(invocation)
@@ -136,13 +161,14 @@ defmodule ContextBot.Workers.ResearchWorker do
 
   defp root_ref(_invocation), do: nil
 
-  defp defer_budget(invocation, defer_until, token) do
+  defp defer_budget(invocation, defer_until, kind, token) do
     case Store.transition_research(
            Repo.reload!(invocation),
            token,
            :deferred_budget,
            %{
              defer_until: defer_until,
+             deferred_attempt_kind: kind,
              research_claim_token: nil,
              research_claimed_at: nil
            },
@@ -191,6 +217,13 @@ defmodule ContextBot.Workers.ResearchWorker do
   defp failure_category(:provider_auth), do: :provider_auth
   defp failure_category(:daily_budget_exhausted), do: :provider_budget
   defp failure_category(_reason), do: :provider_response
+
+  defp research_failure(invocation) do
+    case Repo.reload!(invocation) do
+      %Invocation{stage: :failed, failure_category: category} -> category
+      _nonterminal_or_complete -> nil
+    end
+  end
 
   defp safe_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp safe_reason({reason, _detail}) when is_atom(reason), do: Atom.to_string(reason)

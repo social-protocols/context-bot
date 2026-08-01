@@ -41,6 +41,8 @@ end
 defmodule ContextBot.Workers.ResearchWorkerTest do
   use ContextBot.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias ContextBot.ATProto.TID
   alias ContextBot.Settings
   alias ContextBot.Workers.ResearchWorker
@@ -149,6 +151,23 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
 
     # The future PDS worker can only become visible in the same commit as this queryable intent.
     assert Repo.get!(Invocation, invocation.id).reply_record == expected_record
+  end
+
+  test "logs a research attempt without provider or invocation content" do
+    invocation = invocation("logged-research", :thread_ready)
+    configure_runner({:ok, runner_result()})
+    configure_worker()
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    log = capture_log([level: :info], fn -> assert :ok = perform(invocation) end)
+
+    assert log =~ "\"invocation_id\":#{invocation.id}"
+    assert log =~ "\"stage\":\"researching\""
+    assert log =~ "\"attempt_kind\":\"research\""
+    refute log =~ invocation.invocation_uri
+    refute log =~ "Frozen concise context"
   end
 
   test "rolls back reply evidence and job together when publication enqueue fails" do

@@ -13,6 +13,7 @@ defmodule ContextBot.ATProto.Session do
   @refresh_session_path "/xrpc/com.atproto.server.refreshSession"
   @default_timeout 15_000
   @default_reauthentication_cooldown_ms 30_000
+  @default_status_timeout_ms 1_000
 
   @type server :: GenServer.server()
   @type session_error ::
@@ -55,10 +56,14 @@ defmodule ContextBot.ATProto.Session do
   end
 
   @spec status() :: {:ok, %{authenticated?: boolean(), did: String.t()}}
-  def status, do: status(__MODULE__)
+  def status, do: status(__MODULE__, @default_status_timeout_ms)
 
   @spec status(server()) :: {:ok, %{authenticated?: boolean(), did: String.t()}}
-  def status(server), do: GenServer.call(server, :status, :infinity)
+  def status(server), do: status(server, @default_status_timeout_ms)
+
+  @spec status(server(), pos_integer()) :: {:ok, %{authenticated?: boolean(), did: String.t()}}
+  def status(server, timeout_ms) when is_integer(timeout_ms) and timeout_ms > 0,
+    do: GenServer.call(server, :status, timeout_ms)
 
   @impl true
   def init(options) do

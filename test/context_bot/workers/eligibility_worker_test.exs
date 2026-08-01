@@ -14,6 +14,8 @@ end
 defmodule ContextBot.Workers.EligibilityWorkerTest do
   use ContextBot.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias ContextBot.Settings
   alias ContextBot.Workers.EligibilityWorker
   alias ContextBot.Workers.EligibilityWorkerTest.GateStub
@@ -58,6 +60,22 @@ defmodule ContextBot.Workers.EligibilityWorkerTest do
 
     assert [%Oban.Job{worker: "ContextBot.Workers.ThreadWorker", queue: "thread"}] =
              Repo.all(Oban.Job)
+  end
+
+  test "logs an eligibility attempt using only allowlisted metadata" do
+    invocation = invocation("logged-eligibility", :received)
+    configure(settings(operator_allowed_dids: [@actor_did]))
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    log = capture_log([level: :info], fn -> assert :ok = perform(invocation) end)
+
+    assert log =~ "\"invocation_id\":#{invocation.id}"
+    assert log =~ "\"stage\":\"checking_eligibility\""
+    assert log =~ "\"attempt_kind\":\"eligibility\""
+    refute log =~ invocation.invocation_uri
+    refute log =~ @actor_did
   end
 
   test "resumes its own checking_eligibility checkpoint" do

@@ -16,7 +16,7 @@ defmodule ContextBot.Workers.ReplyWorker do
   import Ecto.Query
 
   alias ContextBot.ATProto.ReqClient
-  alias ContextBot.Repo
+  alias ContextBot.{Operations, Repo}
   alias ContextBot.Workflow.{Invocation, Store}
 
   @collection "app.bsky.feed.post"
@@ -34,7 +34,7 @@ defmodule ContextBot.Workers.ReplyWorker do
 
     case find_invocation(uri, cid) do
       nil -> :ok
-      invocation -> claim_and_publish(invocation, claim_token(job), dependencies)
+      invocation -> claim_and_publish(invocation, job, claim_token(job), dependencies)
     end
   end
 
@@ -57,19 +57,41 @@ defmodule ContextBot.Workers.ReplyWorker do
     |> Repo.one()
   end
 
-  defp claim_and_publish(invocation, token, dependencies) do
+  defp claim_and_publish(invocation, job, token, dependencies) do
     now = dependencies.now.()
     stale_before = DateTime.add(now, -dependencies.claim_lease_ms, :millisecond)
 
     case Store.claim_publication(invocation, token, now, stale_before) do
       {:ok, claimed} ->
-        publish(claimed, token, dependencies)
+        logged_publish(claimed, job, token, dependencies)
 
       {:error, reason} when reason in [:busy, :stale_stage] ->
         :ok
 
       {:error, changeset} ->
         raise Ecto.InvalidChangesetError, action: :update, changeset: changeset
+    end
+  end
+
+  defp logged_publish(invocation, job, token, dependencies) do
+    started_at = System.monotonic_time(:millisecond)
+    result = publish(invocation, token, dependencies)
+
+    Operations.log_attempt(invocation,
+      attempt_kind: :publication,
+      attempt_index: job.attempt,
+      duration_ms: System.monotonic_time(:millisecond) - started_at,
+      failure_category: publication_failure(invocation, result)
+    )
+
+    result
+  end
+
+  defp publication_failure(invocation, result) do
+    case {Repo.reload!(invocation), result} do
+      {%Invocation{stage: :failed, failure_category: category}, _result} -> category
+      {_nonterminal_or_complete, {:error, _reason}} -> :publication_conflict
+      {_nonterminal_or_complete, _result} -> nil
     end
   end
 

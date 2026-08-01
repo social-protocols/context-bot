@@ -33,3 +33,38 @@
 ## Commit
 
 - Planned commit message: `feat: recover deferred context bot work`
+
+## Formal review fix round 1
+
+### TDD evidence
+
+- Initial review RED for findings 1–4: the deferred-worker suite failed 7/11 for the intended causes: deferred-capacity backlog did not drain, `checking_eligibility` was not recovered, completed leased work was duplicated, cancelled/discarded histories were retried, and no matching recovery index existed.
+- Findings 1–4 GREEN: the deferred-worker suite passed 11/11 after the bounded recovery and capacity changes.
+- Initial findings 5–7 run was compile-blocked by a partial-patch syntax error. After correcting only that corruption, the focused suite ran 74 tests and failed exactly 6: linked health-task failure, absent eligibility/maintenance/thread/publication logs, and non-cumulative budget selection.
+- Findings 5–7 GREEN: the same focused suite passed 74/74 after implementing the missing behavior.
+- Broader affected-module verification passed 124/124 across operations, all five workers, admission, ATProto session handling, and the research runner.
+
+### Corrections
+
+- Deferred-capacity rows no longer consume active capacity. The serialized immediate transaction now admits at most the currently free slots even when backlog exceeds `MAX_PENDING`.
+- Recovery scans exactly the configured candidate batch and performs only per-candidate, worker-and-URI/CID-scoped latest-job lookups; no global active-job materialization remains.
+- Missing jobs recover, active jobs suppress duplicates, cancelled/discarded jobs become finite safe terminal failures, and completed research/publication jobs recover only after their claim lease expires. `checking_eligibility` now recovers through `EligibilityWorker`.
+- Added the matching `(stage, received_at, id)` recovery-scan index and a persisted finite `deferred_attempt_kind` checkpoint.
+- Deferred budget selection uses each workflow's actual next-attempt reservation and subtracts selected reservations cumulatively during the serialized batch.
+- Health session inspection is finite and isolated in an unlinked monitored process; timeout, exit, and exception cases degrade to `unavailable` without leaking provider exception text.
+- Eligibility, thread, research, publication, and maintenance execution paths now call the structured logger using only invocation ID, finite stage/kind, attempt index, duration, status, and safe failure category.
+
+### Scoped self-audit
+
+- Confirmed terminal recovery categories remain finite and stage-appropriate and that terminalization clears both claim leases.
+- Confirmed cancelled/discarded histories are never recreated, completed jobs with fresh leases are suppressed, and expired leases recover.
+- Found that the initial recovery index placed `defer_until` between `stage` and the recovery ordering columns; corrected it to `(stage, received_at, id)` so it matches the bounded recovery scan.
+- Credo identified excess cyclomatic complexity in recovery classification; split the state handling into small helpers without changing behavior.
+
+### Verification
+
+- Fresh `direnv exec . just check`: formatting, warnings-as-errors compilation, strict Credo, ShellCheck, 291 ExUnit tests, secrets tests, and Dialyzer all passed; Dialyzer reported 0 errors.
+
+### Commit
+
+- Planned commit message: `fix: bound workflow recovery`

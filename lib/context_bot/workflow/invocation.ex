@@ -65,6 +65,7 @@ defmodule ContextBot.Workflow.Invocation do
     :anthropic_messages,
     :anthropic_attempt_sequence,
     :anthropic_usage,
+    :deferred_attempt_kind,
     :research_claim_token,
     :research_claimed_at,
     :selected_reply,
@@ -121,6 +122,7 @@ defmodule ContextBot.Workflow.Invocation do
     field :anthropic_responses, {:array, :map}, default: [], load_in_query: false
     field :anthropic_attempt_sequence, :integer, default: 0
     field :anthropic_usage, :map
+    field :deferred_attempt_kind, Ecto.Enum, values: [:research, :continuation, :repair, :retry]
     field :research_claim_token, :string
     field :research_claimed_at, :utc_datetime_usec
     field :selected_reply, :string

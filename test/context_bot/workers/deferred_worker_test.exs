@@ -1,6 +1,8 @@
 defmodule ContextBot.Workers.DeferredWorkerTest do
   use ContextBot.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias ContextBot.Settings
   alias ContextBot.Workers.DeferredWorker
   alias ContextBot.Workflow.Invocation
@@ -89,6 +91,27 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
            end)
   end
 
+  test "a backlog larger than max pending drains only into currently free active slots" do
+    backlog =
+      for index <- 1..5 do
+        invocation("capacity-backlog-#{index}", :deferred_capacity, minutes_ago: 10 - index)
+      end
+
+    configure(batch_size: 10, settings: settings(max_pending: 2))
+
+    assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
+
+    assert Enum.map(backlog, &Repo.reload!(&1).stage) == [
+             :received,
+             :received,
+             :deferred_capacity,
+             :deferred_capacity,
+             :deferred_capacity
+           ]
+
+    assert length(Repo.all(Oban.Job)) == 2
+  end
+
   test "budget work waits for the UTC rollover and all prior admission windows" do
     budget = accepted_budget_invocation("budget-rollover", minutes_ago: 3)
 
@@ -141,9 +164,64 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
     assert [] = Repo.all(Oban.Job)
   end
 
+  test "budget selection uses each actual next-attempt cost cumulatively" do
+    cheap =
+      accepted_budget_invocation("cheap-repair",
+        minutes_ago: 4,
+        deferred_attempt_kind: :repair
+      )
+
+    expensive =
+      accepted_budget_invocation("expensive-research",
+        minutes_ago: 3,
+        deferred_attempt_kind: :research
+      )
+
+    constrained =
+      settings(
+        anthropic_daily_budget_usd: "9.000000",
+        anthropic_research_reservation_usd: "5.500000",
+        anthropic_continuation_reservation_usd: "5.500000",
+        anthropic_repair_reservation_usd: "4.100000",
+        anthropic_retry_reservation_usd: "5.500000"
+      )
+
+    configure(batch_size: 10, settings: constrained)
+    assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
+
+    assert Repo.reload!(cheap).stage == :thread_ready
+    assert Repo.reload!(expensive).stage == :deferred_budget
+
+    assert Enum.count(Repo.all(Oban.Job), &(&1.worker == "ContextBot.Workers.ResearchWorker")) ==
+             1
+  end
+
+  test "maintenance emits only allowlisted attempt metadata for claimed work" do
+    invocation = invocation("logged-maintenance", :deferred_capacity, minutes_ago: 2)
+    configure()
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    log =
+      capture_log([level: :info], fn ->
+        assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}, attempt: 3})
+      end)
+
+    assert log =~ "context_bot_attempt"
+    assert log =~ "\"invocation_id\":#{invocation.id}"
+    assert log =~ "\"attempt_kind\":\"maintenance\""
+    assert log =~ "\"attempt_index\":3"
+    refute log =~ invocation.invocation_uri
+    refute log =~ invocation.actor_did
+    refute log =~ "notification-body"
+  end
+
   test "recovery enqueues exactly the idempotent worker for every resumable stage" do
     expected = [
       {invocation("recover-received", :received, minutes_ago: 9),
+       "ContextBot.Workers.EligibilityWorker"},
+      {invocation("recover-checking", :checking_eligibility, minutes_ago: 8),
        "ContextBot.Workers.EligibilityWorker"},
       {invocation("recover-thread", :capturing_thread, minutes_ago: 8),
        "ContextBot.Workers.ThreadWorker"},
@@ -167,13 +245,13 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
     assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
 
     jobs = Repo.all(from job in Oban.Job, order_by: [asc: job.id])
-    assert length(jobs) == 6
+    assert length(jobs) == 7
 
     assert Enum.map(jobs, &{&1.worker, &1.args}) ==
              Enum.map(expected, fn {invocation, worker} -> {worker, job_args(invocation)} end)
   end
 
-  test "an older stage with active work does not consume the missing-job recovery batch" do
+  test "bounded recovery lets active work consume one pass but not permanently starve later work" do
     active = invocation("already-active", :received, minutes_ago: 5)
     missing = invocation("actually-missing", :capturing_thread, minutes_ago: 4)
 
@@ -187,6 +265,17 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
 
     assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
 
+    assert Repo.all(from job in Oban.Job, order_by: [asc: job.id])
+           |> Enum.map(&{&1.worker, &1.args}) == [
+             {"ContextBot.Workers.EligibilityWorker", job_args(active)}
+           ]
+
+    active
+    |> Invocation.transition_changeset(%{status: :complete, stage: :complete, completed_at: @now})
+    |> Repo.update!()
+
+    assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
+
     assert Enum.map(
              Repo.all(from job in Oban.Job, order_by: [asc: job.id]),
              &{&1.worker, &1.args}
@@ -194,6 +283,88 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
              {"ContextBot.Workers.EligibilityWorker", job_args(active)},
              {"ContextBot.Workers.ThreadWorker", job_args(missing)}
            ]
+  end
+
+  test "discarded and cancelled jobs terminalize safely without receiving fresh retries" do
+    discarded = invocation("discarded", :received, minutes_ago: 5)
+    cancelled = invocation("cancelled", :checking_eligibility, minutes_ago: 4)
+    missing = invocation("after-terminal-history", :capturing_thread, minutes_ago: 3)
+
+    terminal_job(discarded, "ContextBot.Workers.EligibilityWorker", "discarded")
+    terminal_job(cancelled, "ContextBot.Workers.EligibilityWorker", "cancelled")
+    configure(batch_size: 2)
+
+    assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
+
+    assert Repo.reload!(discarded).stage == :failed
+    assert Repo.reload!(discarded).failure_category == :identity_unavailable
+    assert Repo.reload!(cancelled).stage == :failed
+    assert Repo.reload!(cancelled).failure_category == :identity_unavailable
+    refute Enum.any?(Repo.all(Oban.Job), &(&1.args == job_args(missing)))
+
+    assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
+    assert Enum.any?(Repo.all(Oban.Job), &(&1.args == job_args(missing)))
+
+    assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
+    assert Enum.count(Repo.all(Oban.Job), &(&1.args == job_args(discarded))) == 1
+    assert Enum.count(Repo.all(Oban.Job), &(&1.args == job_args(cancelled))) == 1
+  end
+
+  test "fresh research and publication leases suppress completed no-op recovery until expiry" do
+    fresh_research =
+      invocation("fresh-research", :researching,
+        minutes_ago: 5,
+        research_claim_token: "research-old-job",
+        research_claimed_at: DateTime.add(@now, -1, :second)
+      )
+
+    fresh_publication =
+      invocation("fresh-publication", :publishing,
+        minutes_ago: 4,
+        publication_claim_token: "publication-old-job",
+        publication_claimed_at: DateTime.add(@now, -1, :second)
+      )
+
+    terminal_job(fresh_research, "ContextBot.Workers.ResearchWorker", "completed")
+    terminal_job(fresh_publication, "ContextBot.Workers.ReplyWorker", "completed")
+    configure(batch_size: 10, research_claim_lease_ms: 60_000, publication_claim_lease_ms: 60_000)
+
+    assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
+    assert Enum.count(Repo.all(Oban.Job), &(&1.args == job_args(fresh_research))) == 1
+    assert Enum.count(Repo.all(Oban.Job), &(&1.args == job_args(fresh_publication))) == 1
+
+    configure(
+      now: DateTime.add(@now, 61, :second),
+      batch_size: 10,
+      research_claim_lease_ms: 60_000,
+      publication_claim_lease_ms: 60_000
+    )
+
+    assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
+    assert Enum.count(Repo.all(Oban.Job), &(&1.args == job_args(fresh_research))) == 2
+    assert Enum.count(Repo.all(Oban.Job), &(&1.args == job_args(fresh_publication))) == 2
+  end
+
+  test "a maintenance pass inspects no more invocation candidates than its configured batch" do
+    invocations =
+      for index <- 1..5 do
+        invocation("bounded-terminal-#{index}", :received, minutes_ago: 10 - index)
+      end
+
+    Enum.each(invocations, fn invocation ->
+      terminal_job(invocation, "ContextBot.Workers.EligibilityWorker", "discarded")
+    end)
+
+    configure(batch_size: 2)
+    assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
+
+    assert Enum.count(invocations, &(Repo.reload!(&1).stage == :failed)) == 2
+    assert Enum.count(invocations, &(Repo.reload!(&1).stage == :received)) == 3
+  end
+
+  test "workflow recovery query has a matching stage and due-order index" do
+    %{rows: rows} = Repo.query!("PRAGMA index_list('invocations')")
+    assert Enum.any?(rows, fn row -> Enum.at(row, 1) == "invocations_recovery_scan_index" end)
   end
 
   defp configure(overrides \\ []) do
@@ -257,5 +428,24 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
 
   defp job_args(invocation) do
     %{"uri" => invocation.invocation_uri, "cid" => invocation.notification_cid}
+  end
+
+  defp terminal_job(invocation, worker, state) do
+    job =
+      invocation
+      |> job_args()
+      |> Oban.Job.new(worker: worker, queue: :maintenance)
+      |> Repo.insert!()
+
+    changes =
+      case state do
+        "completed" -> [state: state, completed_at: @now]
+        "cancelled" -> [state: state, cancelled_at: @now]
+        "discarded" -> [state: state, discarded_at: @now]
+      end
+
+    job
+    |> Ecto.Changeset.change(changes)
+    |> Repo.update!()
   end
 end

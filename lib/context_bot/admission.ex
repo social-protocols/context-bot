@@ -160,7 +160,9 @@ defmodule ContextBot.Admission do
   defp pending_count(excluded_invocation_id \\ nil) do
     query =
       from invocation in Invocation,
-        where: invocation.status not in @terminal_statuses
+        where:
+          invocation.status not in @terminal_statuses and
+            invocation.status != :deferred_capacity
 
     query =
       if excluded_invocation_id do

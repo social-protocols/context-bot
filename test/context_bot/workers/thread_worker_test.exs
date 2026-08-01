@@ -28,6 +28,8 @@ end
 defmodule ContextBot.Workers.ThreadWorkerTest do
   use ContextBot.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias ContextBot.ATProto.ReqClient
   alias ContextBot.Settings
   alias ContextBot.Workers.ThreadWorker
@@ -134,6 +136,22 @@ defmodule ContextBot.Workers.ThreadWorkerTest do
     assert :ok = perform(persisted)
     refute_receive {:thread_fetch, _, _, _}
     assert Repo.aggregate(Oban.Job, :count) == 1
+  end
+
+  test "logs a thread attempt without thread or identity content" do
+    invocation = invocation()
+    configure_fake({:ok, 200, %{}, fixture("thread_ancestors.json")})
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    log = capture_log([level: :info], fn -> assert :ok = perform(invocation) end)
+
+    assert log =~ "\"invocation_id\":#{invocation.id}"
+    assert log =~ "\"stage\":\"capturing_thread\""
+    assert log =~ "\"attempt_kind\":\"thread\""
+    refute log =~ invocation.invocation_uri
+    refute log =~ "The root claim"
   end
 
   test "rolls back both the thread snapshot and research job when the handoff transaction fails" do

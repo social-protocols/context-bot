@@ -15,14 +15,29 @@ defmodule ContextBot.Operations do
 
   @terminal_stages [:ineligible, :complete, :failed]
   @active_job_states ["available", "scheduled", "executing", "retryable", "suspended"]
-  @attempt_kinds [:eligibility, :thread, :research, :continuation, :repair, :retry, :publication]
+  @attempt_kinds [
+    :eligibility,
+    :thread,
+    :research,
+    :continuation,
+    :repair,
+    :retry,
+    :publication,
+    :maintenance
+  ]
+  @default_session_timeout_ms 250
 
   @spec health(keyword()) :: map()
   def health(options \\ []) when is_list(options) do
     config = Keyword.merge(Application.get_env(:context_bot, __MODULE__, []), options)
     now = Keyword.get(config, :now, DateTime.utc_now())
     settings = Keyword.get(config, :settings, Application.fetch_env!(:context_bot, :settings))
-    session_status = Keyword.get(config, :session_status, &Session.status/0)
+
+    session_timeout_ms =
+      positive_timeout(Keyword.get(config, :session_timeout_ms, @default_session_timeout_ms))
+
+    session_status =
+      Keyword.get(config, :session_status, fn -> Session.status(Session, session_timeout_ms) end)
 
     aggregates = safe_aggregates(now)
 
@@ -30,13 +45,19 @@ defmodule ContextBot.Operations do
       status: "ok",
       bot: %{
         enabled: Settings.bot_enabled?(settings),
-        session: session_state(settings, session_status)
+        session: session_state(settings, session_status, session_timeout_ms)
       }
     })
   end
 
   @spec log_attempt(Invocation.t(), keyword()) :: :ok
   def log_attempt(%Invocation{id: id, stage: stage}, attributes) when is_list(attributes) do
+    log_attempt(id, stage, attributes)
+  end
+
+  @spec log_attempt(pos_integer(), atom(), keyword()) :: :ok
+  def log_attempt(id, stage, attributes)
+      when is_integer(id) and id > 0 and is_atom(stage) and is_list(attributes) do
     payload = %{
       invocation_id: id,
       stage: Atom.to_string(stage),
@@ -140,18 +161,50 @@ defmodule ContextBot.Operations do
     end
   end
 
-  defp session_state(%Settings{bot_enabled: false}, _status), do: "disabled"
+  defp session_state(%Settings{bot_enabled: false}, _status, _timeout), do: "disabled"
 
-  defp session_state(%Settings{bot_enabled: true}, status) do
-    case status.() do
-      {:ok, %{authenticated?: true}} -> "authenticated"
-      {:ok, %{authenticated?: false}} -> "unauthenticated"
-      _unavailable -> "unavailable"
+  defp session_state(%Settings{bot_enabled: true}, status, timeout_ms) do
+    caller = self()
+    result_tag = make_ref()
+
+    {pid, monitor} =
+      spawn_monitor(fn ->
+        send(caller, {result_tag, safely_call_status(status)})
+      end)
+
+    receive do
+      {^result_tag, result} ->
+        Process.demonitor(monitor, [:flush])
+        classify_session_status(result)
+
+      {:DOWN, ^monitor, :process, ^pid, _reason} ->
+        "unavailable"
+    after
+      timeout_ms ->
+        Process.exit(pid, :kill)
+        await_down(monitor, pid)
+        "unavailable"
     end
+  end
+
+  defp classify_session_status({:ok, %{authenticated?: true}}), do: "authenticated"
+  defp classify_session_status({:ok, %{authenticated?: false}}), do: "unauthenticated"
+  defp classify_session_status(_unavailable), do: "unavailable"
+
+  defp safely_call_status(status) do
+    status.()
   rescue
-    _provider_failure -> "unavailable"
+    _provider_failure -> :unavailable
   catch
-    :exit, _provider_exit -> "unavailable"
+    :exit, _provider_exit -> :unavailable
+  end
+
+  defp await_down(monitor, pid) do
+    receive do
+      {:DOWN, ^monitor, :process, ^pid, _reason} -> :ok
+    after
+      50 -> Process.demonitor(monitor, [:flush])
+    end
   end
 
   defp safe_attempt_kind(kind) when kind in @attempt_kinds, do: Atom.to_string(kind)
@@ -170,4 +223,7 @@ defmodule ContextBot.Operations do
     |> Failure.category()
     |> Atom.to_string()
   end
+
+  defp positive_timeout(value) when is_integer(value) and value > 0, do: value
+  defp positive_timeout(_invalid), do: @default_session_timeout_ms
 end

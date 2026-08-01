@@ -10,7 +10,7 @@ defmodule ContextBot.Workers.EligibilityWorker do
 
   import Ecto.Query
 
-  alias ContextBot.{Admission, Eligibility, Repo}
+  alias ContextBot.{Admission, Eligibility, Operations, Repo}
   alias ContextBot.ATProto.ReqClient
   alias ContextBot.Workflow.{Invocation, Store}
 
@@ -18,11 +18,11 @@ defmodule ContextBot.Workers.EligibilityWorker do
   @evidence_value_max_bytes 256
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"uri" => uri, "cid" => cid}})
+  def perform(%Oban.Job{args: %{"uri" => uri, "cid" => cid}} = job)
       when is_binary(uri) and is_binary(cid) do
     case find_invocation(uri, cid) do
       nil -> :ok
-      invocation -> process_invocation(invocation, dependencies())
+      invocation -> process_invocation(invocation, job, dependencies())
     end
   end
 
@@ -37,12 +37,29 @@ defmodule ContextBot.Workers.EligibilityWorker do
     |> Repo.one()
   end
 
-  defp process_invocation(invocation, dependencies) do
+  defp process_invocation(invocation, job, dependencies) do
     case claim(invocation) do
-      {:ok, claimed} -> check_eligibility(claimed, dependencies)
+      {:ok, claimed} -> logged_check(claimed, job, dependencies)
       :ignore -> :ok
     end
   end
+
+  defp logged_check(invocation, job, dependencies) do
+    started_at = System.monotonic_time(:millisecond)
+    result = check_eligibility(invocation, dependencies)
+
+    Operations.log_attempt(invocation,
+      attempt_kind: :eligibility,
+      attempt_index: job.attempt,
+      duration_ms: System.monotonic_time(:millisecond) - started_at,
+      failure_category: eligibility_failure(result)
+    )
+
+    result
+  end
+
+  defp eligibility_failure({:error, _reason}), do: :identity_unavailable
+  defp eligibility_failure(_result), do: nil
 
   defp claim(%Invocation{stage: :checking_eligibility} = invocation),
     do: {:ok, invocation}

@@ -10,21 +10,18 @@ defmodule ContextBot.Workers.DeferredWorker do
 
   import Ecto.Query
 
-  alias ContextBot.{Admission, Repo, Settings}
+  alias ContextBot.{Admission, Operations, Repo, Settings}
   alias ContextBot.Research.Budget
   alias ContextBot.Workflow.Invocation
 
   @default_batch_size 25
   @maximum_batch_size 100
+  @default_research_claim_lease_ms 21_600_000
+  @default_publication_claim_lease_ms 300_000
   @active_job_states ["available", "scheduled", "executing", "retryable", "suspended"]
-  @workflow_workers [
-    "ContextBot.Workers.EligibilityWorker",
-    "ContextBot.Workers.ThreadWorker",
-    "ContextBot.Workers.ResearchWorker",
-    "ContextBot.Workers.ReplyWorker"
-  ]
   @recovery_stages [
     :received,
+    :checking_eligibility,
     :capturing_thread,
     :thread_ready,
     :researching,
@@ -33,33 +30,53 @@ defmodule ContextBot.Workers.DeferredWorker do
   ]
 
   @impl Oban.Worker
-  def perform(%Oban.Job{}) do
+  def perform(%Oban.Job{} = job) do
     dependencies = dependencies()
 
-    dependencies.now
-    |> claim_batch(dependencies.settings, dependencies.batch_size)
+    dependencies
+    |> claim_batch()
     |> Enum.reduce_while(:ok, fn work, :ok ->
-      case enqueue_once(work) do
+      started_at = System.monotonic_time(:millisecond)
+      result = enqueue_once(work)
+
+      Operations.log_attempt(work.invocation_id, work.stage,
+        attempt_kind: :maintenance,
+        attempt_index: job.attempt,
+        duration_ms: System.monotonic_time(:millisecond) - started_at
+      )
+
+      case result do
         :ok -> {:cont, :ok}
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
   end
 
-  defp claim_batch(now, settings, batch_size) do
+  defp claim_batch(dependencies) do
     {:ok, work} =
       Repo.transaction(
         fn ->
-          active_keys = active_work_keys()
-          recovery = missing_recovery(batch_size, active_keys)
-          remaining = batch_size - length(recovery)
+          candidates = recovery_candidates(dependencies.batch_size)
 
-          deferred =
-            now
+          recovery =
+            Enum.flat_map(candidates, &classify_recovery(&1, dependencies))
+
+          remaining = dependencies.batch_size - length(candidates)
+
+          {deferred, _remaining_budget} =
+            dependencies.now
             |> deferred_candidates(remaining)
-            |> Enum.flat_map(&claim_candidate(&1, now, settings))
+            |> Enum.reduce(
+              {[], remaining_budget(dependencies.now, dependencies.settings)},
+              fn invocation, {work, budget} ->
+                {claimed, budget} =
+                  claim_candidate(invocation, dependencies.now, dependencies.settings, budget)
 
-          recovery ++ deferred
+                {Enum.reverse(claimed, work), budget}
+              end
+            )
+
+          recovery ++ Enum.reverse(deferred)
         end,
         mode: :immediate
       )
@@ -67,15 +84,12 @@ defmodule ContextBot.Workers.DeferredWorker do
     work
   end
 
-  defp missing_recovery(batch_size, active_keys) do
+  defp recovery_candidates(batch_size) do
     Invocation
     |> where([invocation], invocation.stage in ^@recovery_stages)
     |> order_by([invocation], asc: invocation.received_at, asc: invocation.id)
-    |> limit(^(batch_size + MapSet.size(active_keys)))
+    |> limit(^batch_size)
     |> Repo.all()
-    |> Enum.map(&recovery_work/1)
-    |> Enum.reject(&(work_key(&1) in active_keys))
-    |> Enum.take(batch_size)
   end
 
   defp deferred_candidates(_now, remaining) when remaining <= 0, do: []
@@ -93,60 +107,85 @@ defmodule ContextBot.Workers.DeferredWorker do
     |> Repo.all()
   end
 
-  defp active_work_keys do
-    Oban.Job
-    |> where(
-      [job],
-      job.state in ^@active_job_states and job.worker in ^@workflow_workers
-    )
-    |> select([job], {job.worker, job.args})
-    |> Repo.all()
-    |> MapSet.new(fn {worker, args} ->
-      {worker, Map.get(args, "uri"), Map.get(args, "cid")}
-    end)
-  end
-
-  defp claim_candidate(%Invocation{stage: :deferred_capacity} = invocation, _now, settings) do
+  defp claim_candidate(
+         %Invocation{stage: :deferred_capacity} = invocation,
+         _now,
+         settings,
+         remaining_budget
+       ) do
     if Admission.capacity_available?(settings, invocation.id) do
-      invocation
-      |> move_to(:received, %{
-        eligibility_method: nil,
-        eligibility_evidence: nil,
-        defer_until: nil
-      })
-      |> eligibility_work()
-      |> List.wrap()
+      work =
+        invocation
+        |> move_to(:received, %{
+          eligibility_method: nil,
+          eligibility_evidence: nil,
+          defer_until: nil
+        })
+        |> eligibility_work()
+        |> List.wrap()
+
+      {work, remaining_budget}
     else
-      []
+      {[], remaining_budget}
     end
   end
 
-  defp claim_candidate(%Invocation{stage: :deferred_rate} = invocation, _now, _settings) do
-    invocation
-    |> move_to(:received, %{
-      eligibility_method: nil,
-      eligibility_evidence: nil,
-      defer_until: nil
-    })
-    |> eligibility_work()
-    |> List.wrap()
+  defp claim_candidate(
+         %Invocation{stage: :deferred_rate} = invocation,
+         _now,
+         settings,
+         remaining_budget
+       ) do
+    if Admission.capacity_available?(settings, invocation.id) do
+      work =
+        invocation
+        |> move_to(:received, %{
+          eligibility_method: nil,
+          eligibility_evidence: nil,
+          defer_until: nil
+        })
+        |> eligibility_work()
+        |> List.wrap()
+
+      {work, remaining_budget}
+    else
+      {[], remaining_budget}
+    end
   end
 
-  defp claim_candidate(%Invocation{stage: :deferred_budget} = invocation, now, settings) do
+  defp claim_candidate(
+         %Invocation{stage: :deferred_budget} = invocation,
+         now,
+         settings,
+         remaining_budget
+       ) do
+    attempt_kind = invocation.deferred_attempt_kind || :research
+    reservation = Settings.anthropic_reservation_microdollars(settings, attempt_kind)
+
     if accepted_workflow?(invocation) and Admission.resume_available?(invocation, now, settings) and
-         budget_available?(now, settings) do
-      invocation
-      |> move_to(:thread_ready, %{defer_until: nil})
-      |> research_work()
-      |> List.wrap()
+         reservation <= remaining_budget do
+      work =
+        invocation
+        |> move_to(:thread_ready, %{
+          defer_until: nil,
+          deferred_attempt_kind: attempt_kind
+        })
+        |> research_work()
+        |> List.wrap()
+
+      {work, remaining_budget - reservation}
     else
-      []
+      {[], remaining_budget}
     end
   end
 
-  defp claim_candidate(%Invocation{}, _now, _settings), do: []
+  defp claim_candidate(%Invocation{}, _now, _settings, remaining_budget),
+    do: {[], remaining_budget}
 
   defp recovery_work(%Invocation{stage: :received} = invocation),
+    do: eligibility_work(invocation)
+
+  defp recovery_work(%Invocation{stage: :checking_eligibility} = invocation),
     do: eligibility_work(invocation)
 
   defp recovery_work(%Invocation{stage: :capturing_thread} = invocation),
@@ -178,17 +217,11 @@ defmodule ContextBot.Workers.DeferredWorker do
       invocation.current_cid != ""
   end
 
-  defp budget_available?(now, %Settings{anthropic_daily_budget_microdollars: limit} = settings)
-       when is_integer(limit) and limit > 0 do
-    minimum_reservation =
-      [:research, :continuation, :repair, :retry]
-      |> Enum.map(&Settings.anthropic_reservation_microdollars(settings, &1))
-      |> Enum.min()
+  defp remaining_budget(now, %Settings{anthropic_daily_budget_microdollars: limit})
+       when is_integer(limit) and limit > 0,
+       do: Budget.remaining(now, limit)
 
-    Budget.remaining(now, limit) >= minimum_reservation
-  end
-
-  defp budget_available?(_now, _settings), do: false
+  defp remaining_budget(_now, _settings), do: 0
 
   defp eligibility_work(invocation),
     do: work(invocation, "ContextBot.Workers.EligibilityWorker", :eligibility)
@@ -205,13 +238,132 @@ defmodule ContextBot.Workers.DeferredWorker do
   defp work(invocation, worker, queue) do
     %{
       args: %{"uri" => invocation.invocation_uri, "cid" => invocation.notification_cid},
+      invocation_id: invocation.id,
       queue: queue,
+      stage: invocation.stage,
       worker: worker
     }
   end
 
-  defp work_key(%{args: args, worker: worker}),
-    do: {worker, Map.get(args, "uri"), Map.get(args, "cid")}
+  defp classify_recovery(invocation, dependencies) do
+    work = recovery_work(invocation)
+    classify_target_job(latest_target_job(work), invocation, work, dependencies)
+  end
+
+  defp classify_target_job(nil, invocation, work, dependencies) do
+    if fresh_lease?(invocation, dependencies), do: [], else: [work]
+  end
+
+  defp classify_target_job(
+         %Oban.Job{state: state},
+         _invocation,
+         _work,
+         _dependencies
+       )
+       when state in @active_job_states,
+       do: []
+
+  defp classify_target_job(
+         %Oban.Job{state: state},
+         invocation,
+         _work,
+         dependencies
+       )
+       when state in ["cancelled", "discarded"] do
+    terminalize_recovery(invocation, "job_#{state}", dependencies.now)
+    []
+  end
+
+  defp classify_target_job(%Oban.Job{state: "completed"}, invocation, work, dependencies),
+    do: classify_completed_job(invocation, work, dependencies)
+
+  defp classify_target_job(%Oban.Job{}, _invocation, _work, _dependencies), do: []
+
+  defp classify_completed_job(invocation, work, dependencies) do
+    cond do
+      fresh_lease?(invocation, dependencies) ->
+        []
+
+      leased_stage?(invocation.stage) ->
+        [work]
+
+      invocation.stage == :thread_ready and not is_nil(invocation.deferred_attempt_kind) ->
+        [work]
+
+      true ->
+        terminalize_recovery(invocation, "job_completed_without_handoff", dependencies.now)
+        []
+    end
+  end
+
+  defp latest_target_job(%{args: %{"uri" => uri, "cid" => cid}, worker: worker}) do
+    Oban.Job
+    |> where(
+      [job],
+      job.worker == ^worker and
+        fragment("json_extract(?, '$.uri')", job.args) == ^uri and
+        fragment("json_extract(?, '$.cid')", job.args) == ^cid
+    )
+    |> order_by([job], desc: job.id)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  defp fresh_lease?(%Invocation{stage: :researching} = invocation, dependencies) do
+    lease_fresh?(
+      invocation.research_claim_token,
+      invocation.research_claimed_at,
+      dependencies.now,
+      dependencies.research_claim_lease_ms
+    )
+  end
+
+  defp fresh_lease?(%Invocation{stage: :publishing} = invocation, dependencies) do
+    lease_fresh?(
+      invocation.publication_claim_token,
+      invocation.publication_claimed_at,
+      dependencies.now,
+      dependencies.publication_claim_lease_ms
+    )
+  end
+
+  defp fresh_lease?(_invocation, _dependencies), do: false
+
+  defp lease_fresh?(token, %DateTime{} = claimed_at, now, lease_ms)
+       when is_binary(token) and token != "" do
+    stale_before = DateTime.add(now, -lease_ms, :millisecond)
+    DateTime.compare(claimed_at, stale_before) == :gt
+  end
+
+  defp lease_fresh?(_token, _claimed_at, _now, _lease_ms), do: false
+
+  defp leased_stage?(stage), do: stage in [:researching, :publishing]
+
+  defp terminalize_recovery(invocation, reason, now) do
+    invocation
+    |> Invocation.transition_changeset(%{
+      status: :failed,
+      stage: :failed,
+      failure_category: recovery_failure_category(invocation.stage),
+      failure_detail: %{"reason" => reason},
+      research_claim_token: nil,
+      research_claimed_at: nil,
+      publication_claim_token: nil,
+      publication_claimed_at: nil,
+      completed_at: now
+    })
+    |> Repo.update!()
+  end
+
+  defp recovery_failure_category(stage) when stage in [:received, :checking_eligibility],
+    do: :identity_unavailable
+
+  defp recovery_failure_category(:capturing_thread), do: :thread_unavailable
+
+  defp recovery_failure_category(stage) when stage in [:thread_ready, :researching],
+    do: :provider_response
+
+  defp recovery_failure_category(_reply_stage), do: :publication_conflict
 
   defp enqueue_once(%{args: args, queue: queue, worker: worker}) do
     changeset =
@@ -245,6 +397,14 @@ defmodule ContextBot.Workers.DeferredWorker do
     %{
       batch_size: batch_size(Keyword.get(config, :batch_size, @default_batch_size)),
       now: Keyword.get(config, :now, DateTime.utc_now()),
+      publication_claim_lease_ms:
+        Keyword.get(
+          config,
+          :publication_claim_lease_ms,
+          @default_publication_claim_lease_ms
+        ),
+      research_claim_lease_ms:
+        Keyword.get(config, :research_claim_lease_ms, @default_research_claim_lease_ms),
       settings: Keyword.get(config, :settings, Application.fetch_env!(:context_bot, :settings))
     }
   end

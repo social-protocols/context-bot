@@ -11,7 +11,7 @@ defmodule ContextBot.Workers.ThreadWorker do
   import Ecto.Query
 
   alias ContextBot.ATProto.ReqClient
-  alias ContextBot.Repo
+  alias ContextBot.{Operations, Repo}
   alias ContextBot.Thread.Canonicalizer
   alias ContextBot.Workflow.{Invocation, Store}
 
@@ -20,11 +20,11 @@ defmodule ContextBot.Workers.ThreadWorker do
   @maximum_backoff_seconds 300
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"uri" => uri, "cid" => cid}})
+  def perform(%Oban.Job{args: %{"uri" => uri, "cid" => cid}} = job)
       when is_binary(uri) and is_binary(cid) do
     case find_invocation(uri, cid) do
       %Invocation{stage: :capturing_thread} = invocation ->
-        capture(invocation, dependencies())
+        logged_capture(invocation, job, dependencies())
 
       _missing_or_unclaimable ->
         :ok
@@ -61,6 +61,23 @@ defmodule ContextBot.Workers.ThreadWorker do
 
     handle_fetch(result, invocation, dependencies)
   end
+
+  defp logged_capture(invocation, job, dependencies) do
+    started_at = System.monotonic_time(:millisecond)
+    result = capture(invocation, dependencies)
+
+    Operations.log_attempt(invocation,
+      attempt_kind: :thread,
+      attempt_index: job.attempt,
+      duration_ms: System.monotonic_time(:millisecond) - started_at,
+      failure_category: thread_failure(result)
+    )
+
+    result
+  end
+
+  defp thread_failure({:error, _reason}), do: :thread_unavailable
+  defp thread_failure(_result), do: nil
 
   defp fetch_with_timeout(client, uri, parent_height, timeout_ms) do
     task = Task.async(fn -> client.get_post_thread(uri, parent_height) end)

@@ -109,6 +109,33 @@ defmodule ContextBot.OperationsTest do
     assert disabled.bot == %{enabled: false, session: "disabled"}
   end
 
+  test "health bounds a blocked session lookup and degrades without losing liveness" do
+    started_at = System.monotonic_time(:millisecond)
+
+    health =
+      Operations.health(
+        now: @now,
+        settings:
+          Settings.load(
+            bot_enabled: true,
+            bot_did: "did:plc:botbotbotbotbotbotbotbot",
+            bot_handle: "contextbot.example",
+            bot_pds_url: "https://pds.private.example",
+            anthropic_daily_budget_usd: "10.000000"
+          ),
+        session_timeout_ms: 10,
+        session_status: fn ->
+          Process.sleep(100)
+          {:ok, %{authenticated?: true}}
+        end
+      )
+
+    duration_ms = System.monotonic_time(:millisecond) - started_at
+    assert health.status == "ok"
+    assert health.bot.session == "unavailable"
+    assert duration_ms < 80
+  end
+
   test "structured attempt logs contain only the finite allowlisted fields" do
     invocation = invocation(:researching, @now)
     previous_level = Logger.level()

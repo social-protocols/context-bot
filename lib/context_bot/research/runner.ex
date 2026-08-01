@@ -24,7 +24,7 @@ defmodule ContextBot.Research.Runner do
 
   @spec run(Invocation.t(), keyword() | map()) ::
           {:ok, result()}
-          | {:deferred, DateTime.t()}
+          | {:deferred, DateTime.t(), BudgetEntry.kind()}
           | {:error, atom() | {atom(), term()}}
   def run(%Invocation{} = invocation, options) do
     config = config(options)
@@ -96,7 +96,7 @@ defmodule ContextBot.Research.Runner do
         end
 
       {:error, :daily_budget_exhausted} ->
-        {:deferred, next_utc_rollover(now(config))}
+        {:deferred, next_utc_rollover(now(config)), kind}
 
       {:error, :stale_claim} ->
         {:error, :stale_claim}

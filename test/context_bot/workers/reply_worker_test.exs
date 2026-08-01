@@ -101,6 +101,8 @@ end
 defmodule ContextBot.Workers.ReplyWorkerTest do
   use ContextBot.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias ContextBot.Settings
   alias ContextBot.Workers.ReplyWorker
   alias ContextBot.Workers.ReplyWorkerTest.{PDS, Remote}
@@ -121,6 +123,23 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
     end)
 
     :ok
+  end
+
+  test "logs a publication attempt without record or identity content" do
+    invocation = invocation("logged-publication")
+    _remote = configure_remote()
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    log = capture_log([level: :info], fn -> assert :ok = perform(invocation) end)
+
+    assert log =~ "\"invocation_id\":#{invocation.id}"
+    assert log =~ "\"stage\":\"publishing\""
+    assert log =~ "\"attempt_kind\":\"publication\""
+    refute log =~ invocation.invocation_uri
+    refute log =~ @bot_did
+    refute log =~ invocation.reply_record["text"]
   end
 
   test "GETs the deterministic record before a create-only PUT and completes only after exact reconciliation" do
