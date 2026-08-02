@@ -19,16 +19,6 @@ defmodule ContextBot.Workers.DeferredWorker do
   @default_research_claim_lease_ms 21_600_000
   @default_publication_claim_lease_ms 300_000
   @active_job_states ["available", "scheduled", "executing", "retryable", "suspended"]
-  @recovery_stages [
-    :received,
-    :checking_eligibility,
-    :capturing_thread,
-    :thread_ready,
-    :researching,
-    :reply_ready,
-    :publishing
-  ]
-
   @impl Oban.Worker
   def perform(%Oban.Job{} = job) do
     dependencies = dependencies()
@@ -89,8 +79,22 @@ defmodule ContextBot.Workers.DeferredWorker do
   end
 
   defp recovery_candidates(batch_size) do
+    batch_size
+    |> recovery_query()
+    |> Repo.all()
+  end
+
+  @doc false
+  @spec recovery_query(pos_integer()) :: Ecto.Query.t()
+  def recovery_query(batch_size) when is_integer(batch_size) and batch_size > 0 do
     Invocation
-    |> where([invocation], invocation.stage in ^@recovery_stages)
+    |> where(
+      [invocation],
+      fragment(
+        "? IN ('received', 'checking_eligibility', 'capturing_thread', 'thread_ready', 'researching', 'reply_ready', 'publishing')",
+        invocation.stage
+      )
+    )
     |> order_by(
       [invocation],
       asc: invocation.recovery_checked_at,
@@ -98,7 +102,6 @@ defmodule ContextBot.Workers.DeferredWorker do
       asc: invocation.id
     )
     |> limit(^batch_size)
-    |> Repo.all()
   end
 
   defp mark_recovery_checked(invocation, now) do

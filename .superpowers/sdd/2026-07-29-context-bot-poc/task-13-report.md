@@ -101,3 +101,28 @@
 ### Commit
 
 - Planned commit message: `fix: prevent recovery scan starvation`
+
+## Formal review fix round 3
+
+### TDD evidence and correction
+
+- RED: the new query-plan assertion failed because the recovery query did not expose a testable
+  query and still parameterized its finite stage list. SQLite cannot prove at prepare time that
+  `stage IN (?, ...)` implies the literal predicate on a partial index.
+- GREEN: recovery now builds its Ecto query with the same literal finite-stage predicate used by
+  the partial index. `EXPLAIN QUERY PLAN` asserts SQLite reports
+  `USING INDEX invocations_recovery_scan_index` and does not create a temporary ordering B-tree.
+- The query builder is intentionally exposed with `@doc false` so the test verifies the actual
+  production Ecto query rather than a hand-written approximation.
+
+### Verification
+
+- Focused deferred-worker suite: 14 tests passed.
+- The first full gate stopped only on a Credo nested-alias suggestion in the new test; after that
+  mechanical correction, a fresh `direnv exec . just check` passed formatting,
+  warnings-as-errors compilation, strict Credo, ShellCheck, 292 ExUnit tests, secrets tests, and
+  Dialyzer with 0 errors.
+
+### Commit
+
+- Planned commit message: `fix: use recovery scan index`

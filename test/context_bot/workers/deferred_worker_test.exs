@@ -6,6 +6,7 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
   alias ContextBot.Settings
   alias ContextBot.Workers.DeferredWorker
   alias ContextBot.Workflow.Invocation
+  alias Ecto.Adapters.SQL
 
   @now ~U[2026-07-31 00:00:01.000000Z]
   @rollover ~U[2026-07-31 00:00:00.000000Z]
@@ -422,6 +423,14 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
     assert index_sql =~ "WHERE stage IN"
     assert index_sql =~ "'checking_eligibility'"
     assert index_sql =~ "'publishing'"
+
+    {query_sql, query_params} = SQL.to_sql(:all, Repo, DeferredWorker.recovery_query(2))
+
+    %{rows: plan_rows} = Repo.query!("EXPLAIN QUERY PLAN " <> query_sql, query_params)
+    plan = Enum.map_join(plan_rows, "\n", &List.last/1)
+
+    assert plan =~ "USING INDEX invocations_recovery_scan_index"
+    refute plan =~ "USE TEMP B-TREE FOR ORDER BY"
   end
 
   defp configure(overrides \\ []) do
