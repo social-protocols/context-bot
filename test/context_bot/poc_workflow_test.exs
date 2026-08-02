@@ -2,9 +2,12 @@ defmodule ContextBot.POCWorkflowTest do
   use ContextBot.DataCase, async: false
 
   alias ContextBot.POCFixture
-  alias ContextBot.Research.BudgetEntry
+  alias ContextBot.Research.{Budget, BudgetEntry}
   alias ContextBot.Workflow.Invocation
   alias ContextBot.Workflow.Store
+
+  @actor_did "did:plc:kde4jlvubnnsa23ntd2rn6fy"
+  @other_did "did:plc:3euyuegrwbzvqn64jpmf3lde"
 
   setup {Req.Test, :verify_on_exit!}
 
@@ -81,6 +84,22 @@ defmodule ContextBot.POCWorkflowTest do
     assert POCFixture.created_reply_count(fixture) == 1
     assert POCFixture.visible_reply(fixture)["value"] == invocation.reply_record
 
+    assert valid_plc_did?(fixture.settings.bot_did)
+    assert valid_plc_did?(invocation.actor_did)
+    assert valid_plc_did?(invocation.reply_repo)
+
+    assert Enum.all?(
+             values_for_key(invocation.raw_thread, "cid") ++
+               [invocation.notification_cid, invocation.reply_cid],
+             &valid_cid?/1
+           )
+
+    assert invocation.raw_thread
+           |> all_strings()
+           |> Enum.flat_map(&Regex.scan(~r/did:plc:[a-z0-9]+/, &1))
+           |> List.flatten()
+           |> Enum.all?(&valid_plc_did?/1)
+
     notification_call = Enum.find(POCFixture.calls(fixture), &(&1.endpoint == :notifications))
 
     assert notification_call.query == %{
@@ -131,16 +150,21 @@ defmodule ContextBot.POCWorkflowTest do
     assert invocation.stage == :capturing_thread
     assert invocation.eligibility_method == "bluesky_elder"
     assert POCFixture.call_count(fixture, :profile) == 1
+
+    profile_call = Enum.find(POCFixture.calls(fixture), &(&1.endpoint == :profile))
+    assert profile_call.query == %{"actor" => invocation.actor_did}
+
+    assert profile_call.headers["atproto-accept-labelers"] ==
+             "did:plc:e4elbtctnfqocyfcml6h2lf7"
+
     refute_downstream_calls(fixture)
   end
 
   test "a bidirectionally verified bsky.team identity authorizes the mention" do
-    actor_did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"
-
     fixture =
       POCFixture.start!(
         eligibility: :team,
-        actor_did: actor_did,
+        actor_did: @actor_did,
         actor_handle: "alice.bsky.team"
       )
 
@@ -173,7 +197,7 @@ defmodule ContextBot.POCWorkflowTest do
     fixture =
       POCFixture.start!(
         eligibility: :stale_team,
-        actor_did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
+        actor_did: @actor_did,
         actor_handle: "alice.bsky.team"
       )
 
@@ -188,7 +212,7 @@ defmodule ContextBot.POCWorkflowTest do
 
   test "the actor rolling limit defers before thread or provider HTTP" do
     fixture = POCFixture.start!(settings: [actor_hourly_limit: 1])
-    insert_invocation!("history-actor", "did:plc:alice", :complete, admitted_at: now())
+    insert_invocation!("history-actor", @actor_did, :complete, admitted_at: now())
 
     POCFixture.poll_once!(fixture)
     POCFixture.drain_successfully!(fixture, [:eligibility])
@@ -199,7 +223,7 @@ defmodule ContextBot.POCWorkflowTest do
 
   test "the global rolling limit defers before thread or provider HTTP" do
     fixture = POCFixture.start!(settings: [global_hourly_limit: 1])
-    insert_invocation!("history-global", "did:plc:other", :complete, admitted_at: now())
+    insert_invocation!("history-global", @other_did, :complete, admitted_at: now())
 
     POCFixture.poll_once!(fixture)
     POCFixture.drain_successfully!(fixture, [:eligibility])
@@ -210,13 +234,13 @@ defmodule ContextBot.POCWorkflowTest do
 
   test "pending capacity is durable but starts no authorization or downstream HTTP" do
     fixture = POCFixture.start!(settings: [max_pending: 1])
-    insert_invocation!("pending", "did:plc:other", :received)
+    insert_invocation!("pending", @other_did, :received)
 
     POCFixture.poll_once!(fixture)
 
     invocation =
       Repo.get_by!(Invocation,
-        invocation_uri: "at://did:plc:alice/app.bsky.feed.post/invocation"
+        invocation_uri: "at://#{@actor_did}/app.bsky.feed.post/invocation"
       )
 
     assert invocation.stage == :deferred_capacity
@@ -227,7 +251,7 @@ defmodule ContextBot.POCWorkflowTest do
 
   test "daily budget exhaustion defers before Anthropic or publication HTTP" do
     fixture = POCFixture.start!(settings: [anthropic_daily_budget_usd: "5.000000"])
-    historical = insert_invocation!("budget-history", "did:plc:other", :complete)
+    historical = insert_invocation!("budget-history", @other_did, :complete)
 
     %BudgetEntry{}
     |> BudgetEntry.changeset(%{
@@ -293,10 +317,21 @@ defmodule ContextBot.POCWorkflowTest do
     assert POCFixture.created_reply_count(fixture) == 1
     assert POCFixture.call_count(fixture, :pds_put) == 1
 
-    assert Enum.map(Repo.all(from entry in BudgetEntry, order_by: entry.id), & &1.state) == [
-             :indeterminate,
-             :settled
+    entries = Repo.all(from entry in BudgetEntry, order_by: entry.id)
+    assert Enum.map(entries, & &1.state) == [:indeterminate, :settled]
+
+    assert Enum.map(
+             entries,
+             &{&1.kind, &1.reserved_microdollars, &1.settled_microdollars}
+           ) == [
+             {:research, 5_000_000, nil},
+             {:retry, 5_000_000, 650}
            ]
+
+    assert charged_microdollars(entries) == 5_000_650
+
+    assert Budget.remaining(now(), fixture.settings.anthropic_daily_budget_microdollars) ==
+             14_999_350
 
     assert [response] = Store.anthropic_responses(invocation)
     assert response.raw_body == success
@@ -381,6 +416,36 @@ defmodule ContextBot.POCWorkflowTest do
     assert POCFixture.created_reply_count(fixture) == 0
   end
 
+  test "publication retry exhaustion preserves the frozen intent and stays silent" do
+    fixture = POCFixture.start!(pds_mode: :always_timeout)
+    POCFixture.poll_once!(fixture)
+    POCFixture.drain_successfully!(fixture, [:eligibility, :thread, :research])
+
+    frozen = POCFixture.invocation!()
+    frozen_intent = {frozen.reply_repo, frozen.reply_rkey, frozen.reply_record}
+
+    assert {:ok, _job} =
+             POCFixture.perform_next(fixture, :reply,
+               attempt: 10,
+               max_attempts: 10,
+               ack: true
+             )
+
+    invocation = POCFixture.invocation!()
+    assert invocation.stage == :failed
+    assert invocation.failure_category == :publication_conflict
+    assert invocation.failure_detail == %{"reason" => "retry_exhausted"}
+
+    assert {invocation.reply_repo, invocation.reply_rkey, invocation.reply_record} ==
+             frozen_intent
+
+    assert invocation.reply_uri == nil
+    assert invocation.reply_cid == nil
+    assert POCFixture.call_count(fixture, :pds_put) == 1
+    assert POCFixture.created_reply_count(fixture) == 0
+    assert POCFixture.visible_reply(fixture) == nil
+  end
+
   test "exhausted provider retries retain every returned response and stay silent" do
     error_body = POCFixture.anthropic_fixture("error.json")
 
@@ -400,7 +465,22 @@ defmodule ContextBot.POCWorkflowTest do
     assert Enum.map(Store.anthropic_responses(invocation), & &1.raw_body) ==
              List.duplicate(error_body, 3)
 
-    assert Repo.aggregate(BudgetEntry, :count) == 3
+    entries = Repo.all(from entry in BudgetEntry, order_by: entry.id)
+
+    assert Enum.map(
+             entries,
+             &{&1.kind, &1.state, &1.reserved_microdollars, &1.settled_microdollars}
+           ) == [
+             {:research, :indeterminate, 5_000_000, nil},
+             {:retry, :indeterminate, 5_000_000, nil},
+             {:retry, :indeterminate, 5_000_000, nil}
+           ]
+
+    assert charged_microdollars(entries) == 15_000_000
+
+    assert Budget.remaining(now(), fixture.settings.anthropic_daily_budget_microdollars) ==
+             5_000_000
+
     refute_publication(fixture)
   end
 
@@ -430,9 +510,13 @@ defmodule ContextBot.POCWorkflowTest do
     assert POCFixture.created_reply_count(fixture) == 0
   end
 
+  defp charged_microdollars(entries) do
+    Enum.sum(Enum.map(entries, &(&1.settled_microdollars || &1.reserved_microdollars)))
+  end
+
   defp insert_invocation!(rkey, actor_did, stage, extra \\ []) do
     uri = "at://#{actor_did}/app.bsky.feed.post/#{rkey}"
-    cid = "bafy-#{rkey}"
+    cid = POCFixture.fixture_cid(rkey)
 
     attrs =
       Map.merge(
@@ -455,6 +539,40 @@ defmodule ContextBot.POCWorkflowTest do
     |> Invocation.changeset(attrs)
     |> Repo.insert!()
   end
+
+  defp values_for_key(value, key) when is_map(value) do
+    own =
+      case Map.fetch(value, key) do
+        {:ok, found} -> [found]
+        :error -> []
+      end
+
+    own ++ Enum.flat_map(Map.values(value), &values_for_key(&1, key))
+  end
+
+  defp values_for_key(value, key) when is_list(value),
+    do: Enum.flat_map(value, &values_for_key(&1, key))
+
+  defp values_for_key(_value, _key), do: []
+
+  defp all_strings(value) when is_binary(value), do: [value]
+  defp all_strings(value) when is_map(value), do: Enum.flat_map(Map.values(value), &all_strings/1)
+  defp all_strings(value) when is_list(value), do: Enum.flat_map(value, &all_strings/1)
+  defp all_strings(_value), do: []
+
+  defp valid_plc_did?("did:plc:" <> identifier),
+    do: byte_size(identifier) == 24 and Regex.match?(~r/\A[a-z2-7]{24}\z/, identifier)
+
+  defp valid_plc_did?(_did), do: false
+
+  defp valid_cid?("b" <> encoded) do
+    case Base.decode32(String.upcase(encoded), padding: false) do
+      {:ok, <<1, 0x71, 0x12, 0x20, _digest::binary-size(32)>>} -> true
+      _invalid -> false
+    end
+  end
+
+  defp valid_cid?(_cid), do: false
 
   defp now, do: ~U[2026-07-29 12:00:00.123456Z]
 end

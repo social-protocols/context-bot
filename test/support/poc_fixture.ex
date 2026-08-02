@@ -13,12 +13,31 @@ defmodule ContextBot.POCFixture do
   alias ContextBot.Workflow.Invocation
   alias Ecto.Adapters.SQL.Sandbox
 
-  @bot_did "did:plc:contextbot"
+  @bot_did "did:plc:tv2jgk63n4q5y6vsdvx4kjqp"
   @bot_handle "contextbot.test"
-  @actor_did "did:plc:alice"
+  @actor_did "did:plc:kde4jlvubnnsa23ntd2rn6fy"
   @actor_handle "alice.test"
-  @notification_cid "bafy-invocation-v1"
+  @notification_cid "bafyreicaje76m44252abt7gqyiwipnmbcjk6jlc6bh5ysuizytpesurgva"
   @now ~U[2026-07-29 12:00:00.123456Z]
+
+  @fixture_dids %{
+    "did:plc:alice" => @actor_did,
+    "did:plc:contextbot" => @bot_did,
+    "did:plc:bob" => "did:plc:4ryslfulhnyqjh54jabndzak",
+    "did:plc:root" => "did:plc:jajustitpylddo5dahk2zk3o",
+    "did:plc:quoted" => "did:plc:worl2rymwlcpthreehm7u6j2",
+    "did:plc:tempting" => "did:plc:657ms7wcw4bo2lu5kbzhyxiz"
+  }
+
+  @fixture_cids %{
+    "bafy-invocation-v1" => @notification_cid,
+    "bafy-root" => "bafyreicicneu2e36cyy3xiyb2wwkw3t3w6vhjtqrqxkfmvs66uoxg5txwi",
+    "bafy-parent" => "bafyreiheoeszncz3oecj7pciali6ictr5ijvtxwpvowpoczulcadpvh7bq",
+    "bafy-quoted" => "bafyreiftuk6uodfsyt4z4jbb3h5hsouj6g2tpnvcir4bbrbrwwqe4favfe",
+    "bafy-root-reply" => "bafyreidg4ylhlzhetj5dnxhpzqnmo5uyztno3k2sbc6t23cxs6jsqjd3nq",
+    "bafy-parent-reply" => "bafyreif4jv5nweskzldgjmoeazkeql5d6wmxghnbobi537dl6jrbr6kosu",
+    "bafy-invocation-reply" => "bafyreiaklmbwivq3yxivxxlnyq4w5ec6ki553yqceoibund7hios2nmpv4"
+  }
 
   defstruct [:clock, :owner, :settings, :state]
 
@@ -209,9 +228,15 @@ defmodule ContextBot.POCFixture do
     fixture_path("atproto", "thread_ancestors.json")
     |> File.read!()
     |> Jason.decode!()
+    |> replace_fixture_identifiers()
   end
 
   def anthropic_fixture(name), do: File.read!(fixture_path("anthropic", name))
+
+  def fixture_cid(label) when is_binary(label) do
+    bytes = <<1, 0x71, 0x12, 0x20>> <> :crypto.hash(:sha256, label)
+    "b" <> Base.encode32(bytes, case: :lower, padding: false)
+  end
 
   defp settings(options, eligibility, actor_did) do
     allowlist = if eligibility == :allowlist, do: [actor_did], else: []
@@ -358,17 +383,13 @@ defmodule ContextBot.POCFixture do
       "/xrpc/app.bsky.actor.getProfile" ->
         observe(fixture, :profile)
         state = record_call(fixture, :profile, conn)
+        validate_profile_request!(conn, state)
         profile_response(conn, state)
 
       "/xrpc/com.atproto.identity.resolveHandle" ->
         observe(fixture, :resolve_handle)
         state = record_call(fixture, :resolve_handle, conn)
         resolve_handle_response(conn, state)
-
-      "/did:plc:aaaaaaaaaaaaaaaaaaaaaaaa" ->
-        observe(fixture, :resolve_did)
-        state = record_call(fixture, :resolve_did, conn)
-        resolve_did_response(conn, state)
 
       "/xrpc/app.bsky.feed.getPostThread" ->
         observe(fixture, :thread)
@@ -386,7 +407,15 @@ defmodule ContextBot.POCFixture do
         put_record_response(conn, fixture)
 
       path ->
-        raise "unexpected ATProto request: #{conn.method} #{path}"
+        state = Agent.get(fixture.state, & &1)
+
+        if path == "/#{state.actor_did}" do
+          observe(fixture, :resolve_did)
+          state = record_call(fixture, :resolve_did, conn)
+          resolve_did_response(conn, state)
+        else
+          raise "unexpected ATProto request: #{conn.method} #{path}"
+        end
     end
   end
 
@@ -436,9 +465,10 @@ defmodule ContextBot.POCFixture do
     do: Req.Test.json(conn, %{"did" => actor_did})
 
   defp resolve_handle_response(conn, %{eligibility: :stale_team}),
-    do: Req.Test.json(conn, %{"did" => "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb"})
+    do: Req.Test.json(conn, %{"did" => "did:plc:ua7shbvoa2zbcckxoaqiitpt"})
 
-  defp resolve_handle_response(conn, _state), do: Req.Test.json(conn, %{"did" => "did:plc:none"})
+  defp resolve_handle_response(conn, _state),
+    do: Req.Test.json(conn, %{"did" => "did:plc:3euyuegrwbzvqn64jpmf3lde"})
 
   defp resolve_did_response(conn, %{
          eligibility: :team,
@@ -455,7 +485,11 @@ defmodule ContextBot.POCFixture do
     query = query_params(conn)
     uri = "at://#{query["repo"]}/#{query["collection"]}/#{query["rkey"]}"
 
-    Req.Test.json(conn, %{"uri" => uri, "cid" => "bafy-conflict", "value" => %{"text" => "other"}})
+    Req.Test.json(conn, %{
+      "uri" => uri,
+      "cid" => fixture_cid("conflict"),
+      "value" => %{"text" => "other"}
+    })
   end
 
   defp get_record_response(conn, %{pds_visible: nil}) do
@@ -492,7 +526,7 @@ defmodule ContextBot.POCFixture do
 
     visible = %{
       "uri" => uri,
-      "cid" => "bafy-created-reply",
+      "cid" => fixture_cid("created-reply"),
       "value" => request["record"]
     }
 
@@ -533,7 +567,8 @@ defmodule ContextBot.POCFixture do
         endpoint: endpoint,
         method: conn.method,
         path: conn.request_path,
-        query: query_params(conn)
+        query: query_params(conn),
+        headers: Map.new(conn.req_headers)
       }
 
       updated = %{state | calls: [call | state.calls]}
@@ -569,6 +604,37 @@ defmodule ContextBot.POCFixture do
   end
 
   defp elder_labeler, do: "did:plc:e4elbtctnfqocyfcml6h2lf7"
+
+  defp validate_profile_request!(conn, state) do
+    expected_query = %{"actor" => state.actor_did}
+    expected_header = [elder_labeler()]
+
+    if query_params(conn) != expected_query or
+         Plug.Conn.get_req_header(conn, "atproto-accept-labelers") != expected_header do
+      raise "profile request omitted the authoritative actor or Skywatch labeler"
+    end
+  end
+
+  defp replace_fixture_identifiers(value) when is_map(value) do
+    Map.new(value, fn {key, child} -> {key, replace_fixture_identifiers(child)} end)
+  end
+
+  defp replace_fixture_identifiers(value) when is_list(value),
+    do: Enum.map(value, &replace_fixture_identifiers/1)
+
+  defp replace_fixture_identifiers(value) when is_binary(value) do
+    case Map.fetch(@fixture_cids, value) do
+      {:ok, replacement} ->
+        replacement
+
+      :error ->
+        Enum.reduce(@fixture_dids, value, fn {old, new}, text ->
+          String.replace(text, old, new)
+        end)
+    end
+  end
+
+  defp replace_fixture_identifiers(value), do: value
 
   defp fixture_path(group, name) do
     Path.expand("../fixtures/#{group}/#{name}", __DIR__)
