@@ -73,7 +73,10 @@ deploy:
     #!/usr/bin/env bash
     set -euo pipefail
     source ./secrets.sh
-    fly secrets set --stage SECRET_KEY_BASE="$SECRET_KEY_BASE"
+    fly secrets set --stage \
+      SECRET_KEY_BASE="$SECRET_KEY_BASE" \
+      BOT_APP_PASSWORD="$BOT_APP_PASSWORD" \
+      ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
     fly deploy
 
 fly-status:

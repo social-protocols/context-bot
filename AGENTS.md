@@ -6,9 +6,9 @@ Always-on context: see `knowledge-base/learnings.md` for distilled facts and con
 
 ## Project scope
 
-Context Bot is an on-demand Bluesky / ATProto context bot. A user directly mentions it in a public thread and asks for context; the eventual bot retrieves the thread, requests Claude analysis with server-side research, publishes an ATProto audit trail, and replies concisely.
+Context Bot is an on-demand Bluesky / ATProto context bot. A user directly mentions it in a public thread and asks for context; the POC retrieves the invocation and ancestor chain, requests Claude analysis with server-side research, and publishes one concise Bluesky reply.
 
-The repository currently contains foundation scaffolding only. The MVP is direct-mention-only, not proactive moderation. It has no UI. Do not invent business-domain boundaries, schemas, workers, or integrations before the corresponding feature design is approved.
+The POC is direct-mention-only, not proactive moderation. It has no UI and does not publish audit records, audit pages, or IPFS artifacts. Do not add those deferred MVP features or new business-domain boundaries without an approved design.
 
 ## Environment
 
@@ -56,9 +56,19 @@ Run `direnv exec . just check` before any completion claim. For release or deplo
 
 ## Architecture
 
-This is one Phoenix API application, not an umbrella. `ContextBot.Application` owns the standard OTP tree; `ContextBot.Repo` uses Ecto/SQLite; `ContextBotWeb.Endpoint` exposes the API; `GET /health` is the only initial route.
+This is one Phoenix API application, not an umbrella. `ContextBot.Application` starts Repo and Finch always, and starts Oban, `ContextBot.ATProto.Session`, and `ContextBot.Mentions.Poller` only when the validated settings enable the bot. `GET /health` returns bounded operational aggregates and never stored content or credentials.
 
-Development and test databases live under ignored `data/`; Fly mounts `/data/context_bot.db`. The approved MVP design stores exact intended ATProto records and blobs in SQLite with locally calculated CIDs, then asynchronously converges that state to the bot's PDS. No bot-specific modules or database tables are implemented yet; follow `docs/superpowers/specs/2026-07-27-context-bot-mvp-design.md` without inventing additional domain boundaries.
+The durable pipeline is `Mentions.Poller` → `EligibilityWorker` → `ThreadWorker` → `ResearchWorker` → `ReplyWorker`; `DeferredWorker` repairs missing jobs and reconsiders bounded deferred work. `Workflow.Store` and Ecto/SQLite own invocation checkpoints, leases, budget entries, exact bounded provider response envelopes, and the frozen reply intent. Development and test databases live under ignored `data/`; Fly mounts `/data/context_bot.db`.
+
+Preserve these POC invariants:
+
+- ingest only exact direct mentions and never call notification `updateSeen`;
+- fetch only the invocation plus ancestors (`depth=0`), never descendants;
+- fail closed unless the actor has a bidirectionally verified `bsky.team` handle, a confirmed Skywatch `bluesky-elder` label, or an exact operator-allowlisted DID;
+- reserve integer-microdollar budget before Anthropic work and mark attempts sent before a request can escape;
+- preserve complete provider responses within the configured per-response and cumulative storage bounds;
+- freeze one repository/rkey/record reply intent, fence research and publication with leases, and reconcile ambiguous PDS writes rather than allocating a second reply;
+- keep failures finite and credential-free, and recover durable work oldest-first with bounded scans.
 
 ## Testing guidance
 
@@ -66,4 +76,6 @@ Write behavior-first ExUnit tests for application features and shell tests for s
 
 ## Secrets and deployment
 
-Never commit credentials, `.env` files, Bitwarden payloads, or secret values in logs. `secrets.sh` reads only allowlisted custom fields from the item named by `BITWARDEN_ITEM_ID`; the initial allowlist is `FLY_API_TOKEN` and `SECRET_KEY_BASE`. `just deploy` stages `SECRET_KEY_BASE`, authenticates Fly with `FLY_API_TOKEN`, and deploys. Do not run it without explicit authorization for an external deployment.
+Never commit credentials, `.env` files, Bitwarden payloads, or secret values in logs. `secrets.sh` reads only `FLY_API_TOKEN`, `SECRET_KEY_BASE`, `BOT_APP_PASSWORD`, and `ANTHROPIC_API_KEY` custom fields from the item named by `BITWARDEN_ITEM_ID`. `just deploy` uses `FLY_API_TOKEN` for authentication and stages exactly the other three runtime secrets before deploying.
+
+Committed Fly configuration must remain `BOT_ENABLED=false` until the operator supplies and reviews the real public bot DID, handle, and PDS. Any live deploy, Fly inspection, Bluesky/Anthropic smoke test, public reply, or other external-effect operation always requires explicit user authorization; prior authorization for local implementation or verification does not count.
