@@ -57,10 +57,13 @@ fi
 for context_bot_secret_name in FLY_API_TOKEN SECRET_KEY_BASE BOT_APP_PASSWORD ANTHROPIC_API_KEY; do
 	if ! context_bot_secret_value="$(
 		jq -er --arg name "$context_bot_secret_name" \
-			'[.fields[]? | select(.name == $name) | .value][0] // empty' \
+			'([.fields[]? | select(.name == $name) | .value][0] // empty)
+			 | select(type == "string")
+			 | select(length > 0)
+			 | select(index("\n") == null and index("\r") == null and index("\u0000") == null)' \
 			<<<"$context_bot_bitwarden_item"
 	)"; then
-		context_bot_secrets_abort "missing required custom field: $context_bot_secret_name"
+		context_bot_secrets_abort "missing or invalid required custom field: $context_bot_secret_name"
 		# shellcheck disable=SC2317
 		return 1 2>/dev/null || exit 1
 	fi

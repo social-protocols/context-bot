@@ -18,6 +18,7 @@ primary_region = "den"
   POOL_SIZE = "5"
 
   # External service locations, polling bounds, and request timeouts.
+  # Exact reviewed trust root. Poll bounds are 5s..1h and 1..20 pages.
   APPVIEW_URL = "https://api.bsky.app"
   POLL_INTERVAL_MS = "30000"
   NOTIFICATION_PAGE_CAP = "5"

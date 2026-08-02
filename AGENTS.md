@@ -60,7 +60,7 @@ This is one Phoenix API application, not an umbrella. `ContextBot.Application` s
 
 The durable pipeline is `Mentions.Poller` → `EligibilityWorker` → `ThreadWorker` → `ResearchWorker` → `ReplyWorker`; `DeferredWorker` repairs missing jobs and reconsiders bounded deferred work. `Workflow.Store` and Ecto/SQLite own invocation checkpoints, leases, budget entries, exact bounded provider response envelopes, and the frozen reply intent. Development and test databases live under ignored `data/`; Fly mounts `/data/context_bot.db`.
 
-External request behavior is one validated startup snapshot. Keep `APPVIEW_URL`, poll interval/page cap, ATProto HTTP/session timeouts, thread-fetch timeout, Anthropic HTTP timeout/API version, and Anthropic server-tool versions runtime configurable through `ContextBot.Settings`; malformed values must fail startup. The release image includes the SQLite CLI solely for explicitly authorized, read-only, aggregate Fly inspection with a busy timeout.
+External request behavior is one validated startup snapshot. Keep `APPVIEW_URL` pinned to the reviewed public AppView origin; keep the bounded poll interval/page cap, ATProto HTTP/session timeouts, thread-fetch timeout, Anthropic HTTP timeout/API version, and Anthropic server-tool versions runtime configurable through `ContextBot.Settings`. Malformed or out-of-range values must fail startup. The release image includes the SQLite CLI solely for explicitly authorized, read-only, aggregate Fly inspection with a busy timeout.
 
 Preserve these POC invariants:
 

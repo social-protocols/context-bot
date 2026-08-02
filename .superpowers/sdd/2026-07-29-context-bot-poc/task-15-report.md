@@ -78,3 +78,35 @@ The first Docker build attempt could not reach the configured Docker Desktop soc
 - Final-image SQLite smoke: `sqlite3 --version` returned 3.46.1.
 - Final disabled-container smoke: migrations completed and `GET /health` returned HTTP 200 with `bot.enabled=false` and `bot.session="disabled"`.
 - No Fly, Bluesky, or Anthropic request was made.
+
+## Fix round 2
+
+### Review findings addressed
+
+- Bitwarden values are rejected in `jq` unless they are nonempty strings without decoded LF, CR,
+  or NUL characters. Validation happens before command substitution, preventing Bash from silently
+  stripping NUL and preventing newline-delimited Fly import injection.
+- `APPVIEW_URL` is pinned exactly to the reviewed `https://api.bsky.app` origin because Elder-label
+  and identity reads are authorization inputs. Alternate AppView trust roots require a future
+  design change.
+- `POLL_INTERVAL_MS` is bounded to 5,000–3,600,000 ms and
+  `NOTIFICATION_PAGE_CAP` to 1–20. Startup rejects values outside those ranges.
+
+### TDD evidence
+
+- RED: decoded empty/LF/CR/NUL Bitwarden values passed the old loader or bypassed the cleanup
+  assertion; noncanonical AppView origins and out-of-range polling values were accepted.
+- GREEN: the secrets suite rejects all four invalid value forms under a real `set -e` cleanup
+  probe, and focused Settings/ReqClient/Application tests passed 34/34 including both range
+  endpoints and rejection immediately outside them.
+
+### Fresh verification
+
+- Fresh `direnv exec . just check` outside the filesystem-lock sandbox passed 318 ExUnit tests,
+  secrets tests, formatting, warnings-as-errors compilation, Credo, ShellCheck, and Dialyzer with
+  0 errors.
+- `direnv exec . just docker-build` built image
+  `sha256:6f00ebf9e537fe0302bb583ba6388de2d906c5d8ba9b541223127fe7d6e5801a`.
+- The rebuilt image reported SQLite 3.46.1 and returned HTTP 200 from `/health` with
+  `BOT_ENABLED=false`, `bot.enabled=false`, and `bot.session=disabled` using a temporary database.
+- No Fly, Bluesky, or Anthropic request was made.

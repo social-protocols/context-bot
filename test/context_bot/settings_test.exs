@@ -196,9 +196,9 @@ defmodule ContextBot.SettingsTest do
   test "loads every external request control from the environment" do
     settings =
       Settings.load(%{
-        "APPVIEW_URL" => "https://appview.example.test",
-        "POLL_INTERVAL_MS" => "1234",
-        "NOTIFICATION_PAGE_CAP" => "7",
+        "APPVIEW_URL" => "https://api.bsky.app",
+        "POLL_INTERVAL_MS" => "5000",
+        "NOTIFICATION_PAGE_CAP" => "20",
         "ATPROTO_HTTP_TIMEOUT_MS" => "2345",
         "ATPROTO_SESSION_TIMEOUT_MS" => "3456",
         "THREAD_FETCH_TIMEOUT_MS" => "4567",
@@ -208,9 +208,9 @@ defmodule ContextBot.SettingsTest do
         "ANTHROPIC_WEB_FETCH_TOOL_TYPE" => "web_fetch_20270809"
       })
 
-    assert settings.appview_url == "https://appview.example.test"
-    assert settings.poll_interval_ms == 1_234
-    assert settings.notification_page_cap == 7
+    assert settings.appview_url == "https://api.bsky.app"
+    assert settings.poll_interval_ms == 5_000
+    assert settings.notification_page_cap == 20
     assert settings.atproto_http_timeout_ms == 2_345
     assert settings.atproto_session_timeout_ms == 3_456
     assert settings.thread_fetch_timeout_ms == 4_567
@@ -218,6 +218,24 @@ defmodule ContextBot.SettingsTest do
     assert settings.anthropic_api_version == "2027-08-09"
     assert settings.anthropic_web_search_tool_type == "web_search_20270809"
     assert settings.anthropic_web_fetch_tool_type == "web_fetch_20270809"
+  end
+
+  test "keeps the AppView trust root and polling controls within reviewed bounds" do
+    assert Settings.load(%{"POLL_INTERVAL_MS" => "5000"}).poll_interval_ms == 5_000
+    assert Settings.load(%{"POLL_INTERVAL_MS" => "3600000"}).poll_interval_ms == 3_600_000
+    assert Settings.load(%{"NOTIFICATION_PAGE_CAP" => "1"}).notification_page_cap == 1
+    assert Settings.load(%{"NOTIFICATION_PAGE_CAP" => "20"}).notification_page_cap == 20
+
+    for environment <- [
+          %{"APPVIEW_URL" => "https://appview.example.test"},
+          %{"APPVIEW_URL" => "https://api.bsky.app/"},
+          %{"POLL_INTERVAL_MS" => "4999"},
+          %{"POLL_INTERVAL_MS" => "3600001"},
+          %{"NOTIFICATION_PAGE_CAP" => "0"},
+          %{"NOTIFICATION_PAGE_CAP" => "21"}
+        ] do
+      assert_raise ArgumentError, fn -> Settings.load(environment) end
+    end
   end
 
   test "rejects malformed external request controls" do

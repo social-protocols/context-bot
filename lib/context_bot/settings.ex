@@ -15,6 +15,9 @@ defmodule ContextBot.Settings do
   @default_appview_url "https://api.bsky.app"
   @default_poll_interval_ms 30_000
   @default_notification_page_cap 5
+  @minimum_poll_interval_ms 5_000
+  @maximum_poll_interval_ms 3_600_000
+  @maximum_notification_page_cap 20
   @default_atproto_http_timeout_ms 15_000
   @default_atproto_session_timeout_ms 15_000
   @default_thread_fetch_timeout_ms 20_000
@@ -182,20 +185,24 @@ defmodule ContextBot.Settings do
       bot_did: optional_string(environment, "BOT_DID", :bot_did),
       bot_handle: optional_string(environment, "BOT_HANDLE", :bot_handle),
       bot_pds_url: optional_url(environment, "BOT_PDS_URL", :bot_pds_url),
-      appview_url: url!(environment, "APPVIEW_URL", :appview_url, @default_appview_url),
+      appview_url: appview_url!(environment),
       poll_interval_ms:
-        positive_integer!(
+        bounded_integer!(
           environment,
           "POLL_INTERVAL_MS",
           :poll_interval_ms,
-          @default_poll_interval_ms
+          @default_poll_interval_ms,
+          @minimum_poll_interval_ms,
+          @maximum_poll_interval_ms
         ),
       notification_page_cap:
-        positive_integer!(
+        bounded_integer!(
           environment,
           "NOTIFICATION_PAGE_CAP",
           :notification_page_cap,
-          @default_notification_page_cap
+          @default_notification_page_cap,
+          1,
+          @maximum_notification_page_cap
         ),
       atproto_http_timeout_ms:
         positive_integer!(
@@ -428,9 +435,22 @@ defmodule ContextBot.Settings do
 
   @spec validate!(t()) :: t()
   def validate!(%__MODULE__{} = settings) do
-    validate_url!(settings.appview_url, "APPVIEW_URL")
-    validate_positive!(settings.poll_interval_ms, "POLL_INTERVAL_MS")
-    validate_positive!(settings.notification_page_cap, "NOTIFICATION_PAGE_CAP")
+    validate_appview_url!(settings.appview_url)
+
+    validate_range!(
+      settings.poll_interval_ms,
+      "POLL_INTERVAL_MS",
+      @minimum_poll_interval_ms,
+      @maximum_poll_interval_ms
+    )
+
+    validate_range!(
+      settings.notification_page_cap,
+      "NOTIFICATION_PAGE_CAP",
+      1,
+      @maximum_notification_page_cap
+    )
+
     validate_positive!(settings.atproto_http_timeout_ms, "ATPROTO_HTTP_TIMEOUT_MS")
     validate_positive!(settings.atproto_session_timeout_ms, "ATPROTO_SESSION_TIMEOUT_MS")
     validate_positive!(settings.thread_fetch_timeout_ms, "THREAD_FETCH_TIMEOUT_MS")
@@ -549,6 +569,11 @@ defmodule ContextBot.Settings do
     |> parse_positive_integer!(environment_key)
   end
 
+  defp bounded_integer!(environment, environment_key, option_key, default, minimum, maximum) do
+    value = positive_integer!(environment, environment_key, option_key, default)
+    validate_range!(value, environment_key, minimum, maximum)
+  end
+
   defp optional_microdollars(environment, environment_key, option_key) do
     case fetch(environment, environment_key, option_key, nil) do
       nil -> nil
@@ -591,6 +616,12 @@ defmodule ContextBot.Settings do
     environment
     |> string!(environment_key, option_key, default)
     |> parse_url!(environment_key)
+  end
+
+  defp appview_url!(environment) do
+    environment
+    |> url!("APPVIEW_URL", :appview_url, @default_appview_url)
+    |> validate_appview_url!()
   end
 
   defp did_list!(environment, environment_key, option_key, default) do
@@ -646,7 +677,11 @@ defmodule ContextBot.Settings do
     end
   end
 
-  defp validate_url!(value, environment_key), do: parse_url!(value, environment_key)
+  defp validate_appview_url!(@default_appview_url), do: @default_appview_url
+
+  defp validate_appview_url!(_value) do
+    raise ArgumentError, "APPVIEW_URL must be the reviewed #{@default_appview_url} origin"
+  end
 
   defp validate_date!(value, environment_key) when is_binary(value) do
     case Date.from_iso8601(value) do
@@ -712,6 +747,14 @@ defmodule ContextBot.Settings do
 
   defp validate_positive!(_value, environment_key),
     do: raise(ArgumentError, "#{environment_key} must be a positive integer")
+
+  defp validate_range!(value, _environment_key, minimum, maximum)
+       when is_integer(value) and value >= minimum and value <= maximum,
+       do: value
+
+  defp validate_range!(_value, environment_key, minimum, maximum) do
+    raise ArgumentError, "#{environment_key} must be between #{minimum} and #{maximum}"
+  end
 
   defp validate_optional_positive!(nil, _environment_key), do: :ok
 

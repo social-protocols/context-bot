@@ -61,6 +61,40 @@ set -e
 [[ "$errexit_cleanup_output" != *"secret-key-test-value"* ]] || fail "errexit leaked the secret key"
 [[ "$errexit_cleanup_output" != *"app-password-test-value"* ]] || fail "errexit leaked the bot password"
 
+for invalid_json_value in '""' '"line\nfeed"' '"carriage\rreturn"' '"nul\u0000byte"'; do
+	set +e
+	invalid_value_output="$(
+		CONTEXT_BOT_PROJECT_ROOT="$project_root" \
+			CONTEXT_BOT_INVALID_JSON_VALUE="$invalid_json_value" \
+			bash -c '
+				set -euo pipefail
+				export BITWARDEN_ITEM_ID="test-item"
+				bw() {
+					printf '\''{"fields":[{"name":"FLY_API_TOKEN","value":"fly-test-value"},{"name":"SECRET_KEY_BASE","value":"secret-key-test-value"},{"name":"BOT_APP_PASSWORD","value":"app-password-test-value"},{"name":"ANTHROPIC_API_KEY","value":%s}]}\n'\'' "$CONTEXT_BOT_INVALID_JSON_VALUE"
+				}
+				trap '\''
+					status=$?
+					[[ "$status" -ne 0 ]] || exit 94
+					for variable in FLY_API_TOKEN SECRET_KEY_BASE BOT_APP_PASSWORD ANTHROPIC_API_KEY context_bot_bitwarden_item context_bot_secret_value context_bot_anthropic_api_key; do
+						[[ -z "${!variable+x}" ]] || exit 95
+					done
+					printf "invalid value cleanup verified\n"
+				'\'' EXIT
+				# shellcheck source=secrets.sh
+				source "$CONTEXT_BOT_PROJECT_ROOT/secrets.sh"
+			' 2>&1
+	)"
+	invalid_value_status=$?
+	set -e
+
+	[[ "$invalid_value_status" -ne 0 ]] || fail "invalid Bitwarden value unexpectedly succeeded"
+	[[ "$invalid_value_output" == *"invalid value cleanup verified"* ]] ||
+		fail "invalid Bitwarden value bypassed cleanup"
+	[[ "$invalid_value_output" != *"fly-test-value"* ]] || fail "invalid value leaked Fly token"
+	[[ "$invalid_value_output" != *"secret-key-test-value"* ]] || fail "invalid value leaked secret key"
+	[[ "$invalid_value_output" != *"app-password-test-value"* ]] || fail "invalid value leaked bot password"
+done
+
 if ! partial_output="$(
 	(
 		# Each test scenario intentionally has an isolated environment.
