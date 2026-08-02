@@ -248,6 +248,27 @@ defmodule ContextBot.ATProto.SessionTest do
     assert Session.access_token(pid) == {:ok, "test-access-jwt-one"}
   end
 
+  test "uses the runtime ATProto session timeout when no test override exists" do
+    original_settings = Application.fetch_env!(:context_bot, :settings)
+    original_config = Application.fetch_env!(:context_bot, Session)
+
+    Application.put_env(
+      :context_bot,
+      :settings,
+      Map.put(original_settings, :atproto_session_timeout_ms, 2_346)
+    )
+
+    Application.put_env(:context_bot, Session, Keyword.delete(original_config, :timeout))
+
+    on_exit(fn ->
+      Application.put_env(:context_bot, :settings, original_settings)
+      Application.put_env(:context_bot, Session, original_config)
+    end)
+
+    pid = start_session()
+    assert :sys.get_state(pid).timeout == 2_346
+  end
+
   test "a mismatched DID rejects the call and stops the session without leaking credentials" do
     response = Map.put(fixture()["create"], "did", "did:plc:attacker123")
     expect_create_session(response)

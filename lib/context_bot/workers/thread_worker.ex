@@ -16,7 +16,6 @@ defmodule ContextBot.Workers.ThreadWorker do
   alias ContextBot.Workflow.{Invocation, Store}
 
   @research_worker "ContextBot.Workers.ResearchWorker"
-  @default_fetch_timeout_ms 20_000
   @maximum_backoff_seconds 300
 
   @impl Oban.Worker
@@ -185,13 +184,14 @@ defmodule ContextBot.Workers.ThreadWorker do
 
   defp dependencies do
     config = Application.get_env(:context_bot, __MODULE__, [])
+    settings = Keyword.get(config, :settings, Application.fetch_env!(:context_bot, :settings))
 
     %{
       canonicalizer: Keyword.get(config, :canonicalizer, Canonicalizer),
       client: Keyword.get(config, :client, ReqClient),
-      fetch_timeout_ms: Keyword.get(config, :fetch_timeout_ms, @default_fetch_timeout_ms),
+      fetch_timeout_ms: Keyword.get(config, :fetch_timeout_ms, settings.thread_fetch_timeout_ms),
       research_job_builder: Keyword.get(config, :research_job_builder, &research_job/1),
-      settings: Keyword.get(config, :settings, Application.fetch_env!(:context_bot, :settings))
+      settings: settings
     }
   end
 end

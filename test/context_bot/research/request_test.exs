@@ -15,7 +15,9 @@ defmodule ContextBot.Research.RequestTest do
         max_tokens: 8_192,
         max_web_search_uses: 4,
         max_web_fetch_uses: 3,
-        max_web_fetch_content_tokens: 24_000
+        max_web_fetch_content_tokens: 24_000,
+        web_search_tool_type: "web_search_20270809",
+        web_fetch_tool_type: "web_fetch_20270809"
       })
 
     assert request["model"] == "claude-sonnet-5-test-pin"
@@ -33,14 +35,14 @@ defmodule ContextBot.Research.RequestTest do
 
     assert request["tools"] == [
              %{
-               "type" => "web_search_20260318",
+               "type" => "web_search_20270809",
                "name" => "web_search",
                "allowed_callers" => ["direct"],
                "response_inclusion" => "full",
                "max_uses" => 4
              },
              %{
-               "type" => "web_fetch_20260318",
+               "type" => "web_fetch_20270809",
                "name" => "web_fetch",
                "allowed_callers" => ["direct"],
                "response_inclusion" => "full",
@@ -188,7 +190,9 @@ defmodule ContextBot.Research.RequestTest do
       max_tokens: 8_192,
       max_web_search_uses: 5,
       max_web_fetch_uses: 5,
-      max_web_fetch_content_tokens: 50_000
+      max_web_fetch_content_tokens: 50_000,
+      web_search_tool_type: "web_search_20260318",
+      web_fetch_tool_type: "web_fetch_20260318"
     }
   end
 end

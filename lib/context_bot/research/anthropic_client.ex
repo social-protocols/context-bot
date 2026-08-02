@@ -8,8 +8,6 @@ defmodule ContextBot.Research.AnthropicClient do
   alias ContextBot.HTTP.BodyLimit
 
   @base_url "https://api.anthropic.com"
-  @default_timeout 300_000
-  @anthropic_version "2023-06-01"
   @pool_checkout_error_prefix "Finch was unable to provide a connection within the timeout due to excess queuing for connections."
   @safe_response_headers ["content-type", "request-id", "retry-after"]
 
@@ -25,7 +23,7 @@ defmodule ContextBot.Research.AnthropicClient do
       |> Map.put("stream", false)
 
     result =
-      request(attempt_metadata)
+      request(attempt_metadata, settings)
       |> BodyLimit.attach(settings.max_response_bytes)
       |> execute_request(request_map)
 
@@ -33,16 +31,16 @@ defmodule ContextBot.Research.AnthropicClient do
     normalize_response(result, duration_ms)
   end
 
-  defp request(attempt_metadata) do
+  defp request(attempt_metadata, settings) do
     config = config()
-    timeout = config[:timeout] || @default_timeout
+    timeout = config[:timeout] || settings.anthropic_http_timeout_ms
     api_key = Application.fetch_env!(:context_bot, :anthropic_api_key)
 
     common_options = [
       base_url: config[:base_url] || @base_url,
       headers: [
         {"x-api-key", api_key},
-        {"anthropic-version", @anthropic_version}
+        {"anthropic-version", settings.anthropic_api_version}
       ],
       finch: [
         name: ContextBot.Finch,

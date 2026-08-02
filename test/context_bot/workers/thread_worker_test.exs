@@ -211,7 +211,7 @@ defmodule ContextBot.Workers.ThreadWorkerTest do
       delay_ms: 100
     )
 
-    configure(settings(), client: Client, fetch_timeout_ms: 10)
+    configure(settings(thread_fetch_timeout_ms: 10), client: Client)
 
     assert {:error, :timeout} = perform(invocation)
     assert_received {:thread_fetch, @invocation_uri, 80, false}

@@ -17,8 +17,15 @@ primary_region = "den"
   PORT = "4000"
   POOL_SIZE = "5"
 
-  # Eligibility, admission, and queue settings. The POC polls the direct
-  # https://api.bsky.app AppView every 30 seconds, at most five pages per poll.
+  # External service locations, polling bounds, and request timeouts.
+  APPVIEW_URL = "https://api.bsky.app"
+  POLL_INTERVAL_MS = "30000"
+  NOTIFICATION_PAGE_CAP = "5"
+  ATPROTO_HTTP_TIMEOUT_MS = "15000"
+  ATPROTO_SESSION_TIMEOUT_MS = "15000"
+  THREAD_FETCH_TIMEOUT_MS = "20000"
+
+  # Eligibility, admission, and queue settings.
   OPERATOR_ALLOWED_DIDS = ""
   THREAD_PARENT_HEIGHT = "80"
   ACTOR_HOURLY_LIMIT = "2"
@@ -30,6 +37,10 @@ primary_region = "den"
 
   # Anthropic request, tool, retry, retention, and budget bounds.
   ANTHROPIC_MODEL_ID = "claude-sonnet-5"
+  ANTHROPIC_HTTP_TIMEOUT_MS = "300000"
+  ANTHROPIC_API_VERSION = "2023-06-01"
+  ANTHROPIC_WEB_SEARCH_TOOL_TYPE = "web_search_20260318"
+  ANTHROPIC_WEB_FETCH_TOOL_TYPE = "web_fetch_20260318"
   ANTHROPIC_RESEARCH_MAX_TOKENS = "8192"
   ANTHROPIC_LENGTH_REPAIR_MAX_TOKENS = "1024"
   MAX_WEB_SEARCH_USES = "5"

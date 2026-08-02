@@ -140,6 +140,42 @@ defmodule ContextBot.ATProto.ReqClientTest do
     assert {:ok, 200, _headers, ^response} = ReqClient.resolve_handle("bsky.team")
   end
 
+  test "uses the runtime AppView and ATProto HTTP timeout when no test override exists" do
+    original_settings = Application.fetch_env!(:context_bot, :settings)
+    original_config = Application.fetch_env!(:context_bot, ReqClient)
+
+    settings =
+      original_settings
+      |> Map.put(:appview_url, "https://runtime-appview.test")
+      |> Map.put(:atproto_http_timeout_ms, 2_345)
+
+    Application.put_env(:context_bot, :settings, settings)
+    Application.put_env(:context_bot, ReqClient, Keyword.delete(original_config, :timeout))
+    Process.put(:req_client_capture_pid, self())
+
+    on_exit(fn ->
+      Application.put_env(:context_bot, :settings, original_settings)
+      Application.put_env(:context_bot, ReqClient, original_config)
+      Process.delete(:req_client_capture_pid)
+    end)
+
+    Req.Test.expect(ReqClient, fn conn ->
+      assert_request(
+        conn,
+        :get,
+        "runtime-appview.test",
+        "/xrpc/com.atproto.identity.resolveHandle"
+      )
+
+      Req.Test.json(conn, %{"did" => "did:plc:test123"})
+    end)
+
+    assert {:ok, 200, _headers, _body} = ReqClient.resolve_handle("example.test")
+    assert_receive {:req_client_options, options}
+    assert options.finch[:receive_timeout] == 2_345
+    assert options.finch[:request_timeout] == 7_345
+  end
+
   test "resolveDid uses the exact did:plc directory request" do
     identity = fixture("identity.json")
     response = identity["didDocument"]

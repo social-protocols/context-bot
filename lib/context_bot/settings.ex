@@ -12,8 +12,18 @@ defmodule ContextBot.Settings do
   @default_global_daily_limit 50
   @default_max_pending 25
   @default_queue_concurrency 1
+  @default_appview_url "https://api.bsky.app"
+  @default_poll_interval_ms 30_000
+  @default_notification_page_cap 5
+  @default_atproto_http_timeout_ms 15_000
+  @default_atproto_session_timeout_ms 15_000
+  @default_thread_fetch_timeout_ms 20_000
   @default_max_response_bytes 8_000_000
   @default_max_storage_bytes 64_000_000
+  @default_anthropic_http_timeout_ms 300_000
+  @default_anthropic_api_version "2023-06-01"
+  @default_anthropic_web_search_tool_type "web_search_20260318"
+  @default_anthropic_web_fetch_tool_type "web_fetch_20260318"
   @default_anthropic_research_max_tokens 8_192
   @default_anthropic_length_repair_max_tokens 1_024
   @default_anthropic_model_id "claude-sonnet-5"
@@ -28,11 +38,16 @@ defmodule ContextBot.Settings do
   @default_anthropic_pricing_version "sonnet-5-2026-07-28"
 
   @skywatch_did "did:plc:e4elbtctnfqocyfcml6h2lf7"
-  @appview_url "https://api.bsky.app"
   @elder_label "bluesky-elder"
 
   @enforce_keys [
     :bot_enabled,
+    :appview_url,
+    :poll_interval_ms,
+    :notification_page_cap,
+    :atproto_http_timeout_ms,
+    :atproto_session_timeout_ms,
+    :thread_fetch_timeout_ms,
     :thread_parent_height,
     :actor_hourly_limit,
     :actor_daily_limit,
@@ -43,6 +58,10 @@ defmodule ContextBot.Settings do
     :max_response_bytes,
     :max_storage_bytes,
     :anthropic_model_id,
+    :anthropic_http_timeout_ms,
+    :anthropic_api_version,
+    :anthropic_web_search_tool_type,
+    :anthropic_web_fetch_tool_type,
     :anthropic_research_max_tokens,
     :anthropic_length_repair_max_tokens,
     :max_web_search_uses,
@@ -59,7 +78,6 @@ defmodule ContextBot.Settings do
     :anthropic_pricing_version,
     :operator_allowed_dids,
     :skywatch_did,
-    :appview_url,
     :elder_label
   ]
   # The workflow settings intentionally stay in one validated startup snapshot.
@@ -69,8 +87,18 @@ defmodule ContextBot.Settings do
     :bot_did,
     :bot_handle,
     :bot_pds_url,
+    :appview_url,
+    :poll_interval_ms,
+    :notification_page_cap,
+    :atproto_http_timeout_ms,
+    :atproto_session_timeout_ms,
+    :thread_fetch_timeout_ms,
     :anthropic_daily_budget_microdollars,
     :anthropic_model_id,
+    :anthropic_http_timeout_ms,
+    :anthropic_api_version,
+    :anthropic_web_search_tool_type,
+    :anthropic_web_fetch_tool_type,
     :anthropic_research_max_tokens,
     :anthropic_length_repair_max_tokens,
     :max_web_search_uses,
@@ -96,7 +124,6 @@ defmodule ContextBot.Settings do
     :max_storage_bytes,
     :operator_allowed_dids,
     :skywatch_did,
-    :appview_url,
     :elder_label
   ]
 
@@ -105,8 +132,18 @@ defmodule ContextBot.Settings do
           bot_did: String.t() | nil,
           bot_handle: String.t() | nil,
           bot_pds_url: String.t() | nil,
+          appview_url: String.t(),
+          poll_interval_ms: pos_integer(),
+          notification_page_cap: pos_integer(),
+          atproto_http_timeout_ms: pos_integer(),
+          atproto_session_timeout_ms: pos_integer(),
+          thread_fetch_timeout_ms: pos_integer(),
           anthropic_daily_budget_microdollars: pos_integer() | nil,
           anthropic_model_id: String.t(),
+          anthropic_http_timeout_ms: pos_integer(),
+          anthropic_api_version: String.t(),
+          anthropic_web_search_tool_type: String.t(),
+          anthropic_web_fetch_tool_type: String.t(),
           anthropic_research_max_tokens: pos_integer(),
           anthropic_length_repair_max_tokens: pos_integer(),
           max_web_search_uses: pos_integer(),
@@ -132,7 +169,6 @@ defmodule ContextBot.Settings do
           max_storage_bytes: pos_integer(),
           operator_allowed_dids: [String.t()],
           skywatch_did: String.t(),
-          appview_url: String.t(),
           elder_label: String.t()
         }
 
@@ -146,12 +182,76 @@ defmodule ContextBot.Settings do
       bot_did: optional_string(environment, "BOT_DID", :bot_did),
       bot_handle: optional_string(environment, "BOT_HANDLE", :bot_handle),
       bot_pds_url: optional_url(environment, "BOT_PDS_URL", :bot_pds_url),
+      appview_url: url!(environment, "APPVIEW_URL", :appview_url, @default_appview_url),
+      poll_interval_ms:
+        positive_integer!(
+          environment,
+          "POLL_INTERVAL_MS",
+          :poll_interval_ms,
+          @default_poll_interval_ms
+        ),
+      notification_page_cap:
+        positive_integer!(
+          environment,
+          "NOTIFICATION_PAGE_CAP",
+          :notification_page_cap,
+          @default_notification_page_cap
+        ),
+      atproto_http_timeout_ms:
+        positive_integer!(
+          environment,
+          "ATPROTO_HTTP_TIMEOUT_MS",
+          :atproto_http_timeout_ms,
+          @default_atproto_http_timeout_ms
+        ),
+      atproto_session_timeout_ms:
+        positive_integer!(
+          environment,
+          "ATPROTO_SESSION_TIMEOUT_MS",
+          :atproto_session_timeout_ms,
+          @default_atproto_session_timeout_ms
+        ),
+      thread_fetch_timeout_ms:
+        positive_integer!(
+          environment,
+          "THREAD_FETCH_TIMEOUT_MS",
+          :thread_fetch_timeout_ms,
+          @default_thread_fetch_timeout_ms
+        ),
       anthropic_model_id:
         string!(
           environment,
           "ANTHROPIC_MODEL_ID",
           :anthropic_model_id,
           @default_anthropic_model_id
+        ),
+      anthropic_http_timeout_ms:
+        positive_integer!(
+          environment,
+          "ANTHROPIC_HTTP_TIMEOUT_MS",
+          :anthropic_http_timeout_ms,
+          @default_anthropic_http_timeout_ms
+        ),
+      anthropic_api_version:
+        string!(
+          environment,
+          "ANTHROPIC_API_VERSION",
+          :anthropic_api_version,
+          @default_anthropic_api_version
+        ),
+      anthropic_web_search_tool_type:
+        string!(
+          environment,
+          "ANTHROPIC_WEB_SEARCH_TOOL_TYPE",
+          :anthropic_web_search_tool_type,
+          @default_anthropic_web_search_tool_type
+        ),
+      anthropic_web_fetch_tool_type:
+        string!(
+          environment,
+          "ANTHROPIC_WEB_FETCH_TOOL_TYPE",
+          :anthropic_web_fetch_tool_type,
+          @default_anthropic_web_fetch_tool_type
         ),
       anthropic_daily_budget_microdollars:
         optional_microdollars(
@@ -320,7 +420,6 @@ defmodule ContextBot.Settings do
       operator_allowed_dids:
         did_list!(environment, "OPERATOR_ALLOWED_DIDS", :operator_allowed_dids, []),
       skywatch_did: @skywatch_did,
-      appview_url: @appview_url,
       elder_label: @elder_label
     }
 
@@ -329,6 +428,27 @@ defmodule ContextBot.Settings do
 
   @spec validate!(t()) :: t()
   def validate!(%__MODULE__{} = settings) do
+    validate_url!(settings.appview_url, "APPVIEW_URL")
+    validate_positive!(settings.poll_interval_ms, "POLL_INTERVAL_MS")
+    validate_positive!(settings.notification_page_cap, "NOTIFICATION_PAGE_CAP")
+    validate_positive!(settings.atproto_http_timeout_ms, "ATPROTO_HTTP_TIMEOUT_MS")
+    validate_positive!(settings.atproto_session_timeout_ms, "ATPROTO_SESSION_TIMEOUT_MS")
+    validate_positive!(settings.thread_fetch_timeout_ms, "THREAD_FETCH_TIMEOUT_MS")
+    validate_positive!(settings.anthropic_http_timeout_ms, "ANTHROPIC_HTTP_TIMEOUT_MS")
+    validate_date!(settings.anthropic_api_version, "ANTHROPIC_API_VERSION")
+
+    validate_tool_type!(
+      settings.anthropic_web_search_tool_type,
+      "web_search_",
+      "ANTHROPIC_WEB_SEARCH_TOOL_TYPE"
+    )
+
+    validate_tool_type!(
+      settings.anthropic_web_fetch_tool_type,
+      "web_fetch_",
+      "ANTHROPIC_WEB_FETCH_TOOL_TYPE"
+    )
+
     validate_positive!(settings.thread_parent_height, "THREAD_PARENT_HEIGHT")
     validate_positive!(settings.actor_hourly_limit, "ACTOR_HOURLY_LIMIT")
     validate_positive!(settings.actor_daily_limit, "ACTOR_DAILY_LIMIT")
@@ -467,6 +587,12 @@ defmodule ContextBot.Settings do
     end
   end
 
+  defp url!(environment, environment_key, option_key, default) do
+    environment
+    |> string!(environment_key, option_key, default)
+    |> parse_url!(environment_key)
+  end
+
   defp did_list!(environment, environment_key, option_key, default) do
     case fetch(environment, environment_key, option_key, default) do
       values when is_list(values) ->
@@ -519,6 +645,46 @@ defmodule ContextBot.Settings do
               "#{environment_key} must be an HTTPS URL without credentials, query, or fragment"
     end
   end
+
+  defp validate_url!(value, environment_key), do: parse_url!(value, environment_key)
+
+  defp validate_date!(value, environment_key) when is_binary(value) do
+    case Date.from_iso8601(value) do
+      {:ok, _date} ->
+        value
+
+      {:error, _reason} ->
+        raise ArgumentError, "#{environment_key} must be an ISO date (YYYY-MM-DD)"
+    end
+  end
+
+  defp validate_date!(_value, environment_key),
+    do: raise(ArgumentError, "#{environment_key} must be an ISO date (YYYY-MM-DD)")
+
+  defp validate_tool_type!(value, prefix, environment_key) when is_binary(value) do
+    date = String.replace_prefix(value, prefix, "")
+
+    with true <- String.starts_with?(value, prefix),
+         8 <- byte_size(date),
+         <<year::binary-size(4), month::binary-size(2), day::binary-size(2)>> <- date,
+         {year, ""} <- Integer.parse(year),
+         {month, ""} <- Integer.parse(month),
+         {day, ""} <- Integer.parse(day),
+         {:ok, _date} <- Date.new(year, month, day) do
+      value
+    else
+      _ ->
+        raise ArgumentError,
+              "#{environment_key} must be #{prefix} followed by a valid YYYYMMDD date"
+    end
+  end
+
+  defp validate_tool_type!(_value, prefix, environment_key),
+    do:
+      raise(
+        ArgumentError,
+        "#{environment_key} must be #{prefix} followed by a valid YYYYMMDD date"
+      )
 
   defp require_did!(value, environment_key) when is_binary(value) and value != "",
     do: validate_did!(value, environment_key)

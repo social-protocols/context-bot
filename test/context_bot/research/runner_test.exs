@@ -37,6 +37,27 @@ defmodule ContextBot.Research.RunnerTest do
     :ok
   end
 
+  test "uses the configured server tool versions in the durable initial request" do
+    invocation = invocation("configured-tools")
+    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+
+    custom_settings =
+      settings()
+      |> Map.put(:anthropic_web_search_tool_type, "web_search_20270809")
+      |> Map.put(:anthropic_web_fetch_tool_type, "web_fetch_20270809")
+
+    assert {:ok, _result} = Runner.run(invocation, options(settings: custom_settings))
+
+    assert_received {:anthropic_call, request, _metadata, false}
+
+    assert Enum.map(request["tools"], & &1["type"]) == [
+             "web_search_20270809",
+             "web_fetch_20270809"
+           ]
+
+    assert Repo.reload!(invocation).anthropic_messages == request
+  end
+
   test "commits a complete 200 envelope and sent marker before decoding" do
     invocation = invocation("persist-before-decode")
     raw_body = fixture("tool_success.json")
@@ -727,6 +748,8 @@ defmodule ContextBot.Research.RunnerTest do
       anthropic_max_http_retries: 2,
       anthropic_retry_base_ms: 10,
       anthropic_retry_max_ms: 10_000,
+      anthropic_web_search_tool_type: "web_search_20260318",
+      anthropic_web_fetch_tool_type: "web_fetch_20260318",
       max_storage_bytes: 1_000_000
     }
   end

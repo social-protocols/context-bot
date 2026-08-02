@@ -20,8 +20,6 @@ defmodule ContextBot.Research.Request do
   notes, labels, markers, or audit suffix. The complete reply must be nonempty, plain text, and at
   most 300 Unicode grapheme clusters. Do not shorten a factual claim by truncating it.
   """
-  @web_search_tool "web_search_20260318"
-  @web_fetch_tool "web_fetch_20260318"
   @length_repair """
   LENGTH_REPAIR
   Return only the reply text, with no preamble, labels, markers, or audit suffix. It must be
@@ -39,7 +37,9 @@ defmodule ContextBot.Research.Request do
           required(:max_tokens) => pos_integer(),
           required(:max_web_search_uses) => pos_integer(),
           required(:max_web_fetch_uses) => pos_integer(),
-          required(:max_web_fetch_content_tokens) => pos_integer()
+          required(:max_web_fetch_content_tokens) => pos_integer(),
+          required(:web_search_tool_type) => String.t(),
+          required(:web_fetch_tool_type) => String.t()
         }
 
   @doc """
@@ -57,7 +57,9 @@ defmodule ContextBot.Research.Request do
           max_tokens: max_tokens,
           max_web_search_uses: max_web_search_uses,
           max_web_fetch_uses: max_web_fetch_uses,
-          max_web_fetch_content_tokens: max_web_fetch_content_tokens
+          max_web_fetch_content_tokens: max_web_fetch_content_tokens,
+          web_search_tool_type: web_search_tool_type,
+          web_fetch_tool_type: web_fetch_tool_type
         }
       )
       when is_binary(thread_text) do
@@ -72,14 +74,14 @@ defmodule ContextBot.Research.Request do
       "system" => @system_prompt,
       "tools" => [
         %{
-          "type" => @web_search_tool,
+          "type" => web_search_tool_type,
           "name" => "web_search",
           "allowed_callers" => ["direct"],
           "response_inclusion" => "full",
           "max_uses" => max_web_search_uses
         },
         %{
-          "type" => @web_fetch_tool,
+          "type" => web_fetch_tool_type,
           "name" => "web_fetch",
           "allowed_callers" => ["direct"],
           "response_inclusion" => "full",

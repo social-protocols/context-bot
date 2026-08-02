@@ -11,7 +11,6 @@ defmodule ContextBot.ATProto.Session do
 
   @create_session_path "/xrpc/com.atproto.server.createSession"
   @refresh_session_path "/xrpc/com.atproto.server.refreshSession"
-  @default_timeout 15_000
   @default_reauthentication_cooldown_ms 30_000
   @default_status_timeout_ms 1_000
 
@@ -83,7 +82,7 @@ defmodule ContextBot.ATProto.Session do
           Application.get_env(:context_bot, :bot_app_password)
         ),
       pds_url: option(options, config, :pds_url, settings.bot_pds_url),
-      timeout: option(options, config, :timeout, @default_timeout),
+      timeout: option(options, config, :timeout, settings.atproto_session_timeout_ms),
       req_options: option(options, config, :req_options, []),
       reauthentication_cooldown_ms:
         option(

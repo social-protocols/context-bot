@@ -12,10 +12,18 @@ defmodule ContextBot.ApplicationTest do
         bot_did: "did:plc:ewvi7nxzyoun6zhxrhs64oiz",
         bot_handle: "contextbot.test",
         bot_pds_url: "https://pds.test",
-        anthropic_daily_budget_usd: "10.00"
+        anthropic_daily_budget_usd: "10.00",
+        atproto_session_timeout_ms: 12_345,
+        poll_interval_ms: 23_456,
+        notification_page_cap: 7
       )
 
-    assert [{Oban, oban_options}, Session, Poller] = Application.bot_children(settings)
+    assert [
+             {Oban, oban_options},
+             {Session, [timeout: 12_345]},
+             {Poller, [poll_interval_ms: 23_456, page_cap: 7]}
+           ] = Application.bot_children(settings)
+
     assert oban_options == Elixir.Application.fetch_env!(:context_bot, Oban)
 
     assert {:ok, {_flags, child_specs}} =

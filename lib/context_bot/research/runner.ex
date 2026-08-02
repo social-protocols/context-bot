@@ -385,7 +385,9 @@ defmodule ContextBot.Research.Runner do
           max_tokens: config.settings.anthropic_research_max_tokens,
           max_web_search_uses: config.settings.max_web_search_uses,
           max_web_fetch_uses: config.settings.max_web_fetch_uses,
-          max_web_fetch_content_tokens: config.settings.max_web_fetch_content_tokens
+          max_web_fetch_content_tokens: config.settings.max_web_fetch_content_tokens,
+          web_search_tool_type: config.settings.anthropic_web_search_tool_type,
+          web_fetch_tool_type: config.settings.anthropic_web_fetch_tool_type
         }
       )
 

@@ -5,9 +5,7 @@ defmodule ContextBot.ATProto.ReqClient do
 
   @behaviour ContextBot.ATProto.Client
 
-  @appview_url "https://api.bsky.app"
   @plc_directory_url "https://plc.directory"
-  @default_timeout 15_000
   @plc_did_regex ~r/\Adid:plc:[a-z2-7]{24}\z/
   @hostname_label_regex ~r/\A[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\z/
 
@@ -37,7 +35,7 @@ defmodule ContextBot.ATProto.ReqClient do
   def get_profile(actor, labeler_did) when is_binary(actor) and is_binary(labeler_did) do
     request(
       method: :get,
-      url: @appview_url <> "/xrpc/app.bsky.actor.getProfile",
+      url: appview_url() <> "/xrpc/app.bsky.actor.getProfile",
       params: [actor: actor],
       headers: [{"atproto-accept-labelers", labeler_did}]
     )
@@ -47,7 +45,7 @@ defmodule ContextBot.ATProto.ReqClient do
   def resolve_handle(handle) when is_binary(handle) do
     request(
       method: :get,
-      url: @appview_url <> "/xrpc/com.atproto.identity.resolveHandle",
+      url: appview_url() <> "/xrpc/com.atproto.identity.resolveHandle",
       params: [handle: handle]
     )
   end
@@ -146,7 +144,8 @@ defmodule ContextBot.ATProto.ReqClient do
   end
 
   defp request(request_options) do
-    timeout = config()[:timeout] || @default_timeout
+    settings = Application.fetch_env!(:context_bot, :settings)
+    timeout = config()[:timeout] || settings.atproto_http_timeout_ms
 
     common_options = [
       finch: [
@@ -215,6 +214,12 @@ defmodule ContextBot.ATProto.ReqClient do
   defp pds_url do
     settings = Application.fetch_env!(:context_bot, :settings)
     url = config()[:pds_url] || settings.bot_pds_url
+    String.trim_trailing(url, "/")
+  end
+
+  defp appview_url do
+    settings = Application.fetch_env!(:context_bot, :settings)
+    url = config()[:appview_url] || settings.appview_url
     String.trim_trailing(url, "/")
   end
 

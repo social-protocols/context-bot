@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Test scenarios intentionally isolate environment changes in subshells.
+# shellcheck disable=SC2030,SC2031
 set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,10 +23,47 @@ fi
 [[ "$missing_output" == *"BITWARDEN_ITEM_ID is required"* ]] ||
 	fail "missing item id error was not actionable"
 
+set +e
+errexit_cleanup_output="$(
+	CONTEXT_BOT_PROJECT_ROOT="$project_root" bash -c '
+		set -euo pipefail
+		export BITWARDEN_ITEM_ID="test-item"
+		bw() {
+			printf "%s\n" '\''{"fields":[{"name":"FLY_API_TOKEN","value":"fly-test-value"},{"name":"SECRET_KEY_BASE","value":"secret-key-test-value"},{"name":"BOT_APP_PASSWORD","value":"app-password-test-value"}]}'\''
+		}
+		trap '\''
+			status=$?
+			[[ "$status" -ne 0 ]] || exit 90
+			for variable in FLY_API_TOKEN SECRET_KEY_BASE BOT_APP_PASSWORD ANTHROPIC_API_KEY context_bot_bitwarden_item context_bot_secret_name context_bot_secret_value context_bot_fly_api_token context_bot_secret_key_base context_bot_bot_app_password context_bot_anthropic_api_key; do
+				if [[ -n "${!variable+x}" ]]; then
+					exit 91
+				fi
+			done
+			for function_name in context_bot_secrets_fail context_bot_secrets_cleanup context_bot_secrets_restore_xtrace context_bot_secrets_abort; do
+				if declare -F "$function_name" >/dev/null; then
+					exit 92
+				fi
+			done
+			printf "errexit cleanup verified\n"
+		'\'' EXIT
+		# shellcheck source=secrets.sh
+		source "$CONTEXT_BOT_PROJECT_ROOT/secrets.sh"
+		printf "unreachable\n"
+	' 2>&1
+)"
+errexit_cleanup_status=$?
+set -e
+
+[[ "$errexit_cleanup_status" -ne 0 ]] || fail "partial payload succeeded under errexit"
+[[ "$errexit_cleanup_output" == *"errexit cleanup verified"* ]] ||
+	fail "errexit exited before secret cleanup completed"
+[[ "$errexit_cleanup_output" != *"fly-test-value"* ]] || fail "errexit leaked the Fly token"
+[[ "$errexit_cleanup_output" != *"secret-key-test-value"* ]] || fail "errexit leaked the secret key"
+[[ "$errexit_cleanup_output" != *"app-password-test-value"* ]] || fail "errexit leaked the bot password"
+
 if ! partial_output="$(
 	(
 		# Each test scenario intentionally has an isolated environment.
-		# shellcheck disable=SC2030
 		export BITWARDEN_ITEM_ID="test-item"
 		# shellcheck disable=SC2329
 		bw() {
@@ -56,7 +95,7 @@ fi
 success_output="$(
 	(
 		# Each test scenario intentionally has an isolated environment.
-		# shellcheck disable=SC2031
+		# shellcheck disable=SC2030
 		export BITWARDEN_ITEM_ID="test-item"
 		# shellcheck disable=SC2329
 		bw() {
@@ -92,6 +131,33 @@ EOF
 [[ "$success_output" == "$expected_success_output" ]] ||
 	fail "success output did not contain only exported secret names"
 
+xtrace_output="$(
+	(
+		export BITWARDEN_ITEM_ID="test-item"
+		# shellcheck disable=SC2329
+		bw() {
+			printf '%s\n' '{"fields":[{"name":"FLY_API_TOKEN","value":"fly-test-value"},{"name":"SECRET_KEY_BASE","value":"secret-key-test-value"},{"name":"BOT_APP_PASSWORD","value":"app-password-test-value"},{"name":"ANTHROPIC_API_KEY","value":"anthropic-key-test-value"}]}'
+		}
+		set -x
+		# shellcheck source=secrets.sh
+		source "$project_root/secrets.sh"
+		case "$-" in
+		*x*) ;;
+		*) exit 93 ;;
+		esac
+		set +x
+		[[ "$FLY_API_TOKEN" == "fly-test-value" ]]
+		[[ "$SECRET_KEY_BASE" == "secret-key-test-value" ]]
+		[[ "$BOT_APP_PASSWORD" == "app-password-test-value" ]]
+		[[ "$ANTHROPIC_API_KEY" == "anthropic-key-test-value" ]]
+	) 2>&1
+)"
+
+[[ "$xtrace_output" != *"fly-test-value"* ]] || fail "xtrace leaked the Fly token"
+[[ "$xtrace_output" != *"secret-key-test-value"* ]] || fail "xtrace leaked the secret key"
+[[ "$xtrace_output" != *"app-password-test-value"* ]] || fail "xtrace leaked the bot password"
+[[ "$xtrace_output" != *"anthropic-key-test-value"* ]] || fail "xtrace leaked the Anthropic key"
+
 test_tmp="$(mktemp -d "${TMPDIR:-/tmp}/context-bot-secrets-test.XXXXXX")"
 trap 'rm -rf "$test_tmp"' EXIT
 mkdir -p "$test_tmp/bin"
@@ -110,12 +176,16 @@ set -euo pipefail
 
 case "${1:-}" in
 secrets)
-	[[ "$#" -eq 6 ]]
-	[[ "$2" == "set" ]]
+	[[ "$#" -eq 3 ]]
+	[[ "$2" == "import" ]]
 	[[ "$3" == "--stage" ]]
-	[[ "$4" == "SECRET_KEY_BASE=secret-key-test-value" ]]
-	[[ "$5" == "BOT_APP_PASSWORD=app-password-test-value" ]]
-	[[ "$6" == "ANTHROPIC_API_KEY=anthropic-key-test-value" ]]
+	secret_import="$(cat)"
+	expected_import="$(printf '%s\n' \
+		'SECRET_KEY_BASE=secret-key-test-value' \
+		'BOT_APP_PASSWORD=app-password-test-value' \
+		'ANTHROPIC_API_KEY=anthropic-key-test-value')"
+	[[ "$secret_import" == "$expected_import" ]]
+	[[ "$secret_import" != *"FLY_API_TOKEN"* ]]
 	printf 'secrets\n' >>"$CONTEXT_BOT_FLY_LOG"
 	;;
 deploy)

@@ -58,7 +58,7 @@ Do not paste logs containing post bodies, provider bodies, Bitwarden payloads, a
 
 ## Inspecting local workflow state
 
-These read-only queries show counts and identifiers, not stored post or provider content:
+These read-only queries show counts and operational aggregates, not stored post or provider content:
 
 ```bash
 sqlite3 -readonly data/context_bot_dev.db <<'SQL'
@@ -94,6 +94,20 @@ SQL
 
 Development uses the ignored `data/context_bot_dev.db`; tests create partition-aware files under `data/`; Fly uses `/data/context_bot.db` on `context_bot_data`. The Fly deployment is deliberately one Machine with one local volume. It accepts downtime and possible data loss between snapshots; it is not a replicated production database design.
 
+After explicit authorization for a live Fly inspection, use the SQLite CLI included in the release image. `-readonly` prevents writes and the busy timeout allows the query to wait briefly for the application writer without changing data:
+
+```bash
+fly ssh console --command \
+  "sqlite3 -readonly -cmd 'PRAGMA busy_timeout=5000;' -header -column /data/context_bot.db \
+  'SELECT stage, failure_category, count(*) AS invocations FROM invocations GROUP BY stage, failure_category ORDER BY stage, failure_category;'"
+
+fly ssh console --command \
+  "sqlite3 -readonly -cmd 'PRAGMA busy_timeout=5000;' -header -column /data/context_bot.db \
+  'SELECT (SELECT count(*) FROM invocations) AS invocations, (SELECT count(*) FROM api_budget_entries WHERE sent_at IS NOT NULL) AS sent_attempts, (SELECT count(*) FROM anthropic_response_envelopes) AS provider_responses, (SELECT count(*) FROM invocations WHERE reply_uri IS NOT NULL) AS published_replies;'"
+```
+
+Keep live inspection aggregate-only. Do not select raw notifications, threads, Anthropic messages, provider bodies, or frozen reply text.
+
 ## Secrets and Fly configuration
 
 Create one Bitwarden item with these four custom fields, using the names exactly:
@@ -103,9 +117,9 @@ Create one Bitwarden item with these four custom fields, using the names exactly
 - `BOT_APP_PASSWORD`
 - `ANTHROPIC_API_KEY`
 
-`secrets.sh` reads only those fields, exports them only after every field is present, removes the Bitwarden payload and temporary variables, and reports names without values. `FLY_API_TOKEN` authenticates Fly; `just deploy` stages only `SECRET_KEY_BASE`, `BOT_APP_PASSWORD`, and `ANTHROPIC_API_KEY` as application secrets.
+`secrets.sh` reads only those fields, disables shell tracing while values are handled, exports them only after every field is present, removes the Bitwarden payload and temporary variables, restores the caller's tracing state, and reports names without values. `FLY_API_TOKEN` authenticates Fly; `just deploy` sends only `SECRET_KEY_BASE`, `BOT_APP_PASSWORD`, and `ANTHROPIC_API_KEY` to `fly secrets import --stage` over standard input, then deploys. Secret values are never command-line arguments.
 
-Before any live deployment, replace the empty `BOT_DID`, `BOT_HANDLE`, and `BOT_PDS_URL` values in `fly.toml` with the real public bot DID, handle, and HTTPS PDS URL. Review the committed limits and the `OPERATOR_ALLOWED_DIDS` comma-separated DID allowlist. Do not set `BOT_ENABLED=true` yet. The POC always reads labels and threads directly from `https://api.bsky.app`; it polls every 30 seconds and reads at most five notification pages per poll.
+Before any live deployment, replace the empty `BOT_DID`, `BOT_HANDLE`, and `BOT_PDS_URL` values in `fly.toml` with the real public bot DID, handle, and HTTPS PDS URL. Review the committed limits and the `OPERATOR_ALLOWED_DIDS` comma-separated DID allowlist. Do not set `BOT_ENABLED=true` yet. `APPVIEW_URL`, `POLL_INTERVAL_MS`, `NOTIFICATION_PAGE_CAP`, the three ATProto/thread timeouts, `ANTHROPIC_HTTP_TIMEOUT_MS`, `ANTHROPIC_API_VERSION`, and both Anthropic server-tool types are validated runtime controls; retain the committed defaults unless a reviewed provider change requires otherwise.
 
 Creating the Fly app or volume is also an external effect and requires explicit authorization. Create them once if they do not already exist:
 
@@ -133,10 +147,10 @@ Live tests call Bluesky and Anthropic and publish a public reply. They always re
 
 For the eligible test, use either a bidirectionally verified `bsky.team` account, an account with the `bluesky-elder` Skywatch label, or an exact DID listed in `OPERATOR_ALLOWED_DIDS`.
 
-1. Record the current invocation, sent-budget-entry, provider-response, and completed-reply counts with the read-only queries above (or equivalent read-only queries against a copy of the Fly SQLite volume).
+1. With explicit authorization, record the current invocation, sent-budget-entry, provider-response, and completed-reply counts using the aggregate-only `fly ssh console` queries above.
 2. Create a public ancestor chain. Mention the bot in a new reply and ask for context.
 3. Observe aggregate `/health` and the invocation stage until it becomes `complete` or a categorized terminal failure. Do not print `raw_notification`, `raw_thread`, request messages, or response bodies.
-4. Confirm the expected sent provider attempts and exactly one visible bot reply. The reply's parent must be the invocation post and its root must be the oldest captured ancestor.
+4. Confirm the expected sent provider attempts and exactly one visible bot reply. The reply's parent must be the invocation post. Its root must equal the invocation record's `reply.root` strong reference; for a top-level invocation, the invocation itself is the root. Do not infer the reply root from whichever ancestor happens to be oldest in the captured AppView response.
 5. Create a direct reply below the invocation before its poll is processed; confirm that descendant text is absent from the stored canonical thread/provider prompt.
 6. Wait through another notification poll and confirm the same invocation still has one reply URI/CID and Bluesky still shows one bot reply.
 

@@ -102,6 +102,38 @@ defmodule ContextBot.Research.AnthropicClientTest do
     refute Map.has_key?(options, :request_timeout)
   end
 
+  test "uses the runtime Anthropic API version and HTTP timeout without test overrides" do
+    original_settings = Application.fetch_env!(:context_bot, :settings)
+    original_config = Application.fetch_env!(:context_bot, AnthropicClient)
+
+    settings =
+      original_settings
+      |> Map.put(:anthropic_api_version, "2027-08-09")
+      |> Map.put(:anthropic_http_timeout_ms, 23_456)
+
+    Application.put_env(:context_bot, :settings, settings)
+    Application.put_env(:context_bot, AnthropicClient, Keyword.delete(original_config, :timeout))
+    Process.put(:anthropic_client_capture_pid, self())
+
+    on_exit(fn ->
+      Application.put_env(:context_bot, :settings, original_settings)
+      Application.put_env(:context_bot, AnthropicClient, original_config)
+      Process.delete(:anthropic_client_capture_pid)
+    end)
+
+    Req.Test.expect(AnthropicClient, fn conn ->
+      assert Plug.Conn.get_req_header(conn, "anthropic-version") == ["2027-08-09"]
+      Req.Test.json(conn, %{"type" => "message"})
+    end)
+
+    assert {:ok, %{status: 200}} =
+             AnthropicClient.send_message(@request, @attempt_metadata)
+
+    assert_receive {:anthropic_client_options, options}
+    assert options.finch[:receive_timeout] == 23_456
+    assert options.finch[:request_timeout] == 28_456
+  end
+
   test "returns pause, refusal, 429, and 5xx bodies as exact raw envelopes" do
     cases = [
       {200, "pause.json"},

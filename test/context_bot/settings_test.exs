@@ -29,6 +29,16 @@ defmodule ContextBot.SettingsTest do
     assert settings.anthropic_max_http_retries == 2
     assert settings.anthropic_retry_base_ms == 1_000
     assert settings.anthropic_retry_max_ms == 30_000
+    assert settings.appview_url == "https://api.bsky.app"
+    assert settings.poll_interval_ms == 30_000
+    assert settings.notification_page_cap == 5
+    assert settings.atproto_http_timeout_ms == 15_000
+    assert settings.atproto_session_timeout_ms == 15_000
+    assert settings.thread_fetch_timeout_ms == 20_000
+    assert settings.anthropic_http_timeout_ms == 300_000
+    assert settings.anthropic_api_version == "2023-06-01"
+    assert settings.anthropic_web_search_tool_type == "web_search_20260318"
+    assert settings.anthropic_web_fetch_tool_type == "web_fetch_20260318"
   end
 
   test "rejects malformed non-secret settings" do
@@ -180,6 +190,52 @@ defmodule ContextBot.SettingsTest do
   test "uses the canonical public web-search cap in maximum-exposure validation" do
     assert_raise ArgumentError, ~r/ANTHROPIC_RESEARCH_RESERVATION_USD.*maximum exposure/, fn ->
       Settings.load(max_web_search_uses: 101)
+    end
+  end
+
+  test "loads every external request control from the environment" do
+    settings =
+      Settings.load(%{
+        "APPVIEW_URL" => "https://appview.example.test",
+        "POLL_INTERVAL_MS" => "1234",
+        "NOTIFICATION_PAGE_CAP" => "7",
+        "ATPROTO_HTTP_TIMEOUT_MS" => "2345",
+        "ATPROTO_SESSION_TIMEOUT_MS" => "3456",
+        "THREAD_FETCH_TIMEOUT_MS" => "4567",
+        "ANTHROPIC_HTTP_TIMEOUT_MS" => "5678",
+        "ANTHROPIC_API_VERSION" => "2027-08-09",
+        "ANTHROPIC_WEB_SEARCH_TOOL_TYPE" => "web_search_20270809",
+        "ANTHROPIC_WEB_FETCH_TOOL_TYPE" => "web_fetch_20270809"
+      })
+
+    assert settings.appview_url == "https://appview.example.test"
+    assert settings.poll_interval_ms == 1_234
+    assert settings.notification_page_cap == 7
+    assert settings.atproto_http_timeout_ms == 2_345
+    assert settings.atproto_session_timeout_ms == 3_456
+    assert settings.thread_fetch_timeout_ms == 4_567
+    assert settings.anthropic_http_timeout_ms == 5_678
+    assert settings.anthropic_api_version == "2027-08-09"
+    assert settings.anthropic_web_search_tool_type == "web_search_20270809"
+    assert settings.anthropic_web_fetch_tool_type == "web_fetch_20270809"
+  end
+
+  test "rejects malformed external request controls" do
+    for {environment, expected_name} <- [
+          {%{"APPVIEW_URL" => "http://api.bsky.app"}, "APPVIEW_URL"},
+          {%{"POLL_INTERVAL_MS" => "0"}, "POLL_INTERVAL_MS"},
+          {%{"NOTIFICATION_PAGE_CAP" => "unbounded"}, "NOTIFICATION_PAGE_CAP"},
+          {%{"ATPROTO_HTTP_TIMEOUT_MS" => "-1"}, "ATPROTO_HTTP_TIMEOUT_MS"},
+          {%{"ATPROTO_SESSION_TIMEOUT_MS" => "0"}, "ATPROTO_SESSION_TIMEOUT_MS"},
+          {%{"THREAD_FETCH_TIMEOUT_MS" => "forever"}, "THREAD_FETCH_TIMEOUT_MS"},
+          {%{"ANTHROPIC_HTTP_TIMEOUT_MS" => "0"}, "ANTHROPIC_HTTP_TIMEOUT_MS"},
+          {%{"ANTHROPIC_API_VERSION" => "latest"}, "ANTHROPIC_API_VERSION"},
+          {%{"ANTHROPIC_WEB_SEARCH_TOOL_TYPE" => "web_fetch_20260318"},
+           "ANTHROPIC_WEB_SEARCH_TOOL_TYPE"},
+          {%{"ANTHROPIC_WEB_FETCH_TOOL_TYPE" => "web_fetch_latest"},
+           "ANTHROPIC_WEB_FETCH_TOOL_TYPE"}
+        ] do
+      assert_raise ArgumentError, ~r/#{expected_name}/, fn -> Settings.load(environment) end
     end
   end
 end

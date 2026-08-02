@@ -70,7 +70,7 @@ RUN mix release
 FROM ${RUNNER_IMAGE} AS final
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends libstdc++6 openssl libncurses6 locales ca-certificates libsqlite3-0 gosu \
+  && apt-get install -y --no-install-recommends libstdc++6 openssl libncurses6 locales ca-certificates libsqlite3-0 sqlite3 gosu \
   && rm -rf /var/lib/apt/lists/*
 
 # Set the locale

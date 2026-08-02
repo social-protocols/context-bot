@@ -12,8 +12,6 @@ defmodule ContextBot.Mentions.Poller do
   alias ContextBot.Workflow.Store
 
   @eligibility_worker "ContextBot.Workers.EligibilityWorker"
-  @default_poll_interval_ms 30_000
-  @default_page_cap 5
 
   @type state :: %{
           client: module(),
@@ -50,8 +48,8 @@ defmodule ContextBot.Mentions.Poller do
       validator: Keyword.get(options, :validator, Validator),
       bot_did: Keyword.get(options, :bot_did, settings.bot_did),
       max_pending: Keyword.get(options, :max_pending, settings.max_pending),
-      page_cap: Keyword.get(options, :page_cap, @default_page_cap),
-      poll_interval_ms: Keyword.get(options, :poll_interval_ms, @default_poll_interval_ms),
+      page_cap: Keyword.get(options, :page_cap, settings.notification_page_cap),
+      poll_interval_ms: Keyword.get(options, :poll_interval_ms, settings.poll_interval_ms),
       draining?: false
     }
 
