@@ -59,9 +59,13 @@ defmodule ContextBot.Workers.DeferredWorker do
           candidates = recovery_candidates(dependencies.batch_size)
 
           recovery =
-            Enum.flat_map(candidates, &classify_recovery(&1, dependencies))
+            Enum.flat_map(candidates, fn invocation ->
+              invocation
+              |> mark_recovery_checked(dependencies.now)
+              |> classify_recovery(dependencies)
+            end)
 
-          remaining = dependencies.batch_size - length(candidates)
+          remaining = dependencies.batch_size - length(recovery)
 
           {deferred, _remaining_budget} =
             dependencies.now
@@ -87,9 +91,20 @@ defmodule ContextBot.Workers.DeferredWorker do
   defp recovery_candidates(batch_size) do
     Invocation
     |> where([invocation], invocation.stage in ^@recovery_stages)
-    |> order_by([invocation], asc: invocation.received_at, asc: invocation.id)
+    |> order_by(
+      [invocation],
+      asc: invocation.recovery_checked_at,
+      asc: invocation.received_at,
+      asc: invocation.id
+    )
     |> limit(^batch_size)
     |> Repo.all()
+  end
+
+  defp mark_recovery_checked(invocation, now) do
+    invocation
+    |> Invocation.transition_changeset(%{recovery_checked_at: now})
+    |> Repo.update!()
   end
 
   defp deferred_candidates(_now, remaining) when remaining <= 0, do: []

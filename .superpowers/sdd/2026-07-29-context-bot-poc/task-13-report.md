@@ -68,3 +68,36 @@
 ### Commit
 
 - Planned commit message: `fix: bound workflow recovery`
+
+## Formal review fix round 2
+
+### TDD evidence
+
+- RED: with `batch_size: 2`, a permanent oldest prefix consisting of an active eligibility job
+  and a completed publication job with a fresh lease consumed every recovery scan. A later missing
+  thread job and due capacity deferral remained unreachable across repeated maintenance passes.
+- GREEN: the focused deferred-worker suite passed 14/14 after adding durable scan rotation. The
+  test database was recreated from scratch to verify the complete migration chain and the focused
+  suite passed again.
+
+### Correction
+
+- Added nullable `recovery_checked_at` maintenance state. Every inspected recovery candidate is
+  stamped inside the bounded immediate transaction, and candidates are ordered least-recently
+  checked then oldest receipt. A permanently active prefix therefore rotates behind uninspected
+  work without requiring an unbounded over-scan.
+- Deferred selection now uses recovery work actually produced, rather than recovery rows merely
+  inspected, so skipped active or fresh-leased rows cannot permanently consume all deferred slots.
+- Replaced the earlier scan index with a partial index over recovery stages ordered by
+  `(recovery_checked_at, received_at, id)`. Tests assert the indexed columns and partial-stage
+  predicate, not only the index name.
+
+### Verification
+
+- Focused: 14 tests passed after a fresh test-database migration.
+- Fresh `direnv exec . just check`: formatting, warnings-as-errors compilation, strict Credo,
+  ShellCheck, 292 ExUnit tests, secrets tests, and Dialyzer all passed; Dialyzer reported 0 errors.
+
+### Commit
+
+- Planned commit message: `fix: prevent recovery scan starvation`

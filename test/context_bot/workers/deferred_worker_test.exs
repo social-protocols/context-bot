@@ -285,6 +285,45 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
            ]
   end
 
+  test "permanent no-op recovery prefixes rotate while due deferred work gets a bounded slot" do
+    oldest_active = invocation("fair-active-oldest", :received, minutes_ago: 10)
+
+    fresh_lease =
+      invocation("fair-fresh-lease", :researching,
+        minutes_ago: 9,
+        research_claim_token: "research-still-running",
+        research_claimed_at: DateTime.add(@now, -1, :second)
+      )
+
+    later_active = invocation("fair-active-later", :received, minutes_ago: 8)
+    missing = invocation("fair-missing", :capturing_thread, minutes_ago: 7)
+    due_deferred = invocation("fair-deferred", :deferred_capacity, minutes_ago: 6)
+
+    for invocation <- [oldest_active, later_active] do
+      invocation
+      |> job_args()
+      |> Oban.Job.new(worker: "ContextBot.Workers.EligibilityWorker", queue: :eligibility)
+      |> Repo.insert!()
+    end
+
+    terminal_job(fresh_lease, "ContextBot.Workers.ResearchWorker", "completed")
+
+    configure(batch_size: 2, research_claim_lease_ms: 60_000)
+
+    assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
+    assert Repo.reload!(due_deferred).stage == :received
+
+    assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
+
+    assert Enum.any?(Repo.all(Oban.Job), fn job ->
+             job.worker == "ContextBot.Workers.ThreadWorker" and job.args == job_args(missing)
+           end)
+
+    assert Repo.reload!(oldest_active).stage == :received
+    assert Repo.reload!(fresh_lease).stage == :researching
+    assert Repo.reload!(later_active).stage == :received
+  end
+
   test "discarded and cancelled jobs terminalize safely without receiving fresh retries" do
     discarded = invocation("discarded", :received, minutes_ago: 5)
     cancelled = invocation("cancelled", :checking_eligibility, minutes_ago: 4)
@@ -362,9 +401,27 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
     assert Enum.count(invocations, &(Repo.reload!(&1).stage == :received)) == 3
   end
 
-  test "workflow recovery query has a matching stage and due-order index" do
+  test "workflow recovery query has a matching partial fairness index" do
     %{rows: rows} = Repo.query!("PRAGMA index_list('invocations')")
     assert Enum.any?(rows, fn row -> Enum.at(row, 1) == "invocations_recovery_scan_index" end)
+
+    %{rows: index_rows} = Repo.query!("PRAGMA index_info('invocations_recovery_scan_index')")
+
+    assert Enum.map(index_rows, &Enum.at(&1, 2)) == [
+             "recovery_checked_at",
+             "received_at",
+             "id"
+           ]
+
+    %{rows: [[index_sql]]} =
+      Repo.query!(
+        "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
+        ["invocations_recovery_scan_index"]
+      )
+
+    assert index_sql =~ "WHERE stage IN"
+    assert index_sql =~ "'checking_eligibility'"
+    assert index_sql =~ "'publishing'"
   end
 
   defp configure(overrides \\ []) do
