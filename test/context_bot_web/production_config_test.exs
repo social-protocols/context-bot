@@ -72,8 +72,8 @@ defmodule ContextBotWeb.ProductionConfigTest do
     end
   end
 
-  test "runtime config applies queue concurrency to every manual queue" do
-    replace_environment(%{"BOT_ENABLED" => "false", "QUEUE_CONCURRENCY" => "3"})
+  test "runtime config keeps every workflow queue serial" do
+    replace_environment(%{"BOT_ENABLED" => "false", "QUEUE_CONCURRENCY" => "1"})
 
     queues =
       "config/runtime.exs"
@@ -82,7 +82,7 @@ defmodule ContextBotWeb.ProductionConfigTest do
       |> Keyword.fetch!(Oban)
       |> Keyword.fetch!(:queues)
 
-    assert queues == [eligibility: 3, thread: 3, research: 3, reply: 3, maintenance: 3]
+    assert queues == [eligibility: 1, thread: 1, research: 1, reply: 1, maintenance: 1]
   end
 
   defp replace_environment(changes) do

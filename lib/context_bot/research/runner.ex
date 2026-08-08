@@ -10,7 +10,17 @@ defmodule ContextBot.Research.Runner do
   import Ecto.Query
 
   alias ContextBot.Repo
-  alias ContextBot.Research.{AnthropicClient, Budget, BudgetEntry, Pricing, Reply, Request}
+
+  alias ContextBot.Research.{
+    AnthropicClient,
+    Budget,
+    BudgetEntry,
+    Pricing,
+    Reply,
+    Request,
+    ResponseEnvelope
+  }
+
   alias ContextBot.Workflow.{Invocation, Store}
 
   @http_date_regex ~r/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (?<day>\d{2}) (?<month>Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (?<year>\d{4}) (?<hour>\d{2}):(?<minute>\d{2}):(?<second>\d{2}) GMT$/
@@ -80,6 +90,20 @@ defmodule ContextBot.Research.Runner do
   end
 
   defp start_attempt(invocation, kind, config) do
+    required_bytes = config.settings.max_response_bytes + ResponseEnvelope.max_overhead_bytes()
+
+    if config.store.provider_response_storage_available?(
+         invocation,
+         required_bytes,
+         config.storage_limit
+       ) do
+      reserve_attempt(invocation, kind, config)
+    else
+      {:error, :provider_storage_limit}
+    end
+  end
+
+  defp reserve_attempt(invocation, kind, config) do
     amount = reservation(config.settings, kind)
 
     case config.budget.reserve_next(

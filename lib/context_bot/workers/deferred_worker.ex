@@ -50,9 +50,8 @@ defmodule ContextBot.Workers.DeferredWorker do
 
           recovery =
             Enum.flat_map(candidates, fn invocation ->
-              invocation
-              |> mark_recovery_checked(dependencies.now)
-              |> classify_recovery(dependencies)
+              mark_recovery_checked(invocation, dependencies.now)
+              classify_recovery(invocation, dependencies)
             end)
 
           remaining = dependencies.batch_size - length(recovery)
@@ -292,12 +291,12 @@ defmodule ContextBot.Workers.DeferredWorker do
     []
   end
 
-  defp classify_target_job(%Oban.Job{state: "completed"}, invocation, work, dependencies),
-    do: classify_completed_job(invocation, work, dependencies)
+  defp classify_target_job(%Oban.Job{state: "completed"} = job, invocation, work, dependencies),
+    do: classify_completed_job(job, invocation, work, dependencies)
 
   defp classify_target_job(%Oban.Job{}, _invocation, _work, _dependencies), do: []
 
-  defp classify_completed_job(invocation, work, dependencies) do
+  defp classify_completed_job(job, invocation, work, dependencies) do
     cond do
       fresh_lease?(invocation, dependencies) ->
         []
@@ -308,11 +307,22 @@ defmodule ContextBot.Workers.DeferredWorker do
       invocation.stage == :thread_ready and not is_nil(invocation.deferred_attempt_kind) ->
         [work]
 
+      completed_before_received_transition?(job, invocation) ->
+        [work]
+
       true ->
         terminalize_recovery(invocation, "job_completed_without_handoff", dependencies.now)
         []
     end
   end
+
+  defp completed_before_received_transition?(
+         %Oban.Job{completed_at: %DateTime{} = completed_at},
+         %Invocation{stage: :received, updated_at: %DateTime{} = transitioned_at}
+       ),
+       do: DateTime.compare(completed_at, transitioned_at) == :lt
+
+  defp completed_before_received_transition?(_job, _invocation), do: false
 
   defp latest_target_job(%{args: %{"uri" => uri, "cid" => cid}, worker: worker}) do
     Oban.Job

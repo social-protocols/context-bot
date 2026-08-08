@@ -5,7 +5,10 @@ defmodule ContextBot.ATProto.ReqClient do
 
   @behaviour ContextBot.ATProto.Client
 
+  alias ContextBot.HTTP.BodyLimit
+
   @plc_directory_url "https://plc.directory"
+  @appview_proxy_header {"atproto-proxy", "did:web:api.bsky.app#bsky_appview"}
   @plc_did_regex ~r/\Adid:plc:[a-z2-7]{24}\z/
   @hostname_label_regex ~r/\A[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\z/
 
@@ -17,7 +20,8 @@ defmodule ContextBot.ATProto.ReqClient do
     authenticated_request(
       method: :get,
       url: pds_url() <> "/xrpc/app.bsky.notification.listNotifications",
-      params: params
+      params: params,
+      headers: [@appview_proxy_header]
     )
   end
 
@@ -27,7 +31,8 @@ defmodule ContextBot.ATProto.ReqClient do
     authenticated_request(
       method: :get,
       url: pds_url() <> "/xrpc/app.bsky.feed.getPostThread",
-      params: [uri: uri, depth: 0, parentHeight: parent_height]
+      params: [uri: uri, depth: 0, parentHeight: parent_height],
+      headers: [@appview_proxy_header]
     )
   end
 
@@ -154,15 +159,38 @@ defmodule ContextBot.ATProto.ReqClient do
         receive_timeout: timeout,
         request_timeout: timeout + 5_000
       ],
+      raw: true,
       retry: false
     ]
 
     options = Keyword.merge(config()[:req_options] || [], common_options)
 
     Req.new(options)
+    |> BodyLimit.attach(settings.max_response_bytes)
     |> Req.request(request_options)
+    |> decode_json_response()
     |> normalize_response()
   end
+
+  defp decode_json_response({:ok, %Req.Response{status: status}} = result)
+       when status in [401, 429] or status in 500..599,
+       do: result
+
+  defp decode_json_response(
+         {:ok, %Req.Response{headers: headers, body: body} = response} = result
+       )
+       when is_binary(body) do
+    if json_response?(headers) do
+      case Jason.decode(body) do
+        {:ok, decoded_body} -> {:ok, %{response | body: decoded_body}}
+        {:error, error} -> {:error, error}
+      end
+    else
+      result
+    end
+  end
+
+  defp decode_json_response(result), do: result
 
   defp normalize_response({:ok, %Req.Response{status: status, headers: headers, body: body}})
        when status in 200..299 do
@@ -191,6 +219,10 @@ defmodule ContextBot.ATProto.ReqClient do
     do: {:error, :timeout}
 
   defp normalize_response({:error, %{reason: :timeout}}), do: {:error, :timeout}
+
+  defp normalize_response({:error, %BodyLimit.ResponseTooLargeError{}}),
+    do: {:error, :response_too_large}
+
   defp normalize_response({:error, _exception}), do: {:error, {:transient, :transport}}
 
   defp first_header(headers, name) do
@@ -198,6 +230,13 @@ defmodule ContextBot.ATProto.ReqClient do
       [value | _] -> value
       [] -> nil
     end
+  end
+
+  defp json_response?(headers) do
+    Enum.any?(Map.get(headers, "content-type", []), fn content_type ->
+      media_type = content_type |> String.split(";", parts: 2) |> hd() |> String.trim()
+      media_type == "application/json" or String.ends_with?(media_type, "+json")
+    end)
   end
 
   defp valid_web_hostname?(hostname) do

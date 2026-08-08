@@ -86,12 +86,47 @@ defmodule ContextBot.SettingsTest do
   test "loads documented response and storage limit names" do
     settings =
       Settings.load(
-        anthropic_response_max_bytes: "64",
-        provider_response_storage_max_bytes: "65"
+        anthropic_response_max_bytes: "7000000",
+        provider_response_storage_max_bytes: "64000000"
       )
 
-    assert settings.max_response_bytes == 64
-    assert settings.max_storage_bytes == 65
+    assert settings.max_response_bytes == 7_000_000
+    assert settings.max_storage_bytes == 64_000_000
+  end
+
+  test "rejects operational controls outside reviewed upper bounds" do
+    for {environment, expected_name} <- [
+          {%{"ATPROTO_HTTP_TIMEOUT_MS" => "60001"}, "ATPROTO_HTTP_TIMEOUT_MS"},
+          {%{"ATPROTO_SESSION_TIMEOUT_MS" => "60001"}, "ATPROTO_SESSION_TIMEOUT_MS"},
+          {%{"THREAD_FETCH_TIMEOUT_MS" => "60001"}, "THREAD_FETCH_TIMEOUT_MS"},
+          {%{"ANTHROPIC_HTTP_TIMEOUT_MS" => "600001"}, "ANTHROPIC_HTTP_TIMEOUT_MS"},
+          {%{"THREAD_PARENT_HEIGHT" => "101"}, "THREAD_PARENT_HEIGHT"},
+          {%{"ANTHROPIC_RESEARCH_MAX_TOKENS" => "64001"}, "ANTHROPIC_RESEARCH_MAX_TOKENS"},
+          {%{"ANTHROPIC_LENGTH_REPAIR_MAX_TOKENS" => "8193"},
+           "ANTHROPIC_LENGTH_REPAIR_MAX_TOKENS"},
+          {%{"MAX_WEB_SEARCH_USES" => "11"}, "MAX_WEB_SEARCH_USES"},
+          {%{"MAX_WEB_FETCH_USES" => "11"}, "MAX_WEB_FETCH_USES"},
+          {%{"MAX_WEB_FETCH_CONTENT_TOKENS" => "100001"}, "MAX_WEB_FETCH_CONTENT_TOKENS"},
+          {%{"MAX_TOOL_CONTINUATIONS" => "6"}, "MAX_TOOL_CONTINUATIONS"},
+          {%{"ANTHROPIC_MAX_HTTP_RETRIES" => "4"}, "ANTHROPIC_MAX_HTTP_RETRIES"},
+          {%{"ANTHROPIC_RETRY_BASE_MS" => "60001"}, "ANTHROPIC_RETRY_BASE_MS"},
+          {%{"ANTHROPIC_RETRY_MAX_MS" => "300001"}, "ANTHROPIC_RETRY_MAX_MS"},
+          {%{"ANTHROPIC_RESPONSE_MAX_BYTES" => "16000001"}, "ANTHROPIC_RESPONSE_MAX_BYTES"},
+          {%{"PROVIDER_RESPONSE_STORAGE_MAX_BYTES" => "128000001"},
+           "PROVIDER_RESPONSE_STORAGE_MAX_BYTES"},
+          {%{"QUEUE_CONCURRENCY" => "2"}, "QUEUE_CONCURRENCY"}
+        ] do
+      assert_raise ArgumentError, ~r/#{expected_name}/, fn -> Settings.load(environment) end
+    end
+  end
+
+  test "storage cap covers every permitted response plus envelope headroom" do
+    assert_raise ArgumentError, ~r/PROVIDER_RESPONSE_STORAGE_MAX_BYTES.*all permitted/, fn ->
+      Settings.load(
+        anthropic_response_max_bytes: "8000000",
+        provider_response_storage_max_bytes: "56000001"
+      )
+    end
   end
 
   test "parses daily and per-request USD settings into integer microdollars" do
@@ -171,7 +206,8 @@ defmodule ContextBot.SettingsTest do
         max_tool_continuations: 4,
         anthropic_max_http_retries: 3,
         anthropic_retry_base_ms: 250,
-        anthropic_retry_max_ms: 5_000
+        anthropic_retry_max_ms: 5_000,
+        provider_response_storage_max_bytes: 80_000_000
       )
 
     assert settings.anthropic_model_id == "claude-sonnet-5-20260715"
@@ -189,7 +225,10 @@ defmodule ContextBot.SettingsTest do
 
   test "uses the canonical public web-search cap in maximum-exposure validation" do
     assert_raise ArgumentError, ~r/ANTHROPIC_RESEARCH_RESERVATION_USD.*maximum exposure/, fn ->
-      Settings.load(max_web_search_uses: 101)
+      Settings.load(
+        max_web_search_uses: 10,
+        anthropic_research_reservation_usd: "0.000001"
+      )
     end
   end
 

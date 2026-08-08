@@ -156,6 +156,27 @@ defmodule ContextBot.Research.AnthropicClientTest do
     end)
   end
 
+  test "bounds retained allowlisted response headers without changing the raw body" do
+    raw_body = <<0, 255, 128, 65, 0, 254>>
+    huge_header = String.duplicate("7", 262_144)
+
+    Req.Test.expect(AnthropicClient, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "application/json")
+      |> Plug.Conn.put_resp_header("request-id", "req_bounded")
+      |> Plug.Conn.put_resp_header("anthropic-ratelimit-requests-remaining", huge_header)
+      |> Plug.Conn.send_resp(200, raw_body)
+    end)
+
+    assert {:ok, envelope} = AnthropicClient.send_message(@request, @attempt_metadata)
+
+    assert envelope.raw_body == raw_body
+    assert envelope.headers["content-type"] == ["application/json"]
+    assert envelope.headers["request-id"] == ["req_bounded"]
+    assert envelope.headers_truncated == true
+    assert byte_size(:erlang.term_to_binary(envelope.headers, [:deterministic])) <= 16_384
+  end
+
   test "maps response overflow before decoding" do
     original_settings = Application.fetch_env!(:context_bot, :settings)
     limited_settings = %{original_settings | max_response_bytes: 4}

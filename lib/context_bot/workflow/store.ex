@@ -405,6 +405,28 @@ defmodule ContextBot.Workflow.Store do
        |> Enum.map(&ResponseEnvelope.to_map/1))
   end
 
+  @doc "Returns the actual SQLite bytes occupied by the invocation's provider-response ledger."
+  @spec provider_response_storage_bytes(Invocation.t() | pos_integer()) :: non_neg_integer()
+  def provider_response_storage_bytes(%Invocation{id: id}),
+    do: provider_response_storage_bytes(id)
+
+  def provider_response_storage_bytes(invocation_id)
+      when is_integer(invocation_id) and invocation_id > 0 do
+    legacy_storage_bytes(invocation_id) + response_envelope_storage_bytes(invocation_id)
+  end
+
+  @doc "Reports whether one worst-case provider envelope still fits in the configured ledger cap."
+  @spec provider_response_storage_available?(
+          Invocation.t() | pos_integer(),
+          non_neg_integer(),
+          pos_integer()
+        ) :: boolean()
+  def provider_response_storage_available?(invocation, required_bytes, storage_limit)
+      when is_integer(required_bytes) and required_bytes >= 0 and is_integer(storage_limit) and
+             storage_limit > 0 do
+    provider_response_storage_bytes(invocation) <= storage_limit - required_bytes
+  end
+
   @spec pending_capacity_available?(pos_integer()) :: boolean()
   def pending_capacity_available?(maximum) when is_integer(maximum) and maximum > 0 do
     pending_count =
@@ -682,15 +704,16 @@ defmodule ContextBot.Workflow.Store do
   end
 
   defp enforce_response_storage_limit!(invocation_id, new_size, storage_limit) do
-    persisted_size =
-      ResponseEnvelope
-      |> where([response], response.invocation_id == ^invocation_id)
-      |> select([response], coalesce(sum(response.storage_bytes), 0))
-      |> Repo.one()
-
-    if legacy_storage_bytes(invocation_id) + persisted_size > storage_limit - new_size do
+    if provider_response_storage_bytes(invocation_id) > storage_limit - new_size do
       Repo.rollback(:provider_storage_limit)
     end
+  end
+
+  defp response_envelope_storage_bytes(invocation_id) do
+    ResponseEnvelope
+    |> where([response], response.invocation_id == ^invocation_id)
+    |> select([response], coalesce(sum(response.storage_bytes), 0))
+    |> Repo.one()
   end
 
   defp legacy_storage_bytes(invocation_id) do

@@ -3,7 +3,8 @@ defmodule ContextBot.Settings do
   Validated, non-secret runtime settings for the Context Bot workflow.
   """
 
-  alias ContextBot.{Money, Research.Pricing}
+  alias ContextBot.Money
+  alias ContextBot.Research.{Pricing, ResponseEnvelope}
 
   @default_thread_parent_height 80
   @default_actor_hourly_limit 2
@@ -39,6 +40,20 @@ defmodule ContextBot.Settings do
   @default_anthropic_retry_max_ms 30_000
   @default_anthropic_reservation_usd "5.000000"
   @default_anthropic_pricing_version "sonnet-5-2026-07-28"
+
+  @maximum_atproto_timeout_ms 60_000
+  @maximum_anthropic_timeout_ms 600_000
+  @maximum_thread_parent_height 100
+  @maximum_anthropic_research_tokens 64_000
+  @maximum_anthropic_repair_tokens 8_192
+  @maximum_web_tool_uses 10
+  @maximum_web_fetch_content_tokens 100_000
+  @maximum_tool_continuations 5
+  @maximum_anthropic_http_retries 3
+  @maximum_anthropic_retry_base_ms 60_000
+  @maximum_anthropic_retry_max_ms 300_000
+  @maximum_response_bytes 16_000_000
+  @maximum_storage_bytes 128_000_000
 
   @skywatch_did "did:plc:e4elbtctnfqocyfcml6h2lf7"
   @elder_label "bluesky-elder"
@@ -451,10 +466,34 @@ defmodule ContextBot.Settings do
       @maximum_notification_page_cap
     )
 
-    validate_positive!(settings.atproto_http_timeout_ms, "ATPROTO_HTTP_TIMEOUT_MS")
-    validate_positive!(settings.atproto_session_timeout_ms, "ATPROTO_SESSION_TIMEOUT_MS")
-    validate_positive!(settings.thread_fetch_timeout_ms, "THREAD_FETCH_TIMEOUT_MS")
-    validate_positive!(settings.anthropic_http_timeout_ms, "ANTHROPIC_HTTP_TIMEOUT_MS")
+    validate_range!(
+      settings.atproto_http_timeout_ms,
+      "ATPROTO_HTTP_TIMEOUT_MS",
+      1,
+      @maximum_atproto_timeout_ms
+    )
+
+    validate_range!(
+      settings.atproto_session_timeout_ms,
+      "ATPROTO_SESSION_TIMEOUT_MS",
+      1,
+      @maximum_atproto_timeout_ms
+    )
+
+    validate_range!(
+      settings.thread_fetch_timeout_ms,
+      "THREAD_FETCH_TIMEOUT_MS",
+      1,
+      @maximum_atproto_timeout_ms
+    )
+
+    validate_range!(
+      settings.anthropic_http_timeout_ms,
+      "ANTHROPIC_HTTP_TIMEOUT_MS",
+      1,
+      @maximum_anthropic_timeout_ms
+    )
+
     validate_date!(settings.anthropic_api_version, "ANTHROPIC_API_VERSION")
 
     validate_tool_type!(
@@ -469,38 +508,91 @@ defmodule ContextBot.Settings do
       "ANTHROPIC_WEB_FETCH_TOOL_TYPE"
     )
 
-    validate_positive!(settings.thread_parent_height, "THREAD_PARENT_HEIGHT")
+    validate_range!(
+      settings.thread_parent_height,
+      "THREAD_PARENT_HEIGHT",
+      1,
+      @maximum_thread_parent_height
+    )
+
     validate_positive!(settings.actor_hourly_limit, "ACTOR_HOURLY_LIMIT")
     validate_positive!(settings.actor_daily_limit, "ACTOR_DAILY_LIMIT")
     validate_positive!(settings.global_hourly_limit, "GLOBAL_HOURLY_LIMIT")
     validate_positive!(settings.global_daily_limit, "GLOBAL_DAILY_LIMIT")
     validate_positive!(settings.max_pending, "MAX_PENDING")
-    validate_positive!(settings.queue_concurrency, "QUEUE_CONCURRENCY")
-    validate_positive!(settings.max_response_bytes, "MAX_RESPONSE_BYTES")
-    validate_positive!(settings.max_storage_bytes, "MAX_STORAGE_BYTES")
-    validate_positive!(settings.anthropic_research_max_tokens, "ANTHROPIC_RESEARCH_MAX_TOKENS")
+    validate_exact!(settings.queue_concurrency, "QUEUE_CONCURRENCY", 1)
 
-    validate_positive!(
+    validate_range!(
+      settings.max_response_bytes,
+      "ANTHROPIC_RESPONSE_MAX_BYTES",
+      1,
+      @maximum_response_bytes
+    )
+
+    validate_range!(
+      settings.max_storage_bytes,
+      "PROVIDER_RESPONSE_STORAGE_MAX_BYTES",
+      1,
+      @maximum_storage_bytes
+    )
+
+    validate_range!(
+      settings.anthropic_research_max_tokens,
+      "ANTHROPIC_RESEARCH_MAX_TOKENS",
+      1,
+      @maximum_anthropic_research_tokens
+    )
+
+    validate_range!(
       settings.anthropic_length_repair_max_tokens,
-      "ANTHROPIC_LENGTH_REPAIR_MAX_TOKENS"
+      "ANTHROPIC_LENGTH_REPAIR_MAX_TOKENS",
+      1,
+      @maximum_anthropic_repair_tokens
     )
 
-    validate_positive!(
+    validate_range!(
       settings.max_web_search_uses,
-      "MAX_WEB_SEARCH_USES"
+      "MAX_WEB_SEARCH_USES",
+      1,
+      @maximum_web_tool_uses
     )
 
-    validate_positive!(settings.max_web_fetch_uses, "MAX_WEB_FETCH_USES")
+    validate_range!(settings.max_web_fetch_uses, "MAX_WEB_FETCH_USES", 1, @maximum_web_tool_uses)
 
-    validate_positive!(
+    validate_range!(
       settings.max_web_fetch_content_tokens,
-      "MAX_WEB_FETCH_CONTENT_TOKENS"
+      "MAX_WEB_FETCH_CONTENT_TOKENS",
+      1,
+      @maximum_web_fetch_content_tokens
     )
 
-    validate_positive!(settings.max_tool_continuations, "MAX_TOOL_CONTINUATIONS")
-    validate_positive!(settings.anthropic_max_http_retries, "ANTHROPIC_MAX_HTTP_RETRIES")
-    validate_positive!(settings.anthropic_retry_base_ms, "ANTHROPIC_RETRY_BASE_MS")
-    validate_positive!(settings.anthropic_retry_max_ms, "ANTHROPIC_RETRY_MAX_MS")
+    validate_range!(
+      settings.max_tool_continuations,
+      "MAX_TOOL_CONTINUATIONS",
+      1,
+      @maximum_tool_continuations
+    )
+
+    validate_range!(
+      settings.anthropic_max_http_retries,
+      "ANTHROPIC_MAX_HTTP_RETRIES",
+      1,
+      @maximum_anthropic_http_retries
+    )
+
+    validate_range!(
+      settings.anthropic_retry_base_ms,
+      "ANTHROPIC_RETRY_BASE_MS",
+      1,
+      @maximum_anthropic_retry_base_ms
+    )
+
+    validate_range!(
+      settings.anthropic_retry_max_ms,
+      "ANTHROPIC_RETRY_MAX_MS",
+      1,
+      @maximum_anthropic_retry_max_ms
+    )
 
     if settings.anthropic_retry_max_ms < settings.anthropic_retry_base_ms do
       raise ArgumentError, "ANTHROPIC_RETRY_MAX_MS must be at least ANTHROPIC_RETRY_BASE_MS"
@@ -517,6 +609,8 @@ defmodule ContextBot.Settings do
     if settings.max_storage_bytes <= settings.max_response_bytes do
       raise ArgumentError, "MAX_STORAGE_BYTES must be greater than MAX_RESPONSE_BYTES"
     end
+
+    validate_provider_storage_capacity!(settings)
 
     if settings.bot_enabled do
       require_did!(settings.bot_did, "BOT_DID")
@@ -756,6 +850,12 @@ defmodule ContextBot.Settings do
     raise ArgumentError, "#{environment_key} must be between #{minimum} and #{maximum}"
   end
 
+  defp validate_exact!(value, _environment_key, expected) when value == expected, do: value
+
+  defp validate_exact!(_value, environment_key, expected) do
+    raise ArgumentError, "#{environment_key} must be exactly #{expected}"
+  end
+
   defp validate_optional_positive!(nil, _environment_key), do: :ok
 
   defp validate_optional_positive!(value, environment_key),
@@ -809,6 +909,20 @@ defmodule ContextBot.Settings do
         raise ArgumentError, "#{name} must not exceed the Anthropic daily budget"
       end
     end)
+  end
+
+  defp validate_provider_storage_capacity!(settings) do
+    maximum_recorded_responses =
+      1 + settings.max_tool_continuations + 1 + settings.anthropic_max_http_retries
+
+    required_bytes =
+      maximum_recorded_responses *
+        (settings.max_response_bytes + ResponseEnvelope.max_overhead_bytes())
+
+    if settings.max_storage_bytes < required_bytes do
+      raise ArgumentError,
+            "PROVIDER_RESPONSE_STORAGE_MAX_BYTES must retain all permitted responses and envelope metadata (at least #{required_bytes})"
+    end
   end
 
   defp pricing!(version) do

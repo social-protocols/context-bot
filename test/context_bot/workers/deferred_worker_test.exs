@@ -350,6 +350,69 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
     assert Enum.count(Repo.all(Oban.Job), &(&1.args == job_args(cancelled))) == 1
   end
 
+  test "recovery repairs a deferred claim whose enqueue failed after an older job completed" do
+    deferred = invocation("claim-enqueue-gap", :deferred_capacity, minutes_ago: 5)
+
+    terminal_job(
+      deferred,
+      "ContextBot.Workers.EligibilityWorker",
+      "completed",
+      DateTime.add(@now, -30, :second)
+    )
+
+    Repo.query!("""
+    CREATE TEMP TRIGGER reject_eligibility_enqueue
+    BEFORE INSERT ON oban_jobs
+    WHEN NEW.worker = 'ContextBot.Workers.EligibilityWorker'
+    BEGIN
+      SELECT RAISE(ABORT, 'injected eligibility enqueue failure');
+    END
+    """)
+
+    configure()
+
+    assert_raise Exqlite.Error, ~r/injected eligibility enqueue failure/, fn ->
+      DeferredWorker.perform(%Oban.Job{args: %{}})
+    end
+
+    assert Repo.reload!(deferred).stage == :received
+    Repo.query!("DROP TRIGGER reject_eligibility_enqueue")
+
+    assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
+
+    assert Repo.reload!(deferred).stage == :received
+
+    assert Enum.count(Repo.all(Oban.Job), fn job ->
+             job.worker == "ContextBot.Workers.EligibilityWorker" and
+               job.args == job_args(deferred)
+           end) == 2
+  end
+
+  test "a completed same-generation job without a handoff still terminalizes recovery" do
+    invocation = invocation("same-generation-no-handoff", :received, minutes_ago: 5)
+    transitioned_at = DateTime.add(@now, -10, :second)
+
+    Repo.update_all(
+      from(candidate in Invocation, where: candidate.id == ^invocation.id),
+      set: [updated_at: transitioned_at]
+    )
+
+    terminal_job(
+      invocation,
+      "ContextBot.Workers.EligibilityWorker",
+      "completed",
+      DateTime.add(@now, -5, :second)
+    )
+
+    configure()
+    assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :failed
+    assert persisted.failure_detail == %{"reason" => "job_completed_without_handoff"}
+    assert Enum.count(Repo.all(Oban.Job), &(&1.args == job_args(invocation))) == 1
+  end
+
   test "fresh research and publication leases suppress completed no-op recovery until expiry" do
     fresh_research =
       invocation("fresh-research", :researching,
@@ -496,7 +559,7 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
     %{"uri" => invocation.invocation_uri, "cid" => invocation.notification_cid}
   end
 
-  defp terminal_job(invocation, worker, state) do
+  defp terminal_job(invocation, worker, state, completed_at \\ @now) do
     job =
       invocation
       |> job_args()
@@ -505,7 +568,7 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
 
     changes =
       case state do
-        "completed" -> [state: state, completed_at: @now]
+        "completed" -> [state: state, completed_at: completed_at]
         "cancelled" -> [state: state, cancelled_at: @now]
         "discarded" -> [state: state, discarded_at: @now]
       end

@@ -14,6 +14,7 @@ defmodule ContextBot.ATProto.Client do
           | :record_not_found
           | :invalid_swap
           | :timeout
+          | :response_too_large
           | :session_unavailable
           | {:rate_limited, String.t() | nil}
           | {:transient, non_neg_integer() | :transport}

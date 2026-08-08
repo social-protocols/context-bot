@@ -13,3 +13,6 @@ One-sentence facts and constraints distilled from investigations in this repo. L
 - Mark Anthropic attempts sent before POST; replay of exposed attempts needs a new budget reservation. ([reports/2026-07-29-poc-provider-contracts.md](reports/2026-07-29-poc-provider-contracts.md))
 - Freeze a TID reply record and reconcile GET/PUT results; never allocate a second rkey after ambiguity. ([reports/2026-07-29-poc-provider-contracts.md](reports/2026-07-29-poc-provider-contracts.md))
 - Req 0.7 nests named-Finch timeouts under `finch:`; Oban SQLite uses `Oban.Engines.Lite`. ([reports/2026-07-29-poc-provider-contracts.md](reports/2026-07-29-poc-provider-contracts.md))
+- Route authenticated `app.bsky.*` PDS calls with the explicit Bluesky AppView service-proxy header. ([reports/2026-08-02-live-boundary-hardening.md](reports/2026-08-02-live-boundary-hardening.md))
+- Credential-owning GenServers must redact `format_status` and contain expected adapter exceptions. ([reports/2026-08-02-live-boundary-hardening.md](reports/2026-08-02-live-boundary-hardening.md))
+- Provider storage must cover every permitted response body plus bounded envelope metadata. ([reports/2026-08-02-live-boundary-hardening.md](reports/2026-08-02-live-boundary-hardening.md))

@@ -57,6 +57,11 @@ defmodule ContextBot.ATProto.ReqClientTest do
                ])
 
       assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer test-access-jwt-one"]
+
+      assert Plug.Conn.get_req_header(conn, "atproto-proxy") == [
+               "did:web:api.bsky.app#bsky_appview"
+             ]
+
       Req.Test.json(conn, notification)
     end)
 
@@ -87,6 +92,11 @@ defmodule ContextBot.ATProto.ReqClientTest do
                Enum.sort([{"depth", "0"}, {"parentHeight", "37"}, {"uri", @post_uri}])
 
       assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer test-access-jwt-one"]
+
+      assert Plug.Conn.get_req_header(conn, "atproto-proxy") == [
+               "did:web:api.bsky.app#bsky_appview"
+             ]
+
       Req.Test.json(conn, thread)
     end)
 
@@ -125,6 +135,47 @@ defmodule ContextBot.ATProto.ReqClientTest do
 
     assert {:ok, 200, _headers, ^profile} =
              ReqClient.get_profile("did:plc:alice123", @labeler)
+  end
+
+  test "rejects an oversized app.bsky response before attempting JSON decoding" do
+    start_authenticated_session()
+    put_max_response_bytes(4)
+
+    Req.Test.expect(ReqClient, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "application/json")
+      |> Plug.Conn.send_resp(200, "xxxxx")
+    end)
+
+    assert ReqClient.list_notifications(nil) == {:error, :response_too_large}
+  end
+
+  test "decodes a valid app.bsky JSON response at the exact byte limit" do
+    start_authenticated_session()
+    body = ~s({"x":1})
+    put_max_response_bytes(byte_size(body))
+
+    Req.Test.expect(ReqClient, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "application/json")
+      |> Plug.Conn.send_resp(200, body)
+    end)
+
+    assert {:ok, 200, _headers, %{"x" => 1}} = ReqClient.list_notifications(nil)
+  end
+
+  test "classifies malformed bounded JSON as a transport failure" do
+    start_authenticated_session()
+    body = "{"
+    put_max_response_bytes(byte_size(body))
+
+    Req.Test.expect(ReqClient, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "application/json")
+      |> Plug.Conn.send_resp(200, body)
+    end)
+
+    assert ReqClient.list_notifications(nil) == {:error, {:transient, :transport}}
   end
 
   test "resolveHandle uses the exact AppView identity request" do
@@ -238,6 +289,7 @@ defmodule ContextBot.ATProto.ReqClientTest do
                ])
 
       assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer test-access-jwt-one"]
+      assert Plug.Conn.get_req_header(conn, "atproto-proxy") == []
       Req.Test.json(conn, record)
     end)
 
@@ -254,6 +306,7 @@ defmodule ContextBot.ATProto.ReqClientTest do
     Req.Test.expect(ReqClient, fn conn ->
       assert_request(conn, :post, "pds.test", "/xrpc/com.atproto.repo.putRecord")
       assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer test-access-jwt-one"]
+      assert Plug.Conn.get_req_header(conn, "atproto-proxy") == []
 
       assert conn.body_params == %{
                "collection" => @collection,
@@ -278,6 +331,24 @@ defmodule ContextBot.ATProto.ReqClientTest do
     Req.Test.expect(ReqClient, fn conn ->
       assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer test-access-jwt-one"]
       conn |> Plug.Conn.put_status(401) |> Req.Test.json(%{"error" => "ExpiredToken"})
+    end)
+
+    Req.Test.expect(ReqClient, fn conn ->
+      assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer test-access-jwt-two"]
+      Req.Test.json(conn, response)
+    end)
+
+    assert {:ok, 200, _headers, ^response} = ReqClient.list_notifications(nil)
+  end
+
+  test "an empty JSON 401 still refreshes and retries exactly once" do
+    response = fixture("notifications.json")
+    start_authenticated_session(refresh?: true)
+
+    Req.Test.expect(ReqClient, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "application/json")
+      |> Plug.Conn.send_resp(401, "")
     end)
 
     Req.Test.expect(ReqClient, fn conn ->
@@ -440,6 +511,18 @@ defmodule ContextBot.ATProto.ReqClientTest do
 
     Req.Test.allow(Session, self(), pid)
     pid
+  end
+
+  defp put_max_response_bytes(max_response_bytes) do
+    original_settings = Application.fetch_env!(:context_bot, :settings)
+
+    Application.put_env(
+      :context_bot,
+      :settings,
+      %{original_settings | max_response_bytes: max_response_bytes}
+    )
+
+    on_exit(fn -> Application.put_env(:context_bot, :settings, original_settings) end)
   end
 
   defp assert_request(conn, method, host, path) do

@@ -1,8 +1,10 @@
 defmodule ContextBot.Workflow.StoreTest do
   use ContextBot.DataCase, async: false
 
-  alias ContextBot.Research.Budget
+  alias ContextBot.Research.{Budget, ResponseEnvelope}
   alias ContextBot.Workflow.{Failure, Invocation, Store}
+  alias Ecto.Adapters.SQL
+  alias Ecto.Query
 
   defmodule Worker do
     use Oban.Worker, queue: :eligibility
@@ -321,6 +323,42 @@ defmodule ContextBot.Workflow.StoreTest do
 
     [persisted_response] = Store.anthropic_responses(invocation)
     assert persisted_response.raw_body == raw_body
+  end
+
+  test "reports actual legacy and BLOB envelope storage occupancy" do
+    assert {:ok, invocation, :inserted} =
+             Store.receive_mention(
+               mention("at://did:plc:actor/app.bsky.feed.post/occupancy", "bafy-occupancy"),
+               @received_at,
+               nil
+             )
+
+    legacy_responses = [%{"raw_body" => String.duplicate("l", 37), "status" => 503}]
+
+    invocation
+    |> Invocation.anthropic_responses_changeset(legacy_responses)
+    |> Repo.update!()
+
+    assert {:ok, _invocation} =
+             Store.append_anthropic_response(
+               invocation,
+               response_envelope("persisted-envelope"),
+               1_000_000
+             )
+
+    %{rows: [[legacy_bytes]]} =
+      SQL.query!(
+        Repo,
+        "SELECT COALESCE(length(anthropic_responses), 0) FROM invocations WHERE id = ?",
+        [invocation.id]
+      )
+
+    envelope_bytes =
+      ResponseEnvelope
+      |> Query.where([response], response.invocation_id == ^invocation.id)
+      |> Repo.aggregate(:sum, :storage_bytes)
+
+    assert Store.provider_response_storage_bytes(invocation) == legacy_bytes + envelope_bytes
   end
 
   test "atomically stores arbitrary response bytes in an ordered BLOB ledger with the marker" do

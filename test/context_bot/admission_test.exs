@@ -110,6 +110,27 @@ defmodule ContextBot.AdmissionTest do
     assert Repo.aggregate(Oban.Job, :count) == 0
   end
 
+  test "defers until the latest expiry when multiple rolling windows are breached" do
+    historical("multi-window-oldest", @actor_did, DateTime.add(@now, -23, :hour))
+    historical("multi-window-hour-one", @actor_did, DateTime.add(@now, -3_599, :second))
+    historical("multi-window-hour-two", @actor_did, DateTime.add(@now, -30, :minute))
+    invocation = eligible_invocation("multi-window-current", @actor_did)
+
+    limits =
+      settings(
+        actor_hourly_limit: 2,
+        actor_daily_limit: 3,
+        global_hourly_limit: 100,
+        global_daily_limit: 100
+      )
+
+    assert {:deferred, :rate, deferred} =
+             Admission.admit(invocation, @now, limits, thread_job(invocation))
+
+    assert deferred.defer_until == ~U[2026-07-30 13:00:00.000000Z]
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
   test "excludes exact rolling-window boundary timestamps" do
     historical("actor-hour-boundary", @actor_did, DateTime.add(@now, -1, :hour))
     historical("actor-day-boundary", @actor_did, DateTime.add(@now, -24, :hour))

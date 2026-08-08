@@ -38,6 +38,74 @@ defmodule ContextBot.ATProto.SessionTest do
     refute public_status =~ @password
   end
 
+  test "OTP status formatting redacts the password and both session tokens" do
+    session = fixture()
+    expect_create_session(session["create"])
+    pid = start_session()
+
+    assert Session.access_token(pid) == {:ok, "test-access-jwt-one"}
+
+    formatted_status = inspect(:sys.get_status(pid), limit: :infinity)
+
+    refute formatted_status =~ @password
+    refute formatted_status =~ "test-access-jwt-one"
+    refute formatted_status =~ "test-refresh-jwt-one"
+  end
+
+  test "crash status formatting redacts credentials from message reason and debug log" do
+    session = fixture()
+    expect_create_session(session["create"])
+    pid = start_session()
+    assert Session.access_token(pid) == {:ok, "test-access-jwt-one"}
+
+    crash_status = %{
+      state: :sys.get_state(pid),
+      message: {:refresh, "test-access-jwt-one"},
+      reason: {:adapter_failure, "contained #{@password} and test-refresh-jwt-one"},
+      log: [{:in, {:refresh, "test-access-jwt-one"}}]
+    }
+
+    formatted_status = inspect(Session.format_status(crash_status), limit: :infinity)
+
+    refute formatted_status =~ @password
+    refute formatted_status =~ "test-access-jwt-one"
+    refute formatted_status =~ "test-refresh-jwt-one"
+  end
+
+  test "a raised HTTP adapter failure is normalized without crashing or leaking state" do
+    Req.Test.expect(Session, fn _conn ->
+      raise "adapter exploded with #{@password} test-access-jwt-one test-refresh-jwt-one"
+    end)
+
+    pid = start_session()
+
+    logs =
+      capture_log(fn ->
+        assert Session.access_token(pid) == {:error, :authentication_failed}
+      end)
+
+    assert Process.alive?(pid)
+    refute logs =~ @password
+    refute logs =~ "test-access-jwt-one"
+    refute logs =~ "test-refresh-jwt-one"
+  end
+
+  test "an exiting HTTP adapter is normalized without crashing the session" do
+    Req.Test.expect(Session, fn _conn -> exit(:adapter_connection_lost) end)
+    pid = start_session()
+
+    assert Session.access_token(pid) == {:error, :authentication_failed}
+    assert Process.alive?(pid)
+  end
+
+  test "a throwing HTTP adapter is normalized without crashing the session" do
+    Req.Test.expect(Session, fn _conn -> throw(:adapter_aborted) end)
+    pid = start_session()
+
+    assert Session.access_token(pid) == {:error, :authentication_failed}
+    assert Process.alive?(pid)
+  end
+
   test "serializes refresh so concurrent stale-token callers issue one refreshSession" do
     session = fixture()
     expect_create_session(session["create"])

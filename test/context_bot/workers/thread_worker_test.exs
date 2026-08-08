@@ -190,7 +190,7 @@ defmodule ContextBot.Workers.ThreadWorkerTest do
 
     configure_fake(
       {:ok, 200, %{}, response},
-      settings: settings(max_response_bytes: 128, max_storage_bytes: 256)
+      settings: settings(max_response_bytes: 128, max_storage_bytes: 1_000_000)
     )
 
     assert {:error, :response_too_large} = perform(invocation)

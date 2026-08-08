@@ -13,6 +13,7 @@ defmodule ContextBot.Research.ResponseEnvelope do
   alias ContextBot.Research.BudgetEntry
   alias ContextBot.Workflow.Invocation
 
+  @max_overhead_bytes 65_536
   @kinds [:research, :continuation, :repair, :retry]
   @persisted_fields [
     :invocation_id,
@@ -28,6 +29,10 @@ defmodule ContextBot.Research.ResponseEnvelope do
   ]
 
   @type t :: %__MODULE__{}
+
+  @doc "Maximum retained bytes beyond the exact raw provider response body."
+  @spec max_overhead_bytes() :: pos_integer()
+  def max_overhead_bytes, do: @max_overhead_bytes
 
   schema "anthropic_response_envelopes" do
     field :attempt_key, :string
@@ -54,9 +59,9 @@ defmodule ContextBot.Research.ResponseEnvelope do
       |> Map.drop([:raw_body, "raw_body"])
       |> Map.merge(tags)
 
-    metadata_blob = :erlang.term_to_binary(metadata, [:deterministic])
     attempt_key = fetch(metadata, :attempt_key)
     kind = fetch(metadata, :kind)
+    {metadata, metadata_blob} = bounded_metadata(metadata, attempt_key, kind)
 
     %{
       attempt_key: attempt_key,
@@ -105,6 +110,34 @@ defmodule ContextBot.Research.ResponseEnvelope do
   defp nullable_byte_size(value) when is_binary(value), do: byte_size(value)
   defp nullable_byte_size(value) when is_atom(value), do: value |> Atom.to_string() |> byte_size()
   defp nullable_byte_size(_value), do: 0
+
+  defp bounded_metadata(metadata, attempt_key, kind) do
+    case encode_metadata(metadata, attempt_key, kind) do
+      {:ok, metadata_blob} ->
+        {metadata, metadata_blob}
+
+      :too_large ->
+        truncated =
+          metadata
+          |> Map.drop([:headers, "headers"])
+          |> Map.put(:headers, %{})
+          |> Map.put(:headers_truncated, true)
+
+        case encode_metadata(truncated, attempt_key, kind) do
+          {:ok, metadata_blob} -> {truncated, metadata_blob}
+          :too_large -> raise ArgumentError, "provider response envelope metadata is too large"
+        end
+    end
+  end
+
+  defp encode_metadata(metadata, attempt_key, kind) do
+    metadata_blob = :erlang.term_to_binary(metadata, [:deterministic])
+
+    overhead_bytes =
+      byte_size(metadata_blob) + nullable_byte_size(attempt_key) + nullable_byte_size(kind)
+
+    if overhead_bytes <= @max_overhead_bytes, do: {:ok, metadata_blob}, else: :too_large
+  end
 
   defp validate_raw_body(changeset) do
     case get_field(changeset, :raw_body) do

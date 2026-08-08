@@ -150,6 +150,17 @@ defmodule ContextBot.ATProto.Session do
     {:reply, {:ok, status}, state}
   end
 
+  @impl true
+  def format_status(%{state: state} = status) when is_map(state) do
+    secrets = credential_values(state)
+
+    status
+    |> redact_term(secrets)
+    |> Map.put(:state, redact_credentials(state))
+  end
+
+  def format_status(status), do: status
+
   defp handle_reauthentication(state) do
     now = System.monotonic_time(:millisecond)
 
@@ -262,6 +273,10 @@ defmodule ContextBot.ATProto.Session do
       {:error, _exception} ->
         {:error, {:transient, :transport}}
     end
+  rescue
+    _request_failure -> {:error, {:transient, :transport}}
+  catch
+    _kind, _request_failure -> {:error, {:transient, :transport}}
   end
 
   defp first_header(headers, name) do
@@ -272,6 +287,37 @@ defmodule ContextBot.ATProto.Session do
   end
 
   defp clear_tokens(state), do: %{state | access_jwt: nil, refresh_jwt: nil}
+
+  defp redact_credentials(state) do
+    %{state | password: :redacted, access_jwt: :redacted, refresh_jwt: :redacted}
+  end
+
+  defp credential_values(state) do
+    state
+    |> Map.take([:password, :access_jwt, :refresh_jwt])
+    |> Map.values()
+    |> Enum.filter(&(is_binary(&1) and &1 != ""))
+  end
+
+  defp redact_term(value, secrets) when is_binary(value) do
+    Enum.reduce(secrets, value, &String.replace(&2, &1, "[REDACTED]"))
+  end
+
+  defp redact_term(value, secrets) when is_map(value) do
+    Map.new(value, fn {key, nested} -> {key, redact_term(nested, secrets)} end)
+  end
+
+  defp redact_term(value, secrets) when is_tuple(value) do
+    value
+    |> Tuple.to_list()
+    |> Enum.map(&redact_term(&1, secrets))
+    |> List.to_tuple()
+  end
+
+  defp redact_term(value, secrets) when is_list(value),
+    do: Enum.map(value, &redact_term(&1, secrets))
+
+  defp redact_term(value, _secrets), do: value
 
   defp reauthentication_rate_limited?(state, now \\ System.monotonic_time(:millisecond)) do
     is_integer(state.reauthenticate_after) and now < state.reauthenticate_after

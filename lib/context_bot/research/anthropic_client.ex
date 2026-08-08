@@ -10,6 +10,7 @@ defmodule ContextBot.Research.AnthropicClient do
   @base_url "https://api.anthropic.com"
   @pool_checkout_error_prefix "Finch was unable to provide a connection within the timeout due to excess queuing for connections."
   @safe_response_headers ["content-type", "request-id", "retry-after"]
+  @max_retained_header_bytes 16_384
 
   @impl true
   def send_message(request_map, attempt_metadata)
@@ -74,14 +75,19 @@ defmodule ContextBot.Research.AnthropicClient do
          duration_ms
        )
        when is_integer(status) and status > 0 and is_binary(raw_body) do
+    {headers, headers_truncated?} = safe_headers(headers)
+
     {:ok,
-     %{
-       status: status,
-       headers: safe_headers(headers),
-       raw_body: raw_body,
-       received_at: DateTime.utc_now(),
-       duration_ms: duration_ms
-     }}
+     maybe_mark_headers_truncated(
+       %{
+         status: status,
+         headers: headers,
+         raw_body: raw_body,
+         received_at: DateTime.utc_now(),
+         duration_ms: duration_ms
+       },
+       headers_truncated?
+     )}
   end
 
   defp normalize_response({:error, %BodyLimit.ResponseTooLargeError{}}, _duration_ms),
@@ -99,11 +105,30 @@ defmodule ContextBot.Research.AnthropicClient do
   defp normalize_response({:error, _exception}, _duration_ms), do: {:error, :transport}
 
   defp safe_headers(headers) do
-    Map.new(headers, fn {name, values} -> {name, List.wrap(values)} end)
-    |> Map.filter(fn {name, _values} ->
-      name in @safe_response_headers or String.starts_with?(name, "anthropic-ratelimit-")
+    headers
+    |> Map.new(fn {name, values} -> {name, List.wrap(values)} end)
+    |> Enum.filter(fn {name, _values} -> safe_response_header?(name) end)
+    |> Enum.sort_by(fn {name, _values} -> name end)
+    |> Enum.reduce({%{}, false}, fn {name, values}, {retained, truncated?} ->
+      candidate = Map.put(retained, name, values)
+
+      if encoded_size(candidate) <= @max_retained_header_bytes do
+        {candidate, truncated?}
+      else
+        {retained, true}
+      end
     end)
   end
+
+  defp safe_response_header?(name),
+    do: name in @safe_response_headers or String.starts_with?(name, "anthropic-ratelimit-")
+
+  defp encoded_size(value), do: value |> :erlang.term_to_binary([:deterministic]) |> byte_size()
+
+  defp maybe_mark_headers_truncated(envelope, true),
+    do: Map.put(envelope, :headers_truncated, true)
+
+  defp maybe_mark_headers_truncated(envelope, false), do: envelope
 
   defp config, do: Application.get_env(:context_bot, __MODULE__, [])
 end

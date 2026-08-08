@@ -371,7 +371,7 @@ defmodule ContextBot.POCWorkflowTest do
 
     fixture =
       POCFixture.start!(
-        settings: [max_response_bytes: limit, max_storage_bytes: 100_000],
+        settings: [max_response_bytes: limit, max_storage_bytes: 1_000_000],
         anthropic_results: [{:response, 200, body, %{}}]
       )
 

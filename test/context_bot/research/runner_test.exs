@@ -11,6 +11,8 @@ defmodule ContextBot.Research.RunnerTest.Client do
     entry = Repo.get_by!(BudgetEntry, attempt_key: metadata.attempt_key)
     send(test_pid, {:attempt_at_send, entry.state, entry.sent_at, entry.response_recorded_at})
 
+    if hook = Process.get(:runner_client_hook), do: hook.()
+
     [result | rest] = Process.get(:runner_client_results)
     Process.put(:runner_client_results, rest)
     result
@@ -20,8 +22,9 @@ end
 defmodule ContextBot.Research.RunnerTest do
   use ContextBot.DataCase, async: false
 
-  alias ContextBot.Research.{Budget, BudgetEntry, Runner}
+  alias ContextBot.Research.{Budget, BudgetEntry, ResponseEnvelope, Runner}
   alias ContextBot.Workflow.{Invocation, Store}
+  alias Ecto.Adapters.SQL
 
   @now ~U[2026-07-29 12:00:00.123456Z]
   @claim_token "runner-test-claim"
@@ -32,6 +35,7 @@ defmodule ContextBot.Research.RunnerTest do
     on_exit(fn ->
       Process.delete(:runner_test_pid)
       Process.delete(:runner_client_results)
+      Process.delete(:runner_client_hook)
     end)
 
     :ok
@@ -93,27 +97,85 @@ defmodule ContextBot.Research.RunnerTest do
     assert entry.response_recorded_at != nil
   end
 
-  test "a forced raw-ledger persistence failure stops before decode or another request" do
+  test "a capacity change after preflight is caught before decode or another request" do
     invocation = invocation("persistence-failure")
     raw_body = fixture("tool_success.json")
     Process.put(:runner_client_results, [{:ok, envelope(200, raw_body)}])
+
+    Process.put(:runner_client_hook, fn ->
+      prepared =
+        ResponseEnvelope.prepare(
+          envelope(503, String.duplicate("occupied-after-preflight", 3_000))
+        )
+
+      %ResponseEnvelope{}
+      |> ResponseEnvelope.changeset(Map.put(prepared, :invocation_id, invocation.id))
+      |> Repo.insert!()
+    end)
 
     decoder = fn _body ->
       send(self(), :decoder_called)
       {:ok, %{}}
     end
 
+    constrained_settings =
+      settings()
+      |> Map.put(:max_response_bytes, 1)
+      |> Map.put(
+        :max_storage_bytes,
+        Store.provider_response_storage_bytes(invocation) +
+          ResponseEnvelope.max_overhead_bytes() + 1
+      )
+
     assert {:error, :provider_storage_limit} =
-             Runner.run(invocation, options(decoder: decoder, max_storage_bytes: 80))
+             Runner.run(invocation, options(decoder: decoder, settings: constrained_settings))
 
     assert_received {:anthropic_call, _request, _metadata, false}
     refute_received :decoder_called
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
-    assert responses(invocation) == []
+    assert [%{status: 503}] = responses(invocation)
 
     entry = Repo.one!(BudgetEntry)
     assert entry.state == :sent
     assert entry.response_recorded_at == nil
+  end
+
+  test "refuses a new attempt before reservation when actual provider storage is insufficient" do
+    invocation = invocation("storage-preflight-insufficient") |> seed_provider_storage()
+    body = fixture("tool_success.json")
+    required_bytes = byte_size(body) + ResponseEnvelope.max_overhead_bytes()
+    used_bytes = actual_provider_storage_bytes(invocation)
+
+    settings =
+      settings()
+      |> Map.put(:max_response_bytes, byte_size(body))
+      |> Map.put(:max_storage_bytes, used_bytes + required_bytes - 1)
+
+    Process.put(:runner_client_results, [])
+
+    assert {:error, :provider_storage_limit} =
+             Runner.run(invocation, options(settings: settings))
+
+    assert Repo.aggregate(BudgetEntry, :count) == 0
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+  end
+
+  test "starts a new attempt when actual provider storage is exactly sufficient" do
+    invocation = invocation("storage-preflight-exact") |> seed_provider_storage()
+    body = fixture("tool_success.json")
+    required_bytes = byte_size(body) + ResponseEnvelope.max_overhead_bytes()
+    used_bytes = actual_provider_storage_bytes(invocation)
+
+    settings =
+      settings()
+      |> Map.put(:max_response_bytes, byte_size(body))
+      |> Map.put(:max_storage_bytes, used_bytes + required_bytes)
+
+    Process.put(:runner_client_results, [{:ok, envelope(200, body)}])
+
+    assert {:ok, _result} = Runner.run(invocation, options(settings: settings))
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    assert [%BudgetEntry{state: :settled}] = Repo.all(BudgetEntry)
   end
 
   test "persists 429 before honoring retry-after and sends the retry under a new reservation" do
@@ -750,6 +812,7 @@ defmodule ContextBot.Research.RunnerTest do
       anthropic_retry_max_ms: 10_000,
       anthropic_web_search_tool_type: "web_search_20260318",
       anthropic_web_fetch_tool_type: "web_fetch_20260318",
+      max_response_bytes: 8_000,
       max_storage_bytes: 1_000_000
     }
   end
@@ -829,6 +892,40 @@ defmodule ContextBot.Research.RunnerTest do
   end
 
   defp responses(invocation), do: Store.anthropic_responses(invocation)
+
+  defp seed_provider_storage(invocation) do
+    legacy = [%{"raw_body" => String.duplicate("l", 37), "status" => 503}]
+
+    invocation
+    |> Invocation.anthropic_responses_changeset(legacy)
+    |> Repo.update!()
+
+    prepared = ResponseEnvelope.prepare(envelope(503, "prior-envelope"))
+
+    %ResponseEnvelope{}
+    |> ResponseEnvelope.changeset(Map.put(prepared, :invocation_id, invocation.id))
+    |> Repo.insert!()
+
+    Repo.reload!(invocation)
+  end
+
+  defp actual_provider_storage_bytes(invocation) do
+    %{rows: [[bytes]]} =
+      SQL.query!(
+        Repo,
+        """
+        SELECT COALESCE(length(i.anthropic_responses), 0) +
+               COALESCE((SELECT SUM(e.storage_bytes)
+                         FROM anthropic_response_envelopes AS e
+                         WHERE e.invocation_id = i.id), 0)
+        FROM invocations AS i
+        WHERE i.id = ?
+        """,
+        [invocation.id]
+      )
+
+    bytes
+  end
 
   defp decoded_fixture(name), do: name |> fixture() |> Jason.decode!()
 

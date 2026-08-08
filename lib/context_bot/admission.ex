@@ -117,7 +117,7 @@ defmodule ContextBot.Admission do
       breached_window(nil, now, :day, settings.global_daily_limit, excluded_invocation_id)
     ]
     |> Enum.reject(&is_nil/1)
-    |> Enum.min(DateTime, fn -> nil end)
+    |> Enum.max(DateTime, fn -> nil end)
   end
 
   defp breached_window(actor_did, now, window, limit, excluded_invocation_id) do
