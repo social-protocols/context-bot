@@ -58,6 +58,89 @@ defmodule ContextBot.Thread.CanonicalizerTest do
     refute result.text =~ "cdn.example"
   end
 
+  test "renders a dry-run question beneath the selected post without requiring a mention" do
+    thread = fixture("thread_ancestors.json")
+
+    assert {:ok, result} =
+             Canonicalizer.build_dry_run(thread, %{
+               target_uri: @invocation_uri,
+               invocation_text: "Is this fair?",
+               parent_height: 80
+             })
+
+    assert result.current_cid == @notification_cid
+    assert result.parent == %{"uri" => @invocation_uri, "cid" => @notification_cid}
+
+    assert result.root == %{
+             "uri" => "at://did:plc:root/app.bsky.feed.post/root",
+             "cid" => "bafy-root"
+           }
+
+    assert result.text =~ "The root claim."
+    assert result.text =~ "The immediate parent claim."
+    assert result.text =~ "[target]\n"
+    assert result.text =~ "@contextbot.test please add context."
+    assert result.text =~ "[invocation]\nText:\nIs this fair?"
+
+    assert :binary.match(result.text, "The root claim.") <
+             :binary.match(result.text, "The immediate parent claim.")
+
+    assert :binary.match(result.text, "The immediate parent claim.") <
+             :binary.match(result.text, "[target]")
+
+    assert :binary.match(result.text, "[target]") <
+             :binary.match(result.text, "[invocation]")
+
+    refute result.text =~ "DESCENDANT"
+    refute result.text =~ "QUOTED POST BODY"
+    refute result.text =~ "MEDIA ALT"
+  end
+
+  test "dry-run canonicalization preserves ancestor placeholders and truncation" do
+    blocked = fixture("thread_blocked_parent.json")
+
+    assert {:ok, blocked_result} =
+             Canonicalizer.build_dry_run(blocked, dry_run_context())
+
+    assert blocked_result.text =~ "[blocked ancestor]"
+
+    server_capped =
+      update_in(
+        fixture("thread_ancestors.json"),
+        ["thread", "parent"],
+        &Map.delete(&1, "parent")
+      )
+
+    assert {:ok, capped_result} =
+             Canonicalizer.build_dry_run(server_capped, dry_run_context(parent_height: 1))
+
+    assert capped_result.text =~ "[ancestor chain truncated]"
+    assert capped_result.text =~ "[invocation]\nText:\nWhat's missing?"
+  end
+
+  test "dry-run canonicalization rejects unavailable, wrong, and malformed targets" do
+    unavailable = %{
+      "thread" => %{
+        "$type" => "app.bsky.feed.defs#notFoundPost",
+        "uri" => @invocation_uri,
+        "notFound" => true
+      }
+    }
+
+    assert {:error, :target_unavailable} =
+             Canonicalizer.build_dry_run(unavailable, dry_run_context())
+
+    wrong =
+      put_in(
+        fixture("thread_ancestors.json"),
+        ["thread", "post", "uri"],
+        "at://did:plc:mallory/app.bsky.feed.post/different"
+      )
+
+    assert {:error, :invalid_thread} = Canonicalizer.build_dry_run(wrong, dry_run_context())
+    assert {:error, :invalid_thread} = Canonicalizer.build_dry_run(%{}, dry_run_context())
+  end
+
   test "marks a server-capped chain when the deepest returned ancestor is not the record root" do
     server_capped =
       update_in(
@@ -210,6 +293,15 @@ defmodule ContextBot.Thread.CanonicalizerTest do
       bot_did: @bot_did,
       invocation_uri: @invocation_uri,
       notification_cid: @notification_cid,
+      parent_height: 80
+    }
+    |> Map.merge(Map.new(overrides))
+  end
+
+  defp dry_run_context(overrides \\ []) do
+    %{
+      target_uri: @invocation_uri,
+      invocation_text: "What's missing?",
       parent_height: 80
     }
     |> Map.merge(Map.new(overrides))

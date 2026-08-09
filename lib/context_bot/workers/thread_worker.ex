@@ -10,7 +10,7 @@ defmodule ContextBot.Workers.ThreadWorker do
 
   import Ecto.Query
 
-  alias ContextBot.ATProto.ReqClient
+  alias ContextBot.ATProto.{PublicClient, ReqClient}
   alias ContextBot.{Operations, Repo}
   alias ContextBot.Thread.Canonicalizer
   alias ContextBot.Workflow.{Invocation, Store}
@@ -50,10 +50,12 @@ defmodule ContextBot.Workers.ThreadWorker do
   end
 
   defp capture(invocation, dependencies) do
+    {client, uri} = thread_source(invocation, dependencies)
+
     result =
       fetch_with_timeout(
-        dependencies.client,
-        invocation.invocation_uri,
+        client,
+        uri,
         dependencies.settings.thread_parent_height,
         dependencies.fetch_timeout_ms
       )
@@ -91,13 +93,7 @@ defmodule ContextBot.Workers.ThreadWorker do
   defp handle_fetch({:ok, status, _headers, body}, invocation, dependencies)
        when status in 200..299 and is_map(body) do
     with :ok <- within_response_limit(body, dependencies.settings.max_response_bytes),
-         {:ok, canonical} <-
-           dependencies.canonicalizer.build(body, %{
-             bot_did: dependencies.settings.bot_did,
-             invocation_uri: invocation.invocation_uri,
-             notification_cid: invocation.notification_cid,
-             parent_height: dependencies.settings.thread_parent_height
-           }) do
+         {:ok, canonical} <- canonicalize(body, invocation, dependencies) do
       persist_handoff(invocation, body, canonical, dependencies.research_job_builder)
     else
       {:error, :target_unavailable} -> fail_thread(invocation, "target_unavailable")
@@ -125,6 +121,29 @@ defmodule ContextBot.Workers.ThreadWorker do
       {:ok, _oversized} -> {:error, :response_too_large}
       {:error, _invalid_json} -> {:error, :invalid_thread}
     end
+  end
+
+  defp thread_source(%Invocation{dry_run: true, target_uri: uri}, dependencies),
+    do: {dependencies.public_client, uri}
+
+  defp thread_source(%Invocation{invocation_uri: uri}, dependencies),
+    do: {dependencies.client, uri}
+
+  defp canonicalize(body, %Invocation{dry_run: true} = invocation, dependencies) do
+    dependencies.canonicalizer.build_dry_run(body, %{
+      target_uri: invocation.target_uri,
+      invocation_text: invocation.invocation_text,
+      parent_height: dependencies.settings.thread_parent_height
+    })
+  end
+
+  defp canonicalize(body, invocation, dependencies) do
+    dependencies.canonicalizer.build(body, %{
+      bot_did: dependencies.settings.bot_did,
+      invocation_uri: invocation.invocation_uri,
+      notification_cid: invocation.notification_cid,
+      parent_height: dependencies.settings.thread_parent_height
+    })
   end
 
   defp persist_handoff(invocation, raw_thread, canonical, research_job_builder) do
@@ -189,6 +208,7 @@ defmodule ContextBot.Workers.ThreadWorker do
     %{
       canonicalizer: Keyword.get(config, :canonicalizer, Canonicalizer),
       client: Keyword.get(config, :client, ReqClient),
+      public_client: Keyword.get(config, :public_client, PublicClient),
       fetch_timeout_ms: Keyword.get(config, :fetch_timeout_ms, settings.thread_fetch_timeout_ms),
       research_job_builder: Keyword.get(config, :research_job_builder, &research_job/1),
       settings: settings

@@ -25,6 +25,12 @@ defmodule ContextBot.Thread.Canonicalizer do
           parent_height: pos_integer()
         }
 
+  @type dry_run_context :: %{
+          target_uri: String.t(),
+          invocation_text: String.t(),
+          parent_height: pos_integer()
+        }
+
   @type result :: %{
           version: 1,
           text: String.t(),
@@ -75,6 +81,48 @@ defmodule ContextBot.Thread.Canonicalizer do
       do: {:error, :target_unavailable}
 
   def build(_response, _context), do: {:error, :invalid_thread}
+
+  @doc "Builds ancestor-only context for a local question beneath a selected public post."
+  @spec build_dry_run(map(), dry_run_context()) ::
+          {:ok, result()} | {:error, :target_unavailable | :invalid_thread}
+  def build_dry_run(
+        %{"thread" => %{"$type" => @thread_view_post} = target},
+        %{
+          target_uri: target_uri,
+          invocation_text: invocation_text,
+          parent_height: parent_height
+        }
+      )
+      when is_binary(target_uri) and is_binary(invocation_text) and
+             is_integer(parent_height) and parent_height > 0 do
+    with {:ok, target_post} <- available_post(target),
+         :ok <- matching_target?(target_post, target_uri),
+         {:ok, parent} <- strong_ref(target_post),
+         {:ok, root} <- root_ref(target_post.record, parent),
+         {:ok, ancestors} <-
+           ancestors(Map.get(target, "parent"), parent_height, root["uri"], []) do
+      sections =
+        Enum.map(ancestors, &render_ancestor/1) ++
+          [render_post(target_post, "target"), render_dry_run_invocation(invocation_text)]
+
+      {:ok,
+       %{
+         version: 1,
+         text: Enum.join(["CONTEXT_BOT_THREAD_V1" | sections], "\n\n"),
+         parent: parent,
+         root: root,
+         current_cid: target_post.cid
+       }}
+    else
+      {:error, _reason} -> {:error, :invalid_thread}
+    end
+  end
+
+  def build_dry_run(%{"thread" => %{"$type" => type}}, _context)
+      when type in [@blocked_post, @not_found_post],
+      do: {:error, :target_unavailable}
+
+  def build_dry_run(_response, _context), do: {:error, :invalid_thread}
 
   defp available_post(%{
          "post" =>
@@ -201,6 +249,8 @@ defmodule ContextBot.Thread.Canonicalizer do
 
     Enum.join(base ++ embed_lines(post.embed), "\n")
   end
+
+  defp render_dry_run_invocation(text), do: Enum.join(["[invocation]", "Text:", text], "\n")
 
   defp render_author(%{did: did, handle: nil}), do: did
   defp render_author(%{did: did, handle: handle}), do: "#{handle} (#{did})"

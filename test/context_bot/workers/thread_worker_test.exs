@@ -18,6 +18,31 @@ defmodule ContextBot.Workers.ThreadWorkerTest.Client do
   end
 end
 
+defmodule ContextBot.Workers.ThreadWorkerTest.PublicClient do
+  @moduledoc false
+
+  def get_post_thread(uri, parent_height) do
+    config = Application.fetch_env!(:context_bot, ContextBot.Workers.ThreadWorkerTest.Client)
+
+    send(
+      config[:test_pid],
+      {:public_thread_fetch, uri, parent_height, ContextBot.Repo.in_transaction?()}
+    )
+
+    config[:result]
+  end
+end
+
+defmodule ContextBot.Workers.ThreadWorkerTest.AuthenticatedClient do
+  @moduledoc false
+
+  def get_post_thread(uri, parent_height) do
+    config = Application.fetch_env!(:context_bot, ContextBot.Workers.ThreadWorkerTest.Client)
+    send(config[:test_pid], {:authenticated_thread_fetch, uri, parent_height})
+    config[:result]
+  end
+end
+
 defmodule ContextBot.Workers.ThreadWorkerTest.SessionStub do
   @moduledoc false
 
@@ -33,7 +58,14 @@ defmodule ContextBot.Workers.ThreadWorkerTest do
   alias ContextBot.ATProto.ReqClient
   alias ContextBot.Settings
   alias ContextBot.Workers.ThreadWorker
-  alias ContextBot.Workers.ThreadWorkerTest.{Client, SessionStub}
+
+  alias ContextBot.Workers.ThreadWorkerTest.{
+    AuthenticatedClient,
+    Client,
+    PublicClient,
+    SessionStub
+  }
+
   alias ContextBot.Workflow.Invocation
 
   @bot_did "did:plc:contextbot"
@@ -118,6 +150,42 @@ defmodule ContextBot.Workers.ThreadWorkerTest do
 
     # A future research worker can only observe this durable snapshot after its job is visible.
     assert Repo.get!(Invocation, invocation.id).stage == :thread_ready
+  end
+
+  test "routes a dry run through the public target and stores its local question for research" do
+    invocation = dry_run_invocation()
+
+    response =
+      fixture("thread_ancestors.json")
+      |> update_in(["thread", "post", "record"], &Map.delete(&1, "facets"))
+
+    Application.put_env(:context_bot, Client, test_pid: self(), result: {:ok, 200, %{}, response})
+
+    configure(settings(),
+      client: AuthenticatedClient,
+      public_client: PublicClient
+    )
+
+    assert :ok = perform(invocation)
+
+    assert_received {:public_thread_fetch, @invocation_uri, 80, false}
+    refute_receive {:authenticated_thread_fetch, _, _}
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :thread_ready
+    assert persisted.current_cid == @notification_cid
+    assert persisted.canonical_thread =~ "[target]\n"
+    assert persisted.canonical_thread =~ "@contextbot.test please add context."
+    assert persisted.canonical_thread =~ "[invocation]\nText:\nIs this fair?"
+    refute persisted.canonical_thread =~ "DESCENDANT"
+
+    assert [%Oban.Job{} = research_job] = Repo.all(Oban.Job)
+    assert research_job.queue == "research"
+
+    assert research_job.args == %{
+             "uri" => invocation.invocation_uri,
+             "cid" => invocation.notification_cid
+           }
   end
 
   test "fetches outside transactions, freezes an edited current CID, and ignores a completed handoff" do
@@ -373,6 +441,26 @@ defmodule ContextBot.Workers.ThreadWorkerTest do
       raw_notification: %{"uri" => @invocation_uri, "cid" => @notification_cid},
       received_at: @now,
       admitted_at: @now,
+      status: :capturing_thread,
+      stage: :capturing_thread
+    })
+    |> Repo.insert!()
+  end
+
+  defp dry_run_invocation do
+    run_id = Ecto.UUID.generate()
+
+    %Invocation{}
+    |> Invocation.changeset(%{
+      dry_run: true,
+      target_uri: @invocation_uri,
+      invocation_text: "Is this fair?",
+      invocation_uri: "local://context-bot/dry-runs/#{run_id}",
+      notification_cid: "local:#{run_id}",
+      current_cid: "local:#{run_id}",
+      actor_did: "local:operator",
+      raw_notification: %{"source" => "local_dry_run"},
+      received_at: @now,
       status: :capturing_thread,
       stage: :capturing_thread
     })
