@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 context_bot_secrets_xtrace_enabled=false
+context_bot_requested_secrets=()
 
 case "$-" in
 *x*)
@@ -15,8 +16,10 @@ context_bot_secrets_fail() {
 
 context_bot_secrets_cleanup() {
 	unset context_bot_bitwarden_item context_bot_secret_name context_bot_secret_value
+	unset context_bot_requested_name context_bot_seen_name context_bot_duplicate
 	unset context_bot_fly_api_token context_bot_secret_key_base
 	unset context_bot_bot_app_password context_bot_anthropic_api_key
+	unset context_bot_requested_secrets
 }
 
 context_bot_secrets_restore_xtrace() {
@@ -34,12 +37,46 @@ context_bot_secrets_restore_xtrace() {
 
 context_bot_secrets_abort() {
 	context_bot_secrets_fail "$1"
+	for context_bot_secret_name in "${context_bot_requested_secrets[@]}"; do
+		unset "$context_bot_secret_name"
+	done
 	context_bot_secrets_cleanup
-	unset FLY_API_TOKEN SECRET_KEY_BASE BOT_APP_PASSWORD ANTHROPIC_API_KEY
 	context_bot_secrets_restore_xtrace
 }
 
-unset FLY_API_TOKEN SECRET_KEY_BASE BOT_APP_PASSWORD ANTHROPIC_API_KEY
+if [[ "$#" -eq 0 ]]; then
+	context_bot_secrets_abort "at least one secret name is required"
+	# This file supports both sourcing and direct execution.
+	# shellcheck disable=SC2317
+	return 1 2>/dev/null || exit 1
+fi
+
+for context_bot_requested_name in "$@"; do
+	case "$context_bot_requested_name" in
+	FLY_API_TOKEN | SECRET_KEY_BASE | BOT_APP_PASSWORD | ANTHROPIC_API_KEY) ;;
+	*)
+		context_bot_secrets_abort "unsupported secret name: $context_bot_requested_name"
+		# shellcheck disable=SC2317
+		return 1 2>/dev/null || exit 1
+		;;
+	esac
+
+	context_bot_duplicate=false
+	for context_bot_seen_name in "${context_bot_requested_secrets[@]}"; do
+		if [[ "$context_bot_seen_name" == "$context_bot_requested_name" ]]; then
+			context_bot_duplicate=true
+			break
+		fi
+	done
+
+	if [[ "$context_bot_duplicate" == "false" ]]; then
+		context_bot_requested_secrets+=("$context_bot_requested_name")
+	fi
+done
+
+for context_bot_secret_name in "${context_bot_requested_secrets[@]}"; do
+	unset "$context_bot_secret_name"
+done
 
 if [[ -z "${BITWARDEN_ITEM_ID:-}" ]]; then
 	context_bot_secrets_abort "BITWARDEN_ITEM_ID is required"
@@ -54,7 +91,7 @@ if ! context_bot_bitwarden_item="$(bw get item "$BITWARDEN_ITEM_ID")"; then
 	return 1 2>/dev/null || exit 1
 fi
 
-for context_bot_secret_name in FLY_API_TOKEN SECRET_KEY_BASE BOT_APP_PASSWORD ANTHROPIC_API_KEY; do
+for context_bot_secret_name in "${context_bot_requested_secrets[@]}"; do
 	if ! context_bot_secret_value="$(
 		jq -er --arg name "$context_bot_secret_name" \
 			'([.fields[]? | select(.name == $name) | .value][0] // empty)
@@ -84,16 +121,27 @@ for context_bot_secret_name in FLY_API_TOKEN SECRET_KEY_BASE BOT_APP_PASSWORD AN
 	esac
 done
 
-printf -v FLY_API_TOKEN '%s' "$context_bot_fly_api_token"
-printf -v SECRET_KEY_BASE '%s' "$context_bot_secret_key_base"
-printf -v BOT_APP_PASSWORD '%s' "$context_bot_bot_app_password"
-printf -v ANTHROPIC_API_KEY '%s' "$context_bot_anthropic_api_key"
-export FLY_API_TOKEN SECRET_KEY_BASE BOT_APP_PASSWORD ANTHROPIC_API_KEY
+for context_bot_secret_name in "${context_bot_requested_secrets[@]}"; do
+	case "$context_bot_secret_name" in
+	FLY_API_TOKEN)
+		printf -v FLY_API_TOKEN '%s' "$context_bot_fly_api_token"
+		export FLY_API_TOKEN
+		;;
+	SECRET_KEY_BASE)
+		printf -v SECRET_KEY_BASE '%s' "$context_bot_secret_key_base"
+		export SECRET_KEY_BASE
+		;;
+	BOT_APP_PASSWORD)
+		printf -v BOT_APP_PASSWORD '%s' "$context_bot_bot_app_password"
+		export BOT_APP_PASSWORD
+		;;
+	ANTHROPIC_API_KEY)
+		printf -v ANTHROPIC_API_KEY '%s' "$context_bot_anthropic_api_key"
+		export ANTHROPIC_API_KEY
+		;;
+	esac
+	printf 'secrets: loaded %s\n' "$context_bot_secret_name"
+done
 
 context_bot_secrets_cleanup
 context_bot_secrets_restore_xtrace
-
-printf 'secrets: loaded FLY_API_TOKEN\n'
-printf 'secrets: loaded SECRET_KEY_BASE\n'
-printf 'secrets: loaded BOT_APP_PASSWORD\n'
-printf 'secrets: loaded ANTHROPIC_API_KEY\n'

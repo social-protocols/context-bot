@@ -13,6 +13,16 @@ config :context_bot, Oban,
     maintenance: settings.queue_concurrency
   ]
 
+anthropic_api_key =
+  case System.get_env("ANTHROPIC_API_KEY") do
+    value when is_binary(value) and value != "" -> value
+    _missing_or_blank -> nil
+  end
+
+if anthropic_api_key do
+  config :context_bot, anthropic_api_key: anthropic_api_key
+end
+
 if ContextBot.Settings.bot_enabled?(settings) do
   required_secret = fn variable ->
     case System.get_env(variable) do
@@ -22,11 +32,10 @@ if ContextBot.Settings.bot_enabled?(settings) do
   end
 
   bot_app_password = required_secret.("BOT_APP_PASSWORD")
-  anthropic_api_key = required_secret.("ANTHROPIC_API_KEY")
+  _anthropic_api_key = anthropic_api_key || required_secret.("ANTHROPIC_API_KEY")
 
   config :context_bot,
-    bot_app_password: bot_app_password,
-    anthropic_api_key: anthropic_api_key
+    bot_app_password: bot_app_password
 end
 
 # config/runtime.exs is executed for all environments, including

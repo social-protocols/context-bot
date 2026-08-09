@@ -10,11 +10,57 @@ fail() {
 	exit 1
 }
 
+anthropic_only_output="$(
+	(
+		export BITWARDEN_ITEM_ID="test-item"
+		bw() {
+			printf '%s\n' '{"fields":[{"name":"ANTHROPIC_API_KEY","value":"anthropic-key-test-value"}]}'
+		}
+		# shellcheck source=secrets.sh
+		source "$project_root/secrets.sh" ANTHROPIC_API_KEY ANTHROPIC_API_KEY
+		[[ "$ANTHROPIC_API_KEY" == "anthropic-key-test-value" ]]
+		[[ -z "${FLY_API_TOKEN+x}" ]]
+		[[ -z "${SECRET_KEY_BASE+x}" ]]
+		[[ -z "${BOT_APP_PASSWORD+x}" ]]
+	) 2>&1
+)"
+
+[[ "$anthropic_only_output" == "secrets: loaded ANTHROPIC_API_KEY" ]] ||
+	fail "Anthropic-only loading did not export exactly the requested secret"
+[[ "$anthropic_only_output" != *"anthropic-key-test-value"* ]] ||
+	fail "Anthropic-only loading leaked the secret value"
+
+if empty_request_output="$(
+	(
+		export BITWARDEN_ITEM_ID="test-item"
+		bw() { exit 99; }
+		# shellcheck source=secrets.sh
+		source "$project_root/secrets.sh"
+	) 2>&1
+)"; then
+	fail "secrets.sh accepted an empty request"
+fi
+[[ "$empty_request_output" == *"at least one secret name is required"* ]] ||
+	fail "empty-request error was not actionable"
+
+if unsupported_output="$(
+	(
+		export BITWARDEN_ITEM_ID="test-item"
+		bw() { exit 99; }
+		# shellcheck source=secrets.sh
+		source "$project_root/secrets.sh" NOT_A_SECRET
+	) 2>&1
+)"; then
+	fail "secrets.sh accepted an unsupported secret name"
+fi
+[[ "$unsupported_output" == *"unsupported secret name: NOT_A_SECRET"* ]] ||
+	fail "unsupported-secret error was not actionable"
+
 if missing_output="$(
 	(
 		unset BITWARDEN_ITEM_ID
 		# shellcheck source=secrets.sh
-		source "$project_root/secrets.sh"
+		source "$project_root/secrets.sh" FLY_API_TOKEN
 	) 2>&1
 )"; then
 	fail "secrets.sh succeeded without BITWARDEN_ITEM_ID"
@@ -47,7 +93,7 @@ errexit_cleanup_output="$(
 			printf "errexit cleanup verified\n"
 		'\'' EXIT
 		# shellcheck source=secrets.sh
-		source "$CONTEXT_BOT_PROJECT_ROOT/secrets.sh"
+		source "$CONTEXT_BOT_PROJECT_ROOT/secrets.sh" FLY_API_TOKEN SECRET_KEY_BASE BOT_APP_PASSWORD ANTHROPIC_API_KEY
 		printf "unreachable\n"
 	' 2>&1
 )"
@@ -81,7 +127,7 @@ for invalid_json_value in '""' '"line\nfeed"' '"carriage\rreturn"' '"nul\u0000by
 					printf "invalid value cleanup verified\n"
 				'\'' EXIT
 				# shellcheck source=secrets.sh
-				source "$CONTEXT_BOT_PROJECT_ROOT/secrets.sh"
+				source "$CONTEXT_BOT_PROJECT_ROOT/secrets.sh" FLY_API_TOKEN SECRET_KEY_BASE BOT_APP_PASSWORD ANTHROPIC_API_KEY
 			' 2>&1
 	)"
 	invalid_value_status=$?
@@ -105,7 +151,7 @@ if ! partial_output="$(
 		}
 		set +e
 		# shellcheck source=secrets.sh
-		source "$project_root/secrets.sh"
+		source "$project_root/secrets.sh" FLY_API_TOKEN SECRET_KEY_BASE BOT_APP_PASSWORD ANTHROPIC_API_KEY
 		partial_status=$?
 		set -e
 		[[ "$partial_status" -ne 0 ]] || fail "partial item unexpectedly succeeded"
@@ -136,7 +182,7 @@ success_output="$(
 			printf '%s\n' '{"fields":[{"name":"FLY_API_TOKEN","value":"fly-test-value"},{"name":"SECRET_KEY_BASE","value":"secret-key-test-value"},{"name":"BOT_APP_PASSWORD","value":"app-password-test-value"},{"name":"ANTHROPIC_API_KEY","value":"anthropic-key-test-value"},{"name":"IGNORED","value":"ignored-value"}]}'
 		}
 		# shellcheck source=secrets.sh
-		source "$project_root/secrets.sh"
+		source "$project_root/secrets.sh" FLY_API_TOKEN SECRET_KEY_BASE BOT_APP_PASSWORD ANTHROPIC_API_KEY
 		[[ "$FLY_API_TOKEN" == "fly-test-value" ]]
 		[[ "$SECRET_KEY_BASE" == "secret-key-test-value" ]]
 		[[ "$BOT_APP_PASSWORD" == "app-password-test-value" ]]
@@ -174,7 +220,7 @@ xtrace_output="$(
 		}
 		set -x
 		# shellcheck source=secrets.sh
-		source "$project_root/secrets.sh"
+		source "$project_root/secrets.sh" FLY_API_TOKEN SECRET_KEY_BASE BOT_APP_PASSWORD ANTHROPIC_API_KEY
 		case "$-" in
 		*x*) ;;
 		*) exit 93 ;;

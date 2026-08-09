@@ -66,14 +66,14 @@ docker-build:
 secrets:
     #!/usr/bin/env bash
     set -euo pipefail
-    source ./secrets.sh
+    source ./secrets.sh FLY_API_TOKEN SECRET_KEY_BASE BOT_APP_PASSWORD ANTHROPIC_API_KEY
     printf 'Deployment secrets loaded and validated.\n'
 
 deploy:
     #!/usr/bin/env bash
     set -euo pipefail
     set +x
-    source ./secrets.sh
+    source ./secrets.sh FLY_API_TOKEN SECRET_KEY_BASE BOT_APP_PASSWORD ANTHROPIC_API_KEY
     printf '%s\n' \
       "SECRET_KEY_BASE=$SECRET_KEY_BASE" \
       "BOT_APP_PASSWORD=$BOT_APP_PASSWORD" \

@@ -72,6 +72,47 @@ defmodule ContextBotWeb.ProductionConfigTest do
     end
   end
 
+  test "disabled runtime config accepts an Anthropic key without bot credentials" do
+    replace_environment(%{
+      "BOT_ENABLED" => "false",
+      "BOT_APP_PASSWORD" => nil,
+      "ANTHROPIC_API_KEY" => "dry-run-provider-key"
+    })
+
+    context_bot_config =
+      "config/runtime.exs"
+      |> Config.Reader.read!(env: :test)
+      |> Keyword.fetch!(:context_bot)
+
+    assert context_bot_config[:anthropic_api_key] == "dry-run-provider-key"
+    refute Keyword.has_key?(context_bot_config, :bot_app_password)
+
+    settings = Keyword.fetch!(context_bot_config, :settings)
+    refute Map.has_key?(settings, :anthropic_api_key)
+    refute Map.has_key?(settings, :bot_app_password)
+  end
+
+  test "enabled runtime config keeps provider and bot secrets outside settings" do
+    replace_environment(
+      enabled_bot_environment(%{
+        "BOT_APP_PASSWORD" => "test-password",
+        "ANTHROPIC_API_KEY" => "test-provider-key"
+      })
+    )
+
+    context_bot_config =
+      "config/runtime.exs"
+      |> Config.Reader.read!(env: :test)
+      |> Keyword.fetch!(:context_bot)
+
+    assert context_bot_config[:bot_app_password] == "test-password"
+    assert context_bot_config[:anthropic_api_key] == "test-provider-key"
+
+    settings = Keyword.fetch!(context_bot_config, :settings)
+    refute Map.has_key?(settings, :anthropic_api_key)
+    refute Map.has_key?(settings, :bot_app_password)
+  end
+
   test "runtime config keeps every workflow queue serial" do
     replace_environment(%{"BOT_ENABLED" => "false", "QUEUE_CONCURRENCY" => "1"})
 
