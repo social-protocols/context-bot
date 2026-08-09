@@ -60,6 +60,12 @@ db-reset:
     mkdir -p data
     mix ecto.reset
 
+dry-run post question:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source ./secrets.sh ANTHROPIC_API_KEY
+    BOT_ENABLED=false mix context_bot.dry_run {{quote(post)}} {{quote(question)}}
+
 docker-build:
     docker build --progress=plain -t context-bot:local .
 

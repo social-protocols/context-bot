@@ -48,6 +48,7 @@ After completing each user prompt, commit the changes with a concise message exp
 | `just typecheck` | Run Dialyzer. |
 | `just check` | Run the complete verification gate. |
 | `just db-create` / `db-migrate` / `db-reset` | Manage SQLite. |
+| `just dry-run <post> <question>` | Run the durable local-only thread/research path. |
 | `just docker-build` | Build the production image locally. |
 | `just secrets` / `deploy` | Validate Bitwarden fields or deploy to Fly. |
 | `just fly-status` / `fly-logs` | Inspect the Fly app. |
@@ -58,7 +59,7 @@ Run `direnv exec . just check` before any completion claim. For release or deplo
 
 This is one Phoenix API application, not an umbrella. `ContextBot.Application` starts Repo and Finch always, and starts Oban, `ContextBot.ATProto.Session`, and `ContextBot.Mentions.Poller` only when the validated settings enable the bot. `GET /health` returns bounded operational aggregates and never stored content or credentials.
 
-The durable pipeline is `Mentions.Poller` → `EligibilityWorker` → `ThreadWorker` → `ResearchWorker` → `ReplyWorker`; `DeferredWorker` repairs missing jobs and reconsiders bounded deferred work. `Workflow.Store` and Ecto/SQLite own invocation checkpoints, leases, budget entries, exact bounded provider response envelopes, and the frozen reply intent. Development and test databases live under ignored `data/`; Fly mounts `/data/context_bot.db`.
+The public pipeline is `Mentions.Poller` → `EligibilityWorker` → `ThreadWorker` → `ResearchWorker` → `ReplyWorker`; `DeferredWorker` repairs missing jobs and reconsiders bounded deferred work. The local path is `just dry-run` → `ThreadWorker` → `ResearchWorker` and terminates at `complete` without reply construction. `Workflow.Store` and Ecto/SQLite own invocation checkpoints, leases, budget entries, exact bounded provider response envelopes, and any public frozen reply intent. Development and test databases live under ignored `data/`; Fly mounts `/data/context_bot.db`.
 
 External request behavior is one validated startup snapshot. Keep `APPVIEW_URL` pinned to the reviewed public AppView origin; keep the bounded poll interval/page cap, ATProto HTTP/session timeouts, thread-fetch timeout, Anthropic HTTP timeout/API version, and Anthropic server-tool versions runtime configurable through `ContextBot.Settings`. Malformed or out-of-range values must fail startup. The release image includes the SQLite CLI solely for explicitly authorized, read-only, aggregate Fly inspection with a busy timeout.
 
@@ -69,6 +70,7 @@ Preserve these POC invariants:
 - fail closed unless the actor has a bidirectionally verified `bsky.team` handle, a confirmed Skywatch `bluesky-elder` label, or an exact operator-allowlisted DID;
 - reserve integer-microdollar budget before Anthropic work and mark attempts sent before a request can escape;
 - preserve complete provider responses within the configured per-response and cumulative storage bounds;
+- treat `dry_run = true` as permanently non-publishable: use only unauthenticated public AppView reads, skip eligibility/mention rates, retain all Anthropic spending and safety limits, and never create a reply intent or publication claim;
 - freeze one repository/rkey/record reply intent, fence research and publication with leases, and reconcile ambiguous PDS writes rather than allocating a second reply;
 - keep failures finite and credential-free, and recover durable work oldest-first with bounded scans.
 
@@ -78,6 +80,6 @@ Write behavior-first ExUnit tests for application features and shell tests for s
 
 ## Secrets and deployment
 
-Never commit credentials, `.env` files, Bitwarden payloads, or secret values in logs. `secrets.sh` reads only `FLY_API_TOKEN`, `SECRET_KEY_BASE`, `BOT_APP_PASSWORD`, and `ANTHROPIC_API_KEY` custom fields from the item named by `BITWARDEN_ITEM_ID`. `just deploy` uses `FLY_API_TOKEN` for authentication and stages exactly the other three runtime secrets before deploying.
+Never commit credentials, `.env` files, Bitwarden payloads, or secret values in logs. `secrets.sh` accepts only `FLY_API_TOKEN`, `SECRET_KEY_BASE`, `BOT_APP_PASSWORD`, and `ANTHROPIC_API_KEY` custom-field names from the item named by `BITWARDEN_ITEM_ID`, and exports only explicitly requested names. `just dry-run` requests only the Anthropic key. `just deploy` uses `FLY_API_TOKEN` for authentication and stages exactly the other three runtime secrets before deploying.
 
-Committed Fly configuration must remain `BOT_ENABLED=false` until the operator supplies and reviews the real public bot DID, handle, and PDS. Any live deploy, Fly inspection, Bluesky/Anthropic smoke test, public reply, or other external-effect operation always requires explicit user authorization; prior authorization for local implementation or verification does not count.
+Committed Fly configuration must remain `BOT_ENABLED=false` until the operator supplies and reviews the real public bot DID, handle, and PDS. Any live deploy, Fly inspection, Bluesky/Anthropic smoke test, public reply, or other external-effect operation always requires explicit user authorization; prior authorization for local implementation or verification does not count. A paid dry run additionally requires a post supplied by the operator in that request. Never invent a live test target or run one as part of ordinary verification.
