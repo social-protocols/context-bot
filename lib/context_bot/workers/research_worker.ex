@@ -96,6 +96,40 @@ defmodule ContextBot.Workers.ResearchWorker do
     end
   end
 
+  defp freeze_handoff(%Invocation{dry_run: true} = invocation, result, token, dependencies) do
+    completed_at = dependencies.now.()
+
+    attrs = %{
+      anthropic_messages: result.messages,
+      anthropic_usage: result.usage,
+      selected_reply: result.text,
+      reply_validation: result.validation,
+      reply_repo: nil,
+      reply_rkey: nil,
+      reply_record: nil,
+      publication_claim_token: nil,
+      publication_claimed_at: nil,
+      defer_until: nil,
+      failure_category: nil,
+      failure_detail: nil,
+      research_claim_token: nil,
+      research_claimed_at: nil,
+      completed_at: completed_at,
+      deferred_attempt_kind: nil
+    }
+
+    case Store.transition_research(invocation, token, :complete, attrs, nil, completed_at) do
+      {:ok, _complete} ->
+        :ok
+
+      {:error, :stale_claim} ->
+        :ok
+
+      {:error, changeset} ->
+        raise Ecto.InvalidChangesetError, action: :update, changeset: changeset
+    end
+  end
+
   defp freeze_handoff(invocation, result, token, dependencies) do
     created_at = dependencies.now.()
     rkey = dependencies.tid_generator.(DateTime.to_unix(created_at, :microsecond))

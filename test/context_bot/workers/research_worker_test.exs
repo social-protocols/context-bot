@@ -153,6 +153,41 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert Repo.get!(Invocation, invocation.id).reply_record == expected_record
   end
 
+  test "completes a dry run with all research evidence and no publication intent" do
+    invocation =
+      invocation("dry-success", :thread_ready, %{
+        dry_run: true,
+        target_uri: "at://did:plc:target/app.bsky.feed.post/selected",
+        invocation_text: "Is this fair?"
+      })
+
+    configure_runner({:ok, runner_result()})
+
+    configure_worker(
+      settings: Settings.load(anthropic_daily_budget_usd: "20.000000"),
+      reply_job_builder: fn _invocation -> flunk("dry run constructed a reply job") end,
+      tid_generator: fn _timestamp -> flunk("dry run constructed a publication key") end
+    )
+
+    assert :ok = perform(invocation)
+    assert_received {:runner_called, :researching, _options, false}
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.status == :complete
+    assert persisted.stage == :complete
+    assert persisted.completed_at == @now
+    assert persisted.anthropic_messages == runner_result().messages
+    assert persisted.anthropic_usage == runner_result().usage
+    assert persisted.selected_reply == "Frozen concise context."
+    assert persisted.reply_validation == %{"repair_used" => false, "result" => "valid"}
+    assert persisted.reply_repo == nil
+    assert persisted.reply_rkey == nil
+    assert persisted.reply_record == nil
+    assert persisted.publication_claim_token == nil
+    assert persisted.publication_claimed_at == nil
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
   test "logs a research attempt without provider or invocation content" do
     invocation = invocation("logged-research", :thread_ready)
     configure_runner({:ok, runner_result()})

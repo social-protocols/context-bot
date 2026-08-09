@@ -34,6 +34,7 @@ defmodule ContextBot.Workers.ReplyWorker do
 
     case find_invocation(uri, cid) do
       nil -> :ok
+      %Invocation{dry_run: true} -> :ok
       invocation -> claim_and_publish(invocation, job, claim_token(job), dependencies)
     end
   end

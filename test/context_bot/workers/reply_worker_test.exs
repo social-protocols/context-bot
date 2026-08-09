@@ -142,6 +142,51 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
     refute log =~ invocation.reply_record["text"]
   end
 
+  test "a malformed dry-run publication intent is permanently ignored" do
+    invocation = invocation("dry-run-defense")
+
+    invocation =
+      invocation
+      |> Invocation.changeset(%{
+        dry_run: true,
+        target_uri: "at://did:plc:target/app.bsky.feed.post/selected",
+        invocation_text: "Can you check this?"
+      })
+      |> Repo.update!()
+
+    remote = configure_remote()
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :reply_ready
+    assert persisted.publication_claim_token == nil
+    assert persisted.publication_claimed_at == nil
+    assert Remote.snapshot(remote).calls == []
+  end
+
+  test "the workflow store refuses to grant a publication claim for a dry run" do
+    invocation = invocation("dry-run-claim-defense")
+
+    invocation =
+      invocation
+      |> Invocation.changeset(%{
+        dry_run: true,
+        target_uri: "at://did:plc:target/app.bsky.feed.post/selected",
+        invocation_text: "What's missing?"
+      })
+      |> Repo.update!()
+
+    stale_before = DateTime.add(@now, -300, :second)
+
+    assert {:error, :stale_stage} =
+             Store.claim_publication(invocation, "must-not-claim", @now, stale_before)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :reply_ready
+    assert persisted.publication_claim_token == nil
+  end
+
   test "GETs the deterministic record before a create-only PUT and completes only after exact reconciliation" do
     invocation = invocation("create")
     remote_record = remote_record(invocation, "bafy-created")

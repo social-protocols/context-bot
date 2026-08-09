@@ -636,6 +636,8 @@ defmodule ContextBot.Workflow.Store do
 
   defp research_claimable?(_invocation, _token, _now, _stale_before), do: false
 
+  defp publication_claimable?(%Invocation{dry_run: true}, _token, _stale_before), do: false
+
   defp publication_claimable?(%Invocation{stage: :reply_ready}, _token, _stale_before), do: true
 
   defp publication_claimable?(
