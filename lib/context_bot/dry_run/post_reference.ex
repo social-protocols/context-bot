@@ -8,6 +8,7 @@ defmodule ContextBot.DryRun.PostReference do
   @maximum_input_bytes 4_096
   @post_collection "app.bsky.feed.post"
   @at_post ~r/\Aat:\/\/([^\/]+)\/app\.bsky\.feed\.post\/([^\/?#]+)\z/
+  @web_post_path ~r/\A\/profile\/([^\/]+)\/post\/([^\/]+)\z/
   @handle_label ~r/\A[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\z/
 
   @spec normalize(String.t(), module()) :: {:ok, String.t()} | {:error, term()}
@@ -53,7 +54,7 @@ defmodule ContextBot.DryRun.PostReference do
             path: path
           }} <- URI.new(input),
          "bsky.app" <- web_authority(input),
-         ["profile", repo, "post", rkey] <- String.split(path, "/", trim: true) do
+         [_, repo, rkey] <- Regex.run(@web_post_path, path) do
       {:ok, repo, rkey}
     else
       _invalid -> {:error, :invalid_post_reference}

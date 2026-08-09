@@ -8,7 +8,7 @@ defmodule Mix.Tasks.ContextBot.DryRun do
   alias ContextBot.{DryRun, Repo, Settings}
   alias ContextBot.Research.BudgetEntry
 
-  @requirements ["app.start"]
+  @requirements ["app.config"]
   @shortdoc "Run a durable local context check without posting to Bluesky"
 
   @impl Mix.Task
@@ -31,10 +31,15 @@ defmodule Mix.Tasks.ContextBot.DryRun do
 
       {:deferred, deferred} ->
         Mix.shell().info("dry_run_id=#{deferred.id}")
+        Mix.shell().info("status=deferred_budget")
+        Mix.shell().info("defer_until=#{datetime(deferred.defer_until)}")
         Mix.raise("dry run deferred by the configured Anthropic daily budget")
 
       {:error, %ContextBot.Workflow.Invocation{} = failed} ->
         Mix.shell().info("dry_run_id=#{failed.id}")
+        Mix.shell().info("status=failed")
+        Mix.shell().info("failure_category=#{failure_category(failed.failure_category)}")
+        Mix.shell().info("completed_at=#{datetime(failed.completed_at)}")
         Mix.raise("dry run failed at stage=#{failed.stage}")
 
       {:error, reason} when is_atom(reason) ->
@@ -68,7 +73,7 @@ defmodule Mix.Tasks.ContextBot.DryRun do
   defp create!(service, post, question) do
     case service.create(post, question, []) do
       {:ok, invocation} -> invocation
-      {:error, reason} when is_atom(reason) -> Mix.raise("unable to create dry run: #{reason}")
+      {:error, reason} -> Mix.raise("unable to create dry run: #{safe_create_error(reason)}")
     end
   end
 
@@ -96,11 +101,29 @@ defmodule Mix.Tasks.ContextBot.DryRun do
     |> Enum.sum()
   end
 
-  defp one_line(value) when is_binary(value),
-    do: value |> String.replace(~r/\s+/u, " ") |> String.trim()
+  defp one_line(value) when is_binary(value) do
+    value
+    |> String.replace(~r/\x1B\[[0-?]*[ -\/]*[@-~]/, "")
+    |> String.replace(~r/[\x00-\x1F\x7F-\x9F]/u, " ")
+    |> String.replace(~r/\s+/u, " ")
+    |> String.trim()
+  end
 
   defp one_line(_value), do: ""
 
   defp integer(value) when is_integer(value) and value >= 0, do: value
   defp integer(_value), do: 0
+
+  defp safe_create_error({:transient, _detail}), do: "public_service_unavailable"
+  defp safe_create_error({:rate_limited, _retry_after}), do: "public_service_rate_limited"
+  defp safe_create_error(:timeout), do: "public_service_timeout"
+  defp safe_create_error(:response_too_large), do: "public_service_response_too_large"
+  defp safe_create_error(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp safe_create_error(_reason), do: "public_service_failure"
+
+  defp failure_category(category) when is_atom(category), do: Atom.to_string(category)
+  defp failure_category(_category), do: "unknown"
+
+  defp datetime(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp datetime(_value), do: "unknown"
 end

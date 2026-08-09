@@ -49,7 +49,7 @@ defmodule ContextBot.Workers.ThreadWorker do
     |> Repo.one()
   end
 
-  defp capture(invocation, dependencies) do
+  defp capture(invocation, job, dependencies) do
     {client, uri} = thread_source(invocation, dependencies)
 
     result =
@@ -60,12 +60,14 @@ defmodule ContextBot.Workers.ThreadWorker do
         dependencies.fetch_timeout_ms
       )
 
-    handle_fetch(result, invocation, dependencies)
+    result
+    |> handle_fetch(invocation, dependencies)
+    |> terminalize_exhausted_retry(invocation, job)
   end
 
   defp logged_capture(invocation, job, dependencies) do
     started_at = System.monotonic_time(:millisecond)
-    result = capture(invocation, dependencies)
+    result = capture(invocation, job, dependencies)
 
     Operations.log_attempt(invocation,
       attempt_kind: :thread,
@@ -79,6 +81,15 @@ defmodule ContextBot.Workers.ThreadWorker do
 
   defp thread_failure({:error, _reason}), do: :thread_unavailable
   defp thread_failure(_result), do: nil
+
+  defp terminalize_exhausted_retry({:error, _reason}, invocation, %Oban.Job{
+         attempt: attempt,
+         max_attempts: max_attempts
+       })
+       when is_integer(attempt) and is_integer(max_attempts) and attempt >= max_attempts,
+       do: fail_thread(invocation, "retry_exhausted")
+
+  defp terminalize_exhausted_retry(result, _invocation, _job), do: result
 
   defp fetch_with_timeout(client, uri, parent_height, timeout_ms) do
     task = Task.async(fn -> client.get_post_thread(uri, parent_height) end)
@@ -98,9 +109,13 @@ defmodule ContextBot.Workers.ThreadWorker do
     else
       {:error, :target_unavailable} -> fail_thread(invocation, "target_unavailable")
       {:error, :invalid_thread} -> fail_thread(invocation, "invalid_thread")
+      {:error, :response_too_large} -> fail_thread(invocation, "response_too_large")
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp handle_fetch({:error, :response_too_large}, invocation, _dependencies),
+    do: fail_thread(invocation, "response_too_large")
 
   defp handle_fetch({:error, :record_not_found}, invocation, _dependencies),
     do: fail_thread(invocation, "target_unavailable")
@@ -194,10 +209,12 @@ defmodule ContextBot.Workers.ThreadWorker do
   end
 
   defp research_job(invocation) do
+    queue = if invocation.dry_run, do: :dry_research, else: :research
+
     Oban.Job.new(
       %{"uri" => invocation.invocation_uri, "cid" => invocation.notification_cid},
       worker: @research_worker,
-      queue: :research
+      queue: queue
     )
   end
 

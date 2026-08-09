@@ -123,6 +123,30 @@ defmodule ContextBot.Workflow.StoreTest do
     assert persisted.notification_cid == "bafy-immutable"
   end
 
+  test "keeps dry-run identity and publication safety fields immutable" do
+    target_uri = "at://did:plc:actor/app.bsky.feed.post/dry-immutable"
+
+    assert {:ok, invocation} =
+             Store.create_dry_run(target_uri, "What's missing?", @received_at, &thread_job/2)
+
+    changeset =
+      Invocation.changeset(invocation, %{
+        dry_run: false,
+        target_uri: "at://did:plc:actor/app.bsky.feed.post/replaced",
+        invocation_text: "A different question"
+      })
+
+    refute changeset.valid?
+    assert errors_on(changeset).dry_run == ["is immutable"]
+    assert errors_on(changeset).target_uri == ["is immutable"]
+    assert errors_on(changeset).invocation_text == ["is immutable"]
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.dry_run
+    assert persisted.target_uri == target_uri
+    assert persisted.invocation_text == "What's missing?"
+  end
+
   test "preserves the notification CID when the current record CID changes" do
     assert {:ok, invocation, :inserted} =
              Store.receive_mention(

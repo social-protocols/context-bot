@@ -42,6 +42,7 @@ defmodule ContextBot.DryRunWorkflowTest do
     settings = Settings.load(anthropic_daily_budget_usd: "20.000000")
     Application.put_env(:context_bot, :settings, settings)
     expect_public_thread()
+    public_job = seed_public_thread_job!()
 
     raw_response = fixture("anthropic/tool_success.json")
 
@@ -68,16 +69,24 @@ defmodule ContextBot.DryRunWorkflowTest do
     assert {:ok, invocation} = DryRun.create(@post_url, "What's missing?")
     assert invocation.stage == :capturing_thread
     assert invocation.dry_run
-    assert queued_jobs() == [{"thread", "ContextBot.Workers.ThreadWorker"}]
 
-    perform_and_delete!(:thread)
+    assert queued_jobs() == [
+             {"thread", "ContextBot.Workers.ThreadWorker"},
+             {"dry_thread", "ContextBot.Workers.ThreadWorker"}
+           ]
+
+    perform_and_delete!(:dry_thread)
     thread_ready = Repo.reload!(invocation)
     assert thread_ready.stage == :thread_ready
     assert thread_ready.target_uri == @target_uri
     assert thread_ready.raw_thread == fixture("atproto/thread_ancestors.json")
-    assert queued_jobs() == [{"research", "ContextBot.Workers.ResearchWorker"}]
 
-    perform_and_delete!(:research)
+    assert queued_jobs() == [
+             {"thread", "ContextBot.Workers.ThreadWorker"},
+             {"dry_research", "ContextBot.Workers.ResearchWorker"}
+           ]
+
+    perform_and_delete!(:dry_research)
 
     assert {:ok, complete} = DryRun.await(invocation, timeout_ms: 0)
     assert complete.stage == :complete
@@ -97,7 +106,8 @@ defmodule ContextBot.DryRunWorkflowTest do
     assert [%BudgetEntry{state: :settled, response_recorded_at: %DateTime{}}] =
              Repo.all(BudgetEntry)
 
-    assert queued_jobs() == []
+    assert queued_jobs() == [{"thread", "ContextBot.Workers.ThreadWorker"}]
+    assert Repo.get!(Oban.Job, public_job.id).state == "available"
     assert Process.whereis(ContextBot.ATProto.Session) == nil
   end
 
@@ -112,8 +122,8 @@ defmodule ContextBot.DryRunWorkflowTest do
     end)
 
     assert {:ok, invocation} = DryRun.create(@post_url, "Can you check this?")
-    perform_and_delete!(:thread)
-    perform_and_delete!(:research)
+    perform_and_delete!(:dry_thread)
+    perform_and_delete!(:dry_research)
 
     assert {:deferred, deferred} = DryRun.await(invocation, timeout_ms: 0)
     assert deferred.stage == :deferred_budget
@@ -173,6 +183,12 @@ defmodule ContextBot.DryRunWorkflowTest do
     |> order_by([job], asc: job.id)
     |> select([job], {job.queue, job.worker})
     |> Repo.all()
+  end
+
+  defp seed_public_thread_job! do
+    %{"uri" => "at://did:plc:public/app.bsky.feed.post/pending", "cid" => "bafy-public"}
+    |> Oban.Job.new(worker: ContextBot.Workers.ThreadWorker, queue: :thread)
+    |> Repo.insert!()
   end
 
   defp seed_spent_daily_budget! do

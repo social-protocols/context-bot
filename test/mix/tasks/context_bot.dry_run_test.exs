@@ -82,6 +82,10 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     refute_received {:create, _, _, _}
   end
 
+  test "loads configuration without starting the application before validation" do
+    assert DryRunTask.__info__(:attributes)[:requirements] == ["app.config"]
+  end
+
   test "fails closed when the public bot is enabled" do
     settings = Application.fetch_env!(:context_bot, :settings)
     Application.put_env(:context_bot, :settings, %{settings | bot_enabled: true})
@@ -116,7 +120,7 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
       id: 42,
       dry_run: true,
       stage: :complete,
-      selected_reply: "A concise tested answer.",
+      selected_reply: "A concise\e[31m tested\nanswer.\e[0m",
       anthropic_usage: %{
         "totals" => %{"input_tokens" => 120, "output_tokens" => 30},
         "response_count" => 1,
@@ -151,6 +155,57 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     refute output =~ "canonical thread"
     refute output =~ "headers"
     refute output =~ "raw_body"
+    refute output =~ "\e"
+  end
+
+  test "turns structured public-read failures into a finite safe Mix error" do
+    Application.put_env(:context_bot, Service,
+      test_pid: self(),
+      create_result: {:error, {:transient, 503}},
+      await_result: :unused
+    )
+
+    assert_raise Mix.Error, ~r/public_service_unavailable/, fn -> run(["post", "question"]) end
+    assert_received :runtime_started
+    assert_received {:create, "post", "question", []}
+  end
+
+  test "prints safe failure and budget timing metadata" do
+    deferred = %Invocation{
+      id: 43,
+      dry_run: true,
+      stage: :deferred_budget,
+      defer_until: ~U[2026-08-10 00:00:00.000000Z]
+    }
+
+    Application.put_env(:context_bot, Service,
+      test_pid: self(),
+      create_result: {:ok, %{deferred | stage: :capturing_thread}},
+      await_result: {:deferred, deferred}
+    )
+
+    assert_raise Mix.Error, ~r/deferred/, fn -> run(["post", "question"]) end
+    output = shell_output()
+    assert output =~ "status=deferred_budget"
+    assert output =~ "defer_until=2026-08-10T00:00:00.000000Z"
+
+    failed = %Invocation{
+      id: 44,
+      dry_run: true,
+      stage: :failed,
+      failure_category: :provider_response
+    }
+
+    Application.put_env(:context_bot, Service,
+      test_pid: self(),
+      create_result: {:ok, %{failed | stage: :capturing_thread}},
+      await_result: {:error, failed}
+    )
+
+    assert_raise Mix.Error, ~r/failed/, fn -> run(["post", "question"]) end
+    output = shell_output()
+    assert output =~ "status=failed"
+    assert output =~ "failure_category=provider_response"
   end
 
   defp run(arguments), do: DryRunTask.run(arguments)

@@ -12,6 +12,7 @@ defmodule ContextBot.DryRun do
   alias ContextBot.Workflow.Invocation
 
   @thread_worker "ContextBot.Workers.ThreadWorker"
+  @maximum_question_bytes 10_000
   @default_timeout_ms 900_000
   @default_poll_interval_ms 250
 
@@ -25,7 +26,8 @@ defmodule ContextBot.DryRun do
     resolver = Keyword.get(options, :resolver, PublicClient)
     now = Keyword.get(options, :now, &DateTime.utc_now/0)
 
-    with {:ok, target_uri} <- reference_module.normalize(post_reference, resolver) do
+    with :ok <- validate_question(question),
+         {:ok, target_uri} <- reference_module.normalize(post_reference, resolver) do
       Store.create_dry_run(target_uri, question, now.(), &thread_job/2)
     end
   end
@@ -86,11 +88,20 @@ defmodule ContextBot.DryRun do
       poll_interval_ms > 0 and is_function(sleep, 1) and is_function(monotonic_ms, 0)
   end
 
+  defp validate_question(question) do
+    if String.valid?(question) and byte_size(question) <= @maximum_question_bytes and
+         String.trim(question) != "" do
+      :ok
+    else
+      {:error, :invalid_input}
+    end
+  end
+
   defp thread_job(uri, cid) do
     Oban.Job.new(
       %{"uri" => uri, "cid" => cid},
       worker: @thread_worker,
-      queue: :thread
+      queue: :dry_thread
     )
   end
 end

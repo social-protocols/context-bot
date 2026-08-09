@@ -143,16 +143,12 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
   end
 
   test "a malformed dry-run publication intent is permanently ignored" do
-    invocation = invocation("dry-run-defense")
-
     invocation =
-      invocation
-      |> Invocation.changeset(%{
+      invocation("dry-run-defense", :reply_ready, %{
         dry_run: true,
         target_uri: "at://did:plc:target/app.bsky.feed.post/selected",
         invocation_text: "Can you check this?"
       })
-      |> Repo.update!()
 
     remote = configure_remote()
 
@@ -166,16 +162,12 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
   end
 
   test "the workflow store refuses to grant a publication claim for a dry run" do
-    invocation = invocation("dry-run-claim-defense")
-
     invocation =
-      invocation
-      |> Invocation.changeset(%{
+      invocation("dry-run-claim-defense", :reply_ready, %{
         dry_run: true,
         target_uri: "at://did:plc:target/app.bsky.feed.post/selected",
         invocation_text: "What's missing?"
       })
-      |> Repo.update!()
 
     stale_before = DateTime.add(@now, -300, :second)
 
@@ -762,31 +754,35 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
     }
   end
 
-  defp invocation(suffix, stage \\ :reply_ready) do
+  defp invocation(suffix, stage \\ :reply_ready, overrides \\ %{}) do
     uri = "at://did:plc:actor/app.bsky.feed.post/#{suffix}"
 
-    attrs = %{
-      invocation_uri: uri,
-      notification_cid: "bafy-#{suffix}",
-      current_cid: "bafy-current-#{suffix}",
-      actor_did: "did:plc:actor",
-      raw_notification: %{"uri" => uri, "cid" => "bafy-#{suffix}"},
-      received_at: DateTime.add(@now, -60),
-      status: stage,
-      stage: stage,
-      selected_reply: "Frozen context for #{suffix}.",
-      reply_repo: @bot_did,
-      reply_rkey: @rkey,
-      reply_record: %{
-        "$type" => "app.bsky.feed.post",
-        "text" => "Frozen context for #{suffix}.",
-        "createdAt" => "2026-07-29T12:59:00.123456Z",
-        "reply" => %{
-          "parent" => %{"uri" => uri, "cid" => "bafy-current-#{suffix}"},
-          "root" => %{"uri" => uri, "cid" => "bafy-current-#{suffix}"}
-        }
-      }
-    }
+    attrs =
+      Map.merge(
+        %{
+          invocation_uri: uri,
+          notification_cid: "bafy-#{suffix}",
+          current_cid: "bafy-current-#{suffix}",
+          actor_did: "did:plc:actor",
+          raw_notification: %{"uri" => uri, "cid" => "bafy-#{suffix}"},
+          received_at: DateTime.add(@now, -60),
+          status: stage,
+          stage: stage,
+          selected_reply: "Frozen context for #{suffix}.",
+          reply_repo: @bot_did,
+          reply_rkey: @rkey,
+          reply_record: %{
+            "$type" => "app.bsky.feed.post",
+            "text" => "Frozen context for #{suffix}.",
+            "createdAt" => "2026-07-29T12:59:00.123456Z",
+            "reply" => %{
+              "parent" => %{"uri" => uri, "cid" => "bafy-current-#{suffix}"},
+              "root" => %{"uri" => uri, "cid" => "bafy-current-#{suffix}"}
+            }
+          }
+        },
+        overrides
+      )
 
     %Invocation{}
     |> Invocation.changeset(attrs)

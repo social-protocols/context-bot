@@ -180,7 +180,7 @@ defmodule ContextBot.Workers.ThreadWorkerTest do
     refute persisted.canonical_thread =~ "DESCENDANT"
 
     assert [%Oban.Job{} = research_job] = Repo.all(Oban.Job)
-    assert research_job.queue == "research"
+    assert research_job.queue == "dry_research"
 
     assert research_job.args == %{
              "uri" => invocation.invocation_uri,
@@ -252,7 +252,7 @@ defmodule ContextBot.Workers.ThreadWorkerTest do
     assert Repo.aggregate(Oban.Job, :count) == 0
   end
 
-  test "rejects an oversized raw snapshot before persistence" do
+  test "records an oversized raw snapshot as a finite terminal failure" do
     invocation = invocation()
     response = fixture("thread_ancestors.json")
 
@@ -261,10 +261,26 @@ defmodule ContextBot.Workers.ThreadWorkerTest do
       settings: settings(max_response_bytes: 128, max_storage_bytes: 1_000_000)
     )
 
-    assert {:error, :response_too_large} = perform(invocation)
+    assert :ok = perform(invocation)
 
     persisted = Repo.reload!(invocation)
-    assert persisted.status == :capturing_thread
+    assert persisted.status == :failed
+    assert persisted.stage == :failed
+    assert persisted.failure_category == :thread_unavailable
+    assert persisted.failure_detail == %{"reason" => "response_too_large"}
+    assert persisted.raw_thread == nil
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "records a transport-level response overflow as a finite terminal failure" do
+    invocation = invocation()
+    configure_fake({:error, :response_too_large})
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :failed
+    assert persisted.failure_detail == %{"reason" => "response_too_large"}
     assert persisted.raw_thread == nil
     assert Repo.aggregate(Oban.Job, :count) == 0
   end
@@ -298,6 +314,21 @@ defmodule ContextBot.Workers.ThreadWorkerTest do
     assert ThreadWorker.backoff(%Oban.Job{attempt: 1, max_attempts: 10}) == 15
     assert ThreadWorker.backoff(%Oban.Job{attempt: 5, max_attempts: 10}) == 240
     assert ThreadWorker.backoff(%Oban.Job{attempt: 10, max_attempts: 10}) == 300
+  end
+
+  test "makes a transient fetch failure finite on the final Oban attempt" do
+    invocation = invocation()
+    configure_fake({:error, :timeout})
+
+    assert :ok = perform(invocation, 10)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.status == :failed
+    assert persisted.stage == :failed
+    assert persisted.failure_category == :thread_unavailable
+    assert persisted.failure_detail == %{"reason" => "retry_exhausted"}
+    assert persisted.completed_at
+    assert Repo.aggregate(Oban.Job, :count) == 0
   end
 
   test "silently records permanent target unavailability and publishes no downstream work" do
@@ -422,10 +453,10 @@ defmodule ContextBot.Workers.ThreadWorkerTest do
   defp settings(overrides \\ []),
     do: Settings.load(Keyword.merge([bot_did: @bot_did], overrides))
 
-  defp perform(invocation) do
+  defp perform(invocation, attempt \\ 1) do
     ThreadWorker.perform(%Oban.Job{
       args: %{"uri" => invocation.invocation_uri, "cid" => invocation.notification_cid},
-      attempt: 1,
+      attempt: attempt,
       max_attempts: 10
     })
   end

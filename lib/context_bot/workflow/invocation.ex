@@ -198,13 +198,17 @@ defmodule ContextBot.Workflow.Invocation do
   defp validate_immutable_identity(
          %Ecto.Changeset{data: %{__meta__: %{state: :loaded}}} = changeset
        ) do
-    Enum.reduce([:invocation_uri, :notification_cid], changeset, fn field, changeset ->
-      if Map.has_key?(changeset.changes, field) do
-        add_error(changeset, field, "is immutable")
-      else
-        changeset
+    Enum.reduce(
+      [:dry_run, :target_uri, :invocation_text, :invocation_uri, :notification_cid],
+      changeset,
+      fn field, changeset ->
+        if Map.has_key?(changeset.changes, field) do
+          add_error(changeset, field, "is immutable")
+        else
+          changeset
+        end
       end
-    end)
+    )
   end
 
   defp validate_immutable_identity(changeset), do: changeset

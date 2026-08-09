@@ -42,7 +42,7 @@ defmodule ContextBot.DryRunTest do
     assert invocation.invocation_text == "Is this fair?"
     assert invocation.received_at == @now
 
-    assert [%Oban.Job{worker: "ContextBot.Workers.ThreadWorker", queue: "thread"}] =
+    assert [%Oban.Job{worker: "ContextBot.Workers.ThreadWorker", queue: "dry_thread"}] =
              Repo.all(Oban.Job)
   end
 
@@ -55,6 +55,8 @@ defmodule ContextBot.DryRunTest do
                resolver: :public_resolver
              )
 
+    assert_received {:normalize, "not-a-post", :public_resolver}
+
     assert Repo.aggregate(Invocation, :count) == 0
     assert Repo.aggregate(Oban.Job, :count) == 0
 
@@ -65,6 +67,16 @@ defmodule ContextBot.DryRunTest do
                post_reference: PostReference,
                resolver: :public_resolver
              )
+
+    refute_received {:normalize, @target_uri, :public_resolver}
+
+    assert {:error, :invalid_input} =
+             DryRun.create(@target_uri, String.duplicate("x", 10_001),
+               post_reference: PostReference,
+               resolver: :public_resolver
+             )
+
+    refute_received {:normalize, @target_uri, :public_resolver}
 
     assert Repo.aggregate(Invocation, :count) == 0
     assert Repo.aggregate(Oban.Job, :count) == 0
