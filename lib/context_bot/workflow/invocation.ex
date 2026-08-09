@@ -38,6 +38,9 @@ defmodule ContextBot.Workflow.Invocation do
   @did_regex ~r/\Adid:[a-z0-9]+:[A-Za-z0-9._:%-]+\z/
 
   @receipt_fields [
+    :dry_run,
+    :target_uri,
+    :invocation_text,
     :invocation_uri,
     :notification_cid,
     :current_cid,
@@ -101,6 +104,9 @@ defmodule ContextBot.Workflow.Invocation do
   @type t :: %__MODULE__{}
 
   schema "invocations" do
+    field :dry_run, :boolean, default: false
+    field :target_uri, :string
+    field :invocation_text, :string
     field :invocation_uri, :string
     field :notification_cid, :string
     field :current_cid, :string
@@ -152,6 +158,7 @@ defmodule ContextBot.Workflow.Invocation do
     |> cast(attrs, @receipt_fields ++ @transition_fields)
     |> validate_immutable_identity()
     |> validate_required([
+      :dry_run,
       :invocation_uri,
       :notification_cid,
       :current_cid,
@@ -161,12 +168,14 @@ defmodule ContextBot.Workflow.Invocation do
       :status,
       :stage
     ])
+    |> validate_dry_run_inputs()
     |> unique_constraint([:invocation_uri, :notification_cid])
     |> unique_constraint(:reply_rkey)
     |> validate_format(:reply_repo, @did_regex)
     |> check_constraint(:status, name: :invocations_status_check)
     |> check_constraint(:stage, name: :invocations_stage_check)
     |> check_constraint(:failure_category, name: :invocations_failure_category_check)
+    |> check_constraint(:dry_run, name: :dry_run_input_check)
   end
 
   @spec transition_changeset(t(), map()) :: Ecto.Changeset.t()
@@ -199,4 +208,12 @@ defmodule ContextBot.Workflow.Invocation do
   end
 
   defp validate_immutable_identity(changeset), do: changeset
+
+  defp validate_dry_run_inputs(changeset) do
+    if get_field(changeset, :dry_run) do
+      validate_required(changeset, [:target_uri, :invocation_text])
+    else
+      changeset
+    end
+  end
 end

@@ -47,6 +47,43 @@ defmodule ContextBot.Workflow.StoreTest do
     assert Repo.aggregate(Oban.Job, :count) == 1
   end
 
+  test "atomically creates unique dry runs at thread capture without eligibility work" do
+    target_uri = "at://did:plc:target/app.bsky.feed.post/3test"
+
+    assert {:ok, first} =
+             Store.create_dry_run(target_uri, "What's missing?", @received_at, &thread_job/2)
+
+    assert {:ok, second} =
+             Store.create_dry_run(target_uri, "What's missing?", @received_at, &thread_job/2)
+
+    assert first.dry_run
+    assert first.status == :capturing_thread
+    assert first.stage == :capturing_thread
+    assert first.target_uri == target_uri
+    assert first.invocation_text == "What's missing?"
+    assert first.actor_did == "local:operator"
+    assert String.starts_with?(first.invocation_uri, "local://context-bot/dry-runs/")
+    assert String.starts_with?(first.notification_cid, "local:")
+    assert first.current_cid == first.notification_cid
+    refute first.invocation_uri == second.invocation_uri
+    refute first.notification_cid == second.notification_cid
+
+    assert Repo.aggregate(from(job in Oban.Job, where: job.queue == "thread"), :count) == 2
+    assert Repo.aggregate(from(job in Oban.Job, where: job.queue == "eligibility"), :count) == 0
+  end
+
+  test "rejects invalid dry-run questions before inserting a row or job" do
+    target_uri = "at://did:plc:target/app.bsky.feed.post/3invalid"
+
+    for invalid <- ["", "  \n\t", <<255>>, String.duplicate("x", 10_001)] do
+      assert {:error, :invalid_input} =
+               Store.create_dry_run(target_uri, invalid, @received_at, &thread_job/2)
+    end
+
+    assert Repo.aggregate(Invocation, :count) == 0
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
   test "treats a new CID at the same URI as a distinct receipt" do
     uri = "at://did:plc:actor/app.bsky.feed.post/edited"
 
@@ -474,6 +511,14 @@ defmodule ContextBot.Workflow.StoreTest do
         "author" => %{"did" => "did:plc:actor", "handle" => "actor.example"}
       }
     }
+  end
+
+  defp thread_job(uri, cid) do
+    Oban.Job.new(
+      %{"uri" => uri, "cid" => cid},
+      worker: "ContextBot.Workers.ThreadWorker",
+      queue: :thread
+    )
   end
 
   defp researching_invocation(suffix) do

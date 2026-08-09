@@ -17,6 +17,53 @@ defmodule ContextBot.Workflow.Store do
   alias Ecto.{Changeset, Multi}
 
   @terminal_statuses [:ineligible, :complete, :failed]
+  @maximum_dry_run_question_bytes 10_000
+
+  @doc "Creates a permanently local invocation and its first thread job atomically."
+  @spec create_dry_run(String.t(), String.t(), DateTime.t(), (String.t(), String.t() ->
+                                                                Ecto.Changeset.t())) ::
+          {:ok, Invocation.t()} | {:error, :invalid_input}
+  def create_dry_run(target_uri, question, %DateTime{} = received_at, job_builder)
+      when is_binary(target_uri) and is_function(job_builder, 2) do
+    if valid_dry_run_input?(target_uri, question) do
+      run_id = Ecto.UUID.generate()
+      invocation_uri = "local://context-bot/dry-runs/#{run_id}"
+      notification_cid = "local:#{run_id}"
+
+      attrs = %{
+        dry_run: true,
+        target_uri: target_uri,
+        invocation_text: question,
+        invocation_uri: invocation_uri,
+        notification_cid: notification_cid,
+        current_cid: notification_cid,
+        actor_did: "local:operator",
+        raw_notification: %{
+          "source" => "local_dry_run",
+          "target_uri" => target_uri,
+          "text" => question
+        },
+        received_at: received_at,
+        status: :capturing_thread,
+        stage: :capturing_thread
+      }
+
+      multi =
+        Multi.new()
+        |> Multi.insert(:invocation, Invocation.changeset(%Invocation{}, attrs))
+        |> Multi.insert(:next_job, job_builder.(invocation_uri, notification_cid))
+
+      case Repo.transaction(multi, mode: :immediate) do
+        {:ok, %{invocation: invocation}} -> {:ok, invocation}
+        {:error, _operation, reason, _changes} -> raise_transaction_error(reason)
+      end
+    else
+      {:error, :invalid_input}
+    end
+  end
+
+  def create_dry_run(_target_uri, _question, _received_at, _job_builder),
+    do: {:error, :invalid_input}
 
   @spec receive_mention(map(), DateTime.t(), Ecto.Changeset.t() | nil) ::
           {:ok, Invocation.t(), :inserted | :duplicate}
@@ -485,6 +532,11 @@ defmodule ContextBot.Workflow.Store do
       invocation ->
         {:ok, {invocation, :duplicate}}
     end
+  end
+
+  defp valid_dry_run_input?(target_uri, question) do
+    target_uri != "" and is_binary(question) and String.valid?(question) and
+      byte_size(question) <= @maximum_dry_run_question_bytes and String.trim(question) != ""
   end
 
   defp compare_and_update(repo, id, from_stage, attrs) do
