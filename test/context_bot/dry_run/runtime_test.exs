@@ -12,6 +12,16 @@ defmodule ContextBot.DryRun.RuntimeTest do
     assert {:error, :bot_enabled} = Runtime.ensure_started()
   end
 
+  test "rejects a standalone registered public session before starting Oban" do
+    assert Process.whereis(ContextBot.ATProto.Session) == nil
+    on_exit(&stop_oban/0)
+    session = start_supervised!({Agent, fn -> nil end}, id: :session_placeholder)
+    Process.register(session, ContextBot.ATProto.Session)
+
+    assert {:error, :public_worker_running} = Runtime.ensure_started()
+    assert Oban.whereis(Oban) == nil
+  end
+
   test "starts and safely reuses only the dedicated serial dry-run queues" do
     assert Oban.whereis(Oban) == nil
 
@@ -62,5 +72,11 @@ defmodule ContextBot.DryRun.RuntimeTest do
 
   test "does not mistake structurally valid disabled settings for enabled operation" do
     refute Settings.bot_enabled?(Settings.load([]))
+  end
+
+  defp stop_oban do
+    if pid = Oban.whereis(Oban), do: Supervisor.stop(pid)
+  catch
+    :exit, _reason -> :ok
   end
 end

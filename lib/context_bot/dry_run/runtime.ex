@@ -79,14 +79,17 @@ defmodule ContextBot.DryRun.Runtime do
   end
 
   defp public_child_running? do
-    case Process.whereis(ContextBot.Supervisor) do
-      nil ->
-        false
+    Enum.any?(@public_children, &(Process.whereis(&1) != nil)) or
+      supervised_public_child_running?()
+  end
 
-      _pid ->
-        ContextBot.Supervisor
-        |> Supervisor.which_children()
-        |> Enum.any?(fn {id, pid, _type, _modules} -> id in @public_children and is_pid(pid) end)
+  defp supervised_public_child_running? do
+    if Process.whereis(ContextBot.Supervisor) do
+      ContextBot.Supervisor
+      |> Supervisor.which_children()
+      |> Enum.any?(fn {id, pid, _type, _modules} -> id in @public_children and is_pid(pid) end)
+    else
+      false
     end
   end
 end
