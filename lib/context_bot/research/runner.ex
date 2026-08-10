@@ -406,6 +406,7 @@ defmodule ContextBot.Research.Runner do
         %{"version" => 1, "text" => invocation.canonical_thread},
         %{
           model_id: config.settings.anthropic_model_id,
+          effort: config.settings.anthropic_effort,
           max_tokens: config.settings.anthropic_research_max_tokens,
           max_web_search_uses: config.settings.max_web_search_uses,
           max_web_fetch_uses: config.settings.max_web_fetch_uses,

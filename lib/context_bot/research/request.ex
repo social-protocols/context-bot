@@ -16,6 +16,9 @@ defmodule ContextBot.Research.Request do
   verified facts from opinions and value judgments. State material uncertainty instead of
   inventing confidence or filling gaps with speculation.
 
+  Use the smallest amount of web research sufficient for a defensible reply of at most 300
+  characters. Stop researching once the material claim is adequately supported or qualified.
+
   Return only the exact text intended for the Bluesky reply, with no preamble, analysis, research
   notes, labels, markers, or audit suffix. The complete reply must be nonempty, plain text, and at
   most 300 Unicode grapheme clusters. Do not shorten a factual claim by truncating it.
@@ -34,6 +37,7 @@ defmodule ContextBot.Research.Request do
 
   @type config :: %{
           required(:model_id) => String.t(),
+          required(:effort) => :low | :medium | :high,
           required(:max_tokens) => pos_integer(),
           required(:max_web_search_uses) => pos_integer(),
           required(:max_web_fetch_uses) => pos_integer(),
@@ -54,6 +58,7 @@ defmodule ContextBot.Research.Request do
         %{version: 1, text: thread_text},
         %{
           model_id: model_id,
+          effort: effort,
           max_tokens: max_tokens,
           max_web_search_uses: max_web_search_uses,
           max_web_fetch_uses: max_web_fetch_uses,
@@ -69,25 +74,22 @@ defmodule ContextBot.Research.Request do
       "stream" => false,
       "cache_control" => %{"type" => "ephemeral"},
       "thinking" => %{"type" => "adaptive"},
-      "output_config" => %{"effort" => "high"},
+      "output_config" => %{"effort" => Atom.to_string(effort)},
       "tool_choice" => %{"type" => "auto"},
       "system" => @system_prompt,
       "tools" => [
         %{
           "type" => web_search_tool_type,
           "name" => "web_search",
-          "allowed_callers" => ["direct"],
-          "response_inclusion" => "full",
+          "response_inclusion" => "excluded",
           "max_uses" => max_web_search_uses
         },
         %{
           "type" => web_fetch_tool_type,
           "name" => "web_fetch",
-          "allowed_callers" => ["direct"],
-          "response_inclusion" => "full",
+          "response_inclusion" => "excluded",
           "max_uses" => max_web_fetch_uses,
           "max_content_tokens" => max_web_fetch_content_tokens,
-          "use_cache" => false,
           "citations" => %{"enabled" => true}
         }
       ],

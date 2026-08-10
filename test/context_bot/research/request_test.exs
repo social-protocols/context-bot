@@ -8,10 +8,11 @@ defmodule ContextBot.Research.RequestTest do
     text: "CONTEXT_BOT_THREAD_V1\n\n[invocation]\nText:\nPlease add context."
   }
 
-  test "builds the pinned non-streaming Sonnet request with bounded direct web tools" do
+  test "builds the pinned non-streaming Sonnet request with dynamically filtered web tools" do
     request =
       Request.initial(@canonical_thread, %{
         model_id: "claude-sonnet-5-test-pin",
+        effort: :medium,
         max_tokens: 8_192,
         max_web_search_uses: 4,
         max_web_fetch_uses: 3,
@@ -25,7 +26,7 @@ defmodule ContextBot.Research.RequestTest do
     assert request["stream"] == false
     assert request["cache_control"] == %{"type" => "ephemeral"}
     assert request["thinking"] == %{"type" => "adaptive"}
-    assert request["output_config"] == %{"effort" => "high"}
+    assert request["output_config"] == %{"effort" => "medium"}
     assert request["tool_choice"] == %{"type" => "auto"}
     assert is_binary(request["system"])
 
@@ -37,18 +38,15 @@ defmodule ContextBot.Research.RequestTest do
              %{
                "type" => "web_search_20270809",
                "name" => "web_search",
-               "allowed_callers" => ["direct"],
-               "response_inclusion" => "full",
+               "response_inclusion" => "excluded",
                "max_uses" => 4
              },
              %{
                "type" => "web_fetch_20270809",
                "name" => "web_fetch",
-               "allowed_callers" => ["direct"],
-               "response_inclusion" => "full",
+               "response_inclusion" => "excluded",
                "max_uses" => 3,
                "max_content_tokens" => 24_000,
-               "use_cache" => false,
                "citations" => %{"enabled" => true}
              }
            ]
@@ -57,6 +55,9 @@ defmodule ContextBot.Research.RequestTest do
     refute Map.has_key?(request, "top_p")
     refute Map.has_key?(request, "top_k")
     refute Map.has_key?(request["thinking"], "display")
+    refute Map.has_key?(Enum.at(request["tools"], 0), "allowed_callers")
+    refute Map.has_key?(Enum.at(request["tools"], 1), "allowed_callers")
+    refute Map.has_key?(Enum.at(request["tools"], 1), "use_cache")
   end
 
   test "sends one versioned prompt with the complete research and reply safety contract" do
@@ -66,6 +67,8 @@ defmodule ContextBot.Research.RequestTest do
     assert prompt =~ "ancestor"
     assert prompt =~ "unstable"
     assert prompt =~ "primary sources"
+    assert prompt =~ "smallest amount of web research"
+    assert prompt =~ "Stop researching"
     assert prompt =~ "facts"
     assert prompt =~ "value judgments"
     assert prompt =~ "uncertainty"
@@ -187,10 +190,11 @@ defmodule ContextBot.Research.RequestTest do
   defp config do
     %{
       model_id: "claude-sonnet-5",
-      max_tokens: 8_192,
-      max_web_search_uses: 5,
-      max_web_fetch_uses: 5,
-      max_web_fetch_content_tokens: 50_000,
+      effort: :medium,
+      max_tokens: 4_096,
+      max_web_search_uses: 2,
+      max_web_fetch_uses: 2,
+      max_web_fetch_content_tokens: 10_000,
       web_search_tool_type: "web_search_20260318",
       web_fetch_tool_type: "web_fetch_20260318"
     }

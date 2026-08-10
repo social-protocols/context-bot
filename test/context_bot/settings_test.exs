@@ -23,9 +23,12 @@ defmodule ContextBot.SettingsTest do
     assert is_integer(settings.anthropic_retry_reservation_microdollars)
     assert settings.anthropic_pricing_version == "sonnet-5-2026-07-28"
     assert settings.anthropic_model_id == "claude-sonnet-5"
-    assert settings.max_web_fetch_uses == 5
-    assert settings.max_web_fetch_content_tokens == 50_000
-    assert settings.max_tool_continuations == 3
+    assert settings.anthropic_effort == :medium
+    assert settings.anthropic_research_max_tokens == 4_096
+    assert settings.max_web_search_uses == 2
+    assert settings.max_web_fetch_uses == 2
+    assert settings.max_web_fetch_content_tokens == 10_000
+    assert settings.max_tool_continuations == 1
     assert settings.anthropic_max_http_retries == 2
     assert settings.anthropic_retry_base_ms == 1_000
     assert settings.anthropic_retry_max_ms == 30_000
@@ -39,6 +42,18 @@ defmodule ContextBot.SettingsTest do
     assert settings.anthropic_api_version == "2023-06-01"
     assert settings.anthropic_web_search_tool_type == "web_search_20260318"
     assert settings.anthropic_web_fetch_tool_type == "web_fetch_20260318"
+  end
+
+  test "loads and validates Anthropic effort" do
+    assert Settings.load(%{"ANTHROPIC_EFFORT" => "low"}).anthropic_effort == :low
+    assert Settings.load(anthropic_effort: "medium").anthropic_effort == :medium
+    assert Settings.load(anthropic_effort: :high).anthropic_effort == :high
+
+    for invalid <- ["", "minimal", "HIGH", :minimal, 1] do
+      assert_raise ArgumentError, ~r/ANTHROPIC_EFFORT/, fn ->
+        Settings.load(anthropic_effort: invalid)
+      end
+    end
   end
 
   test "rejects malformed non-secret settings" do
@@ -124,7 +139,7 @@ defmodule ContextBot.SettingsTest do
     assert_raise ArgumentError, ~r/PROVIDER_RESPONSE_STORAGE_MAX_BYTES.*all permitted/, fn ->
       Settings.load(
         anthropic_response_max_bytes: "8000000",
-        provider_response_storage_max_bytes: "56000001"
+        provider_response_storage_max_bytes: "32000001"
       )
     end
   end

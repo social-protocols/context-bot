@@ -28,13 +28,14 @@ defmodule ContextBot.Settings do
   @default_anthropic_api_version "2023-06-01"
   @default_anthropic_web_search_tool_type "web_search_20260318"
   @default_anthropic_web_fetch_tool_type "web_fetch_20260318"
-  @default_anthropic_research_max_tokens 8_192
+  @default_anthropic_effort :medium
+  @default_anthropic_research_max_tokens 4_096
   @default_anthropic_length_repair_max_tokens 1_024
   @default_anthropic_model_id "claude-sonnet-5"
-  @default_max_web_search_uses 5
-  @default_max_web_fetch_uses 5
-  @default_max_web_fetch_content_tokens 50_000
-  @default_max_tool_continuations 3
+  @default_max_web_search_uses 2
+  @default_max_web_fetch_uses 2
+  @default_max_web_fetch_content_tokens 10_000
+  @default_max_tool_continuations 1
   @default_anthropic_max_http_retries 2
   @default_anthropic_retry_base_ms 1_000
   @default_anthropic_retry_max_ms 30_000
@@ -76,6 +77,7 @@ defmodule ContextBot.Settings do
     :max_response_bytes,
     :max_storage_bytes,
     :anthropic_model_id,
+    :anthropic_effort,
     :anthropic_http_timeout_ms,
     :anthropic_api_version,
     :anthropic_web_search_tool_type,
@@ -113,6 +115,7 @@ defmodule ContextBot.Settings do
     :thread_fetch_timeout_ms,
     :anthropic_daily_budget_microdollars,
     :anthropic_model_id,
+    :anthropic_effort,
     :anthropic_http_timeout_ms,
     :anthropic_api_version,
     :anthropic_web_search_tool_type,
@@ -158,6 +161,7 @@ defmodule ContextBot.Settings do
           thread_fetch_timeout_ms: pos_integer(),
           anthropic_daily_budget_microdollars: pos_integer() | nil,
           anthropic_model_id: String.t(),
+          anthropic_effort: :low | :medium | :high,
           anthropic_http_timeout_ms: pos_integer(),
           anthropic_api_version: String.t(),
           anthropic_web_search_tool_type: String.t(),
@@ -247,6 +251,8 @@ defmodule ContextBot.Settings do
           :anthropic_model_id,
           @default_anthropic_model_id
         ),
+      anthropic_effort:
+        effort!(environment, "ANTHROPIC_EFFORT", :anthropic_effort, @default_anthropic_effort),
       anthropic_http_timeout_ms:
         positive_integer!(
           environment,
@@ -494,6 +500,8 @@ defmodule ContextBot.Settings do
       @maximum_anthropic_timeout_ms
     )
 
+    validate_effort!(settings.anthropic_effort)
+
     validate_date!(settings.anthropic_api_version, "ANTHROPIC_API_VERSION")
 
     validate_tool_type!(
@@ -687,6 +695,21 @@ defmodule ContextBot.Settings do
       _ -> raise ArgumentError, "#{environment_key} must be a nonempty string"
     end
   end
+
+  defp effort!(environment, environment_key, option_key, default) do
+    case fetch(environment, environment_key, option_key, default) do
+      value when value in [:low, :medium, :high] -> value
+      "low" -> :low
+      "medium" -> :medium
+      "high" -> :high
+      _invalid -> raise ArgumentError, "ANTHROPIC_EFFORT must be low, medium, or high"
+    end
+  end
+
+  defp validate_effort!(value) when value in [:low, :medium, :high], do: value
+
+  defp validate_effort!(_value),
+    do: raise(ArgumentError, "ANTHROPIC_EFFORT must be low, medium, or high")
 
   defp optional_string(environment, environment_key, option_key) do
     case fetch(environment, environment_key, option_key, nil) do

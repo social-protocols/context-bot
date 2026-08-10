@@ -59,6 +59,8 @@ defmodule ContextBot.Research.RunnerTest do
              "web_fetch_20270809"
            ]
 
+    assert request["output_config"] == %{"effort" => "medium"}
+
     assert Repo.reload!(invocation).anthropic_messages == request
   end
 
@@ -801,6 +803,7 @@ defmodule ContextBot.Research.RunnerTest do
       anthropic_retry_reservation_microdollars: 1_000_000,
       anthropic_pricing_version: "sonnet-5-2026-07-28",
       anthropic_model_id: "claude-sonnet-5",
+      anthropic_effort: :medium,
       anthropic_research_max_tokens: 1_024,
       anthropic_length_repair_max_tokens: 256,
       max_web_search_uses: 3,
