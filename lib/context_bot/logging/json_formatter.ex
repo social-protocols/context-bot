@@ -7,13 +7,13 @@ defmodule ContextBot.Logging.JSONFormatter do
     invocation_id job_id queue worker attempt attempt_kind attempt_index stage duration_ms
     input_tokens output_tokens cache_creation_input_tokens cache_read_input_tokens
     tool_uses web_search_uses cost_microdollars failure_category failure_reason
-    request_id method path status status_code
+    request_id method path status status_code examined resumed terminalized unchanged
   )a)
 
   @numeric_metadata MapSet.new(~w(
     invocation_id job_id attempt attempt_index duration_ms input_tokens output_tokens
     cache_creation_input_tokens cache_read_input_tokens tool_uses web_search_uses
-    cost_microdollars status status_code
+    cost_microdollars status status_code examined resumed terminalized unchanged
   )a)
 
   @token_metadata MapSet.new(~w(

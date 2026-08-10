@@ -2,25 +2,47 @@ defmodule ContextBot.DryRun.Runtime do
   @moduledoc false
 
   alias ContextBot.Settings
+  alias ContextBot.Workflow.Recovery
 
   @safe_queues [:dry_research, :dry_thread]
   @public_children [ContextBot.ATProto.Session, ContextBot.Mentions.Poller]
 
-  @spec ensure_started() :: :ok | {:error, atom()}
-  def ensure_started do
+  @spec ensure_started(keyword()) :: :ok | {:error, atom()}
+  def ensure_started(options \\ []) when is_list(options) do
     settings = Application.fetch_env!(:context_bot, :settings)
+    recovery = Keyword.get(options, :recovery, Recovery)
+    now = Keyword.get(options, :now, &DateTime.utc_now/0)
 
     if Settings.bot_enabled?(settings) do
       {:error, :bot_enabled}
     else
       with {:ok, _applications} <- Application.ensure_all_started(:context_bot),
            false <- public_child_running?() do
-        ensure_oban()
+        ensure_oban(recovery, now)
       else
         true -> {:error, :public_worker_running}
         {:error, _reason} -> {:error, :application_start_failed}
       end
     end
+  end
+
+  @spec stop(keyword()) :: :ok
+  def stop(_options \\ []) do
+    case Oban.whereis(Oban) do
+      nil ->
+        :ok
+
+      pid ->
+        if safe_existing_oban?() and not public_child_running?() do
+          config = Oban.config(Oban)
+          _result = Oban.pause_all_queues(Oban)
+          Supervisor.stop(pid, :shutdown, config.shutdown_grace_period + 1_000)
+        end
+
+        :ok
+    end
+  catch
+    :exit, _reason -> :ok
   end
 
   @doc false
@@ -39,11 +61,18 @@ defmodule ContextBot.DryRun.Runtime do
 
   def safe_oban_config?(_config, _active_queues), do: false
 
-  defp ensure_oban do
+  defp ensure_oban(recovery, now) do
     cond do
-      is_nil(Oban.whereis(Oban)) -> start_minimal_oban()
+      is_nil(Oban.whereis(Oban)) -> recover_then_start(recovery, now)
       safe_existing_oban?() -> :ok
       true -> {:error, :unsafe_oban_runtime}
+    end
+  end
+
+  defp recover_then_start(recovery, now) do
+    case recovery.recover_orphans(startup?: true, now: now.()) do
+      {:ok, _summary} -> start_minimal_oban()
+      {:error, _reason} -> {:error, :startup_recovery_failed}
     end
   end
 

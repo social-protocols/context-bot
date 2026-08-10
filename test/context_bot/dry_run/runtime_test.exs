@@ -4,6 +4,52 @@ defmodule ContextBot.DryRun.RuntimeTest do
   alias ContextBot.DryRun.Runtime
   alias ContextBot.Settings
 
+  @now ~U[2026-08-10 18:00:00.000000Z]
+
+  defmodule FakeRecovery do
+    def recover_orphans(options) do
+      %{result: result, test_pid: test_pid} =
+        Application.fetch_env!(:context_bot, __MODULE__)
+
+      send(test_pid, {
+        :dry_runtime_recovery,
+        options,
+        Process.whereis(ContextBot.Repo),
+        Oban.whereis(Oban)
+      })
+
+      result
+    end
+  end
+
+  setup do
+    on_exit(fn -> Application.delete_env(:context_bot, FakeRecovery) end)
+    :ok
+  end
+
+  test "recovers after Repo starts and before either dry producer starts" do
+    configure_recovery({:ok, %{examined: 0, resumed: 0, terminalized: 0, unchanged: 0}})
+    on_exit(&stop_oban/0)
+
+    assert :ok = Runtime.ensure_started(recovery: FakeRecovery, now: fn -> @now end)
+
+    assert_receive {:dry_runtime_recovery, [startup?: true, now: @now], repo_pid, nil}
+    assert is_pid(repo_pid)
+    assert Oban.Registry.whereis(Oban, {:producer, "dry_thread"})
+    assert Oban.Registry.whereis(Oban, {:producer, "dry_research"})
+  end
+
+  test "a recovery failure leaves standalone Oban stopped" do
+    configure_recovery({:error, :recovery_failed})
+
+    assert {:error, :startup_recovery_failed} =
+             Runtime.ensure_started(recovery: FakeRecovery, now: fn -> @now end)
+
+    assert_receive {:dry_runtime_recovery, [startup?: true, now: @now], repo_pid, nil}
+    assert is_pid(repo_pid)
+    assert Oban.whereis(Oban) == nil
+  end
+
   test "rejects bot-enabled settings before starting any worker runtime" do
     original = Application.fetch_env!(:context_bot, :settings)
     Application.put_env(:context_bot, :settings, %{original | bot_enabled: true})
@@ -43,7 +89,9 @@ defmodule ContextBot.DryRun.RuntimeTest do
     refute Oban.Registry.whereis(Oban, {:producer, "research"})
     refute Oban.Registry.whereis(Oban, {:producer, "reply"})
 
-    assert :ok = Supervisor.stop(oban_pid)
+    assert :ok = Runtime.stop()
+    refute Process.alive?(oban_pid)
+    assert :ok = Runtime.stop()
   end
 
   test "accepts only the exact serial thread and research Oban configuration" do
@@ -78,5 +126,9 @@ defmodule ContextBot.DryRun.RuntimeTest do
     if pid = Oban.whereis(Oban), do: Supervisor.stop(pid)
   catch
     :exit, _reason -> :ok
+  end
+
+  defp configure_recovery(result) do
+    Application.put_env(:context_bot, FakeRecovery, %{result: result, test_pid: self()})
   end
 end

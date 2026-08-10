@@ -36,6 +36,7 @@ defmodule ContextBot.Application do
   def bot_children(settings) do
     if ContextBot.Settings.bot_enabled?(settings) do
       [
+        {ContextBot.Workflow.StartupRecovery, []},
         {Oban, Application.fetch_env!(:context_bot, Oban)},
         {ContextBot.ATProto.Session, timeout: settings.atproto_session_timeout_ms},
         {ContextBot.Mentions.Poller,

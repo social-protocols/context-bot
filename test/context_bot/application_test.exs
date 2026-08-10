@@ -4,6 +4,7 @@ defmodule ContextBot.ApplicationTest do
   alias ContextBot.{Application, Settings}
   alias ContextBot.ATProto.Session
   alias ContextBot.Mentions.Poller
+  alias ContextBot.Workflow.StartupRecovery
 
   test "an enabled bot supervises its session after Oban" do
     settings =
@@ -19,6 +20,7 @@ defmodule ContextBot.ApplicationTest do
       )
 
     assert [
+             {StartupRecovery, []},
              {Oban, oban_options},
              {Session, [timeout: 12_345]},
              {Poller, [poll_interval_ms: 23_456, page_cap: 7]}
@@ -29,7 +31,7 @@ defmodule ContextBot.ApplicationTest do
     assert {:ok, {_flags, child_specs}} =
              Supervisor.init(Application.bot_children(settings), strategy: :one_for_one)
 
-    assert Enum.map(child_specs, & &1.id) == [Oban, Session, Poller]
+    assert Enum.map(child_specs, & &1.id) == [StartupRecovery, Oban, Session, Poller]
   end
 
   test "a disabled bot does not supervise bot-only children" do
