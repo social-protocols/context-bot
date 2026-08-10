@@ -4,6 +4,10 @@ settings = ContextBot.Settings.load(System.get_env())
 
 config :context_bot, :settings, settings
 
+config :logger,
+       :default_handler,
+       ContextBot.Logging.handler_config(System.get_env("CONTEXT_BOT_LOG_PATH"))
+
 config :context_bot, Oban,
   queues: [
     eligibility: settings.queue_concurrency,

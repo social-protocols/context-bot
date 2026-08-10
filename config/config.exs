@@ -11,6 +11,8 @@ config :context_bot,
   ecto_repos: [ContextBot.Repo],
   generators: [timestamp_type: :utc_datetime]
 
+config :context_bot, ContextBot.Repo, log: false
+
 config :context_bot, Oban,
   engine: Oban.Engines.Lite,
   repo: ContextBot.Repo,
@@ -30,10 +32,10 @@ config :context_bot, ContextBotWeb.Endpoint,
   pubsub_server: ContextBot.PubSub,
   live_view: [signing_salt: "WXfARleR"]
 
-# Configure Elixir's Logger
-config :logger, :default_formatter,
-  format: "$time $metadata[$level] $message\n",
-  metadata: [:request_id]
+# Configure all application and OTP output as one safe JSON object per line.
+config :logger, :default_handler,
+  config: [type: :standard_error],
+  formatter: {ContextBot.Logging.JSONFormatter, %{}}
 
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason

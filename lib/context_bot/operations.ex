@@ -68,7 +68,7 @@ defmodule ContextBot.Operations do
       failure_category: safe_failure_category(Keyword.get(attributes, :failure_category))
     }
 
-    Logger.info("context_bot_attempt " <> Jason.encode!(payload))
+    Logger.info("context_bot_attempt", Map.to_list(payload))
     :ok
   end
 

@@ -126,6 +126,48 @@ defmodule ContextBotWeb.ProductionConfigTest do
     assert queues == [eligibility: 1, thread: 1, research: 1, reply: 1, maintenance: 1]
   end
 
+  test "runtime logging defaults to JSONL on stderr" do
+    replace_environment(%{"BOT_ENABLED" => "false", "CONTEXT_BOT_LOG_PATH" => nil})
+
+    handler =
+      "config/runtime.exs"
+      |> Config.Reader.read!(env: :test)
+      |> Keyword.fetch!(:logger)
+      |> Keyword.fetch!(:default_handler)
+
+    assert handler == [
+             config: [type: :standard_error],
+             formatter: {ContextBot.Logging.JSONFormatter, %{}}
+           ]
+  end
+
+  test "runtime logging accepts absolute files and rejects relative paths safely" do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "context-bot-runtime-#{System.unique_integer([:positive])}.jsonl"
+      )
+
+    on_exit(fn -> File.rm(path) end)
+    replace_environment(%{"BOT_ENABLED" => "false", "CONTEXT_BOT_LOG_PATH" => path})
+
+    handler =
+      "config/runtime.exs"
+      |> Config.Reader.read!(env: :test)
+      |> Keyword.fetch!(:logger)
+      |> Keyword.fetch!(:default_handler)
+
+    assert handler[:config][:file] == String.to_charlist(path)
+
+    System.put_env("CONTEXT_BOT_LOG_PATH", "private/provider-secret.jsonl")
+
+    error =
+      assert_raise ArgumentError, fn -> Config.Reader.read!("config/runtime.exs", env: :test) end
+
+    assert Exception.message(error) == "invalid CONTEXT_BOT_LOG_PATH"
+    refute Exception.message(error) =~ "provider-secret"
+  end
+
   defp replace_environment(changes) do
     original = Map.new(changes, fn {key, _value} -> {key, System.get_env(key)} end)
 

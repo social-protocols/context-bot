@@ -143,29 +143,34 @@ defmodule ContextBot.OperationsTest do
     on_exit(fn -> Logger.configure(level: previous_level) end)
 
     log =
-      capture_log([level: :info], fn ->
-        assert :ok =
-                 Operations.log_attempt(invocation,
-                   attempt_kind: :research,
-                   attempt_index: 2,
-                   status_code: 429,
-                   duration_ms: 37,
-                   failure_category: :rate_limited,
-                   request: %{authorization: "Bearer request-secret"},
-                   client: %{token: "client-secret"},
-                   session: %{did: "did:plc:session-secret"},
-                   headers: %{"x-api-key" => "header-secret"}
-                 )
-      end)
+      capture_log(
+        [level: :info, formatter: {ContextBot.Logging.JSONFormatter, %{}}],
+        fn ->
+          assert :ok =
+                   Operations.log_attempt(invocation,
+                     attempt_kind: :research,
+                     attempt_index: 2,
+                     status_code: 429,
+                     duration_ms: 37,
+                     failure_category: :rate_limited,
+                     request: %{authorization: "Bearer request-secret"},
+                     client: %{token: "client-secret"},
+                     session: %{did: "did:plc:session-secret"},
+                     headers: %{"x-api-key" => "header-secret"}
+                   )
+        end
+      )
 
-    assert log =~ "context_bot_attempt"
-    assert log =~ "\"invocation_id\":#{invocation.id}"
-    assert log =~ "\"stage\":\"researching\""
-    assert log =~ "\"attempt_kind\":\"research\""
-    assert log =~ "\"attempt_index\":2"
-    assert log =~ "\"status_code\":429"
-    assert log =~ "\"duration_ms\":37"
-    assert log =~ "\"failure_category\":\"rate_limited\""
+    decoded = Jason.decode!(log)
+
+    assert decoded["message"] == "context_bot_attempt"
+    assert decoded["invocation_id"] == invocation.id
+    assert decoded["stage"] == "researching"
+    assert decoded["attempt_kind"] == "research"
+    assert decoded["attempt_index"] == 2
+    assert decoded["status_code"] == 429
+    assert decoded["duration_ms"] == 37
+    assert decoded["failure_category"] == "rate_limited"
 
     for forbidden <- [
           "notification-secret",
@@ -181,6 +186,24 @@ defmodule ContextBot.OperationsTest do
         ] do
       refute log =~ forbidden
     end
+  end
+
+  test "repository queries are not logged" do
+    invocation = invocation(:researching, @now)
+    previous_level = Logger.level()
+    Logger.configure(level: :debug)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    log =
+      capture_log(
+        [level: :debug, formatter: {ContextBot.Logging.JSONFormatter, %{}}],
+        fn ->
+          assert Repo.get_by(Invocation, actor_handle: invocation.actor_handle).id ==
+                   invocation.id
+        end
+      )
+
+    assert log == ""
   end
 
   defp invocation(stage, received_at, extra \\ %{}) do
