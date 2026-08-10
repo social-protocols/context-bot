@@ -1,9 +1,10 @@
 defmodule ContextBot.DryRun.Interrupts do
   @moduledoc """
-  Installs process-scoped signal callbacks for the foreground dry-run command.
+  Installs a process-scoped SIGTERM callback for the foreground dry-run command.
 
   Signal callbacks only notify the owner. Cleanup and durable recovery remain in normal process
-  code where blocking work is safe.
+  code where blocking work is safe. The command wrapper translates terminal SIGINT into SIGTERM
+  because the BEAM reserves SIGINT and `System.trap_signal/3` cannot trap it.
   """
 
   @type token :: reference()
@@ -16,7 +17,7 @@ defmodule ContextBot.DryRun.Interrupts do
     untrap_signal = Keyword.get(options, :untrap_signal, &System.untrap_signal/2)
 
     if is_function(trap_signal, 3) and is_function(untrap_signal, 2) do
-      install_sigint(owner, trap_signal, untrap_signal, make_ref())
+      install_sigterm(owner, trap_signal, make_ref())
     else
       {:error, :invalid_input}
     end
@@ -33,7 +34,6 @@ defmodule ContextBot.DryRun.Interrupts do
     untrap_signal = Keyword.get(options, :untrap_signal, &System.untrap_signal/2)
 
     if is_function(untrap_signal, 2) do
-      safe_untrap(untrap_signal, :sigint, token)
       safe_untrap(untrap_signal, :sigterm, token)
     end
 
@@ -42,15 +42,7 @@ defmodule ContextBot.DryRun.Interrupts do
 
   def remove(_token, _options), do: :ok
 
-  defp install_sigint(owner, trap_signal, untrap_signal, token) do
-    case trap_signal.(:sigint, token, fn -> notify(owner, :sigint) end) do
-      {:ok, ^token} -> install_sigterm(owner, trap_signal, untrap_signal, token)
-      {:error, reason} -> {:error, reason}
-      _unexpected -> {:error, :signal_trap_failed}
-    end
-  end
-
-  defp install_sigterm(owner, trap_signal, untrap_signal, token) do
+  defp install_sigterm(owner, trap_signal, token) do
     result = trap_signal.(:sigterm, token, fn -> notify(owner, :sigterm) end)
 
     case result do
@@ -58,11 +50,9 @@ defmodule ContextBot.DryRun.Interrupts do
         {:ok, token}
 
       {:error, reason} ->
-        safe_untrap(untrap_signal, :sigint, token)
         {:error, reason}
 
       _unexpected ->
-        safe_untrap(untrap_signal, :sigint, token)
         {:error, :signal_trap_failed}
     end
   end

@@ -26,19 +26,20 @@ test path="":
     else
       mix test
       bash test/secrets_test.sh
+      bash test/dry_run_wrapper_test.sh
     fi
 
 format:
     mix format
-    shfmt -w secrets.sh test/secrets_test.sh
+    shfmt -w dry-run.sh secrets.sh test/dry_run_wrapper_test.sh test/secrets_test.sh
 
 format-check:
     mix format --check-formatted
-    shfmt -d secrets.sh test/secrets_test.sh
+    shfmt -d dry-run.sh secrets.sh test/dry_run_wrapper_test.sh test/secrets_test.sh
 
 lint:
     mix credo --strict
-    shellcheck secrets.sh test/secrets_test.sh
+    shellcheck dry-run.sh secrets.sh test/dry_run_wrapper_test.sh test/secrets_test.sh
 
 typecheck:
     mix dialyzer
@@ -62,11 +63,7 @@ db-reset:
     mix ecto.reset
 
 dry-run post question:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    source ./secrets.sh ANTHROPIC_API_KEY
-    ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-} +B" \
-      BOT_ENABLED=false mix context_bot.dry_run {{quote(post)}} {{quote(question)}}
+    ./dry-run.sh {{quote(post)}} {{quote(question)}}
 
 docker-build:
     docker build --progress=plain -t context-bot:local .

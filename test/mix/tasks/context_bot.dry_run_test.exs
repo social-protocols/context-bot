@@ -153,11 +153,11 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     assert DryRunTask.__info__(:attributes)[:requirements] == ["app.config"]
   end
 
-  test "just dry-run disables the Erlang BREAK menu and retains dotenv loading" do
+  test "just dry-run delegates to the signal-safe wrapper and retains dotenv loading" do
     {recipe, 0} =
       System.cmd("just", ["--dry-run", "dry-run", "post", "question"], stderr_to_stdout: true)
 
-    assert recipe =~ ~s(ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-} +B")
+    assert recipe == "./dry-run.sh 'post' 'question'\n"
     assert File.read!("justfile") =~ "set dotenv-load := true"
   end
 
