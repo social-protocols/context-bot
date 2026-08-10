@@ -52,6 +52,18 @@ defmodule ContextBot.DryRunWorkflowTest do
       assert conn.method == "POST"
       assert conn.request_path == "/v1/messages"
       assert Plug.Conn.get_req_header(conn, "x-api-key") == ["anthropic-test-key-never-expose"]
+      assert conn.body_params["max_tokens"] == 4_096
+      assert conn.body_params["output_config"] == %{"effort" => "medium"}
+
+      assert [search, fetch] = conn.body_params["tools"]
+      assert search["max_uses"] == 2
+      assert search["response_inclusion"] == "excluded"
+      refute Map.has_key?(search, "allowed_callers")
+      assert fetch["max_uses"] == 2
+      assert fetch["max_content_tokens"] == 10_000
+      assert fetch["response_inclusion"] == "excluded"
+      refute Map.has_key?(fetch, "use_cache")
+
       assert [message] = conn.body_params["messages"]
       assert message["content"] == invocation.canonical_thread
       assert message["content"] =~ "The root claim."

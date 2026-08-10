@@ -49,6 +49,22 @@ just dry-run "https://bsky.app/profile/alice.example/post/3abc" "What's missing?
 
 The post may also be a canonical `at://.../app.bsky.feed.post/...` URI. The command loads only `ANTHROPIC_API_KEY` from the Bitwarden item, resolves and fetches the post from the configured public AppView without authentication, stores the selected post plus ancestors and local question in SQLite, runs the normal budgeted Claude research worker, and prints a concise result and integer usage/cost summary. Bluesky access is read-only; Anthropic access is paid. `ANTHROPIC_DAILY_BUDGET_USD` must be present and nonzero.
 
+Human progress is written to stdout. Application logs are structured JSON Lines on stderr by
+default; set `CONTEXT_BOT_LOG_PATH` to an absolute path to append those logs to a file instead. Log
+metadata is strictly allowlisted and never includes post text, prompts, responses, headers, or
+credentials. The ordinary research defaults use medium effort, at most 4,096 output tokens, two web
+searches, two web fetches, 10,000 fetched-content tokens, and one tool continuation. Server-side tool
+content can still contribute substantially to Anthropic input billing even when it is excluded from
+the returned response, so the printed settled cost—not visible response length—is authoritative.
+
+A research HTTP call may take up to five minutes, and the foreground command waits up to fifteen
+minutes for the durable workflow. Ctrl-C and SIGTERM clear progress, pause new dry-run dispatch, and
+give executing work its configured shutdown grace period. The printed `dry_run_id` remains the
+recovery handle. On the next startup, deterministic work resumes automatically. An Anthropic attempt
+that was sent but has no committed response envelope is never replayed: its budget becomes
+indeterminate and the invocation fails with `interrupted_after_send`, because replay could double
+spend while the first request may already have been billed.
+
 Every row created this way has `dry_run = 1`. It skips mention eligibility and mention-rate admission, but retains provider budgets, response/tool/token/storage limits, retries, leases, and full bounded provider response envelopes. It never starts the notification poller or ATProto session, never creates a reply record, and cannot acquire a publication lease. A budget deferral remains durable for later operator inspection; rerunning the command creates a new check.
 
 Inspect dry-run metadata without selecting stored thread, prompt, response, or answer content:
@@ -140,7 +156,7 @@ Create one Bitwarden item with these four custom fields, using the names exactly
 - `BOT_APP_PASSWORD`
 - `ANTHROPIC_API_KEY`
 
-`secrets.sh` accepts one or more names from that fixed allowlist, disables shell tracing while values are handled, exports only the requested fields after all requested values are present, removes the Bitwarden payload and temporary variables, restores the caller's tracing state, and reports names without values. `just dry-run` requests only `ANTHROPIC_API_KEY`. `just secrets` and `just deploy` request all four; `FLY_API_TOKEN` authenticates Fly, while deploy sends only `SECRET_KEY_BASE`, `BOT_APP_PASSWORD`, and `ANTHROPIC_API_KEY` to `fly secrets import --stage` over standard input. Secret values are never command-line arguments.
+`secrets.sh` accepts one or more names from that fixed allowlist, disables shell tracing while values are handled, exports only the requested fields after all requested values are present, removes the Bitwarden payload and temporary variables, restores the caller's tracing state, and reports names without values. `just dry-run` requests only `ANTHROPIC_API_KEY`. `just secrets` and `just deploy` request all four; `FLY_API_TOKEN` authenticates Fly, while deploy sends only `SECRET_KEY_BASE`, `BOT_APP_PASSWORD`, and `ANTHROPIC_API_KEY` to `fly secrets import --stage` over standard input. Secret values are never command-line arguments. With `set dotenv-load := true`, `just` reads non-secret local configuration such as `BITWARDEN_ITEM_ID` from the ignored `.env` file automatically.
 
 Before any live deployment, replace the empty `BOT_DID`, `BOT_HANDLE`, and `BOT_PDS_URL` values in `fly.toml` with the real public bot DID, handle, and HTTPS PDS URL. Review the committed limits and the `OPERATOR_ALLOWED_DIDS` comma-separated DID allowlist. Do not set `BOT_ENABLED=true` yet. `APPVIEW_URL` is pinned to the reviewed `https://api.bsky.app` trust root, and authenticated `app.bsky.*` requests explicitly select `did:web:api.bsky.app#bsky_appview` through the PDS service proxy. Polling accepts only a 5,000–3,600,000 ms interval and a 1–20 page cap. ATProto/thread timeouts are capped at 60 seconds, the Anthropic timeout at 10 minutes, parent height at 100, provider output at 64,000 tokens, repair output at 8,192 tokens, each web-tool count at 10, fetched content at 100,000 tokens, continuations at 5, and HTTP retries at 3. Response and aggregate-storage caps are bounded at 16 MB and 128 MB; startup additionally requires enough aggregate storage for every permitted response plus envelope metadata. `QUEUE_CONCURRENCY` must remain exactly `1` so provider execution stays serial. The API version and server-tool types are date-validated. Retain the committed defaults unless a reviewed design or provider change requires otherwise.
 
