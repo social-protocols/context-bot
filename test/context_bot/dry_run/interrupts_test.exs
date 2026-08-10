@@ -5,6 +5,7 @@ defmodule ContextBot.DryRun.InterruptsTest do
 
   test "installs and removes its signal handler on the supported runtime" do
     assert {:ok, token} = Interrupts.install(self())
+    on_exit(fn -> Interrupts.remove(token) end)
     assert :ok = Interrupts.remove(token)
   end
 

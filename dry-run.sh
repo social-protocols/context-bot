@@ -11,22 +11,26 @@ fi
 source ./secrets.sh ANTHROPIC_API_KEY
 
 context_bot_child_pid=""
+context_bot_interrupt_pending=false
+context_bot_forwarding_interrupt=false
 
 # Invoked indirectly by the shell trap below.
 # shellcheck disable=SC2329
 context_bot_forward_interrupt() {
-	trap - INT TERM
+	context_bot_interrupt_pending=true
 
-	if [[ -n "$context_bot_child_pid" ]]; then
-		kill -TERM "$context_bot_child_pid" 2>/dev/null || true
-		set +e
-		wait "$context_bot_child_pid"
-		context_bot_child_status=$?
-		set -e
-		exit "$context_bot_child_status"
+	if [[ -z "$context_bot_child_pid" || "$context_bot_forwarding_interrupt" == true ]]; then
+		return
 	fi
 
-	exit 130
+	context_bot_forwarding_interrupt=true
+	trap '' INT TERM
+	kill -TERM "$context_bot_child_pid" 2>/dev/null || true
+	set +e
+	wait "$context_bot_child_pid"
+	context_bot_child_status=$?
+	set -e
+	exit "$context_bot_child_status"
 }
 
 trap context_bot_forward_interrupt INT TERM
@@ -34,6 +38,10 @@ trap context_bot_forward_interrupt INT TERM
 ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-} +B i" \
 	BOT_ENABLED=false mix context_bot.dry_run "$1" "$2" &
 context_bot_child_pid=$!
+
+if [[ "$context_bot_interrupt_pending" == true ]]; then
+	context_bot_forward_interrupt
+fi
 
 set +e
 wait "$context_bot_child_pid"
