@@ -4,6 +4,7 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
   import ExUnit.CaptureLog
 
   alias ContextBot.Settings
+  alias ContextBot.Research.BudgetEntry
   alias ContextBot.Workers.DeferredWorker
   alias ContextBot.Workflow.Invocation
   alias Ecto.Adapters.SQL
@@ -12,10 +13,20 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
   @rollover ~U[2026-07-31 00:00:00.000000Z]
   @actor_did "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"
 
+  defmodule FakeRecovery do
+    def recover_orphans(options) do
+      send(Process.get(:recovery_test_pid), {:recover_orphans, options})
+      {:ok, %{examined: 0, resumed: 0, terminalized: 0, unchanged: 0}}
+    end
+  end
+
   setup do
+    Process.put(:recovery_test_pid, self())
     previous = Application.get_env(:context_bot, DeferredWorker)
 
     on_exit(fn ->
+      Process.delete(:recovery_test_pid)
+
       if previous do
         Application.put_env(:context_bot, DeferredWorker, previous)
       else
@@ -24,6 +35,56 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
     end)
 
     :ok
+  end
+
+  test "delegates orphan reconciliation to the shared recovery coordinator" do
+    configured_settings = settings()
+    configure(recovery: FakeRecovery, settings: configured_settings, batch_size: 7)
+
+    assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
+
+    assert_receive {:recover_orphans, options}
+    assert options[:startup?] == false
+    assert options[:now] == @now
+    assert options[:settings] == configured_settings
+    assert options[:batch_size] == 7
+  end
+
+  test "maintenance terminalizes stale sent research without replaying the provider call" do
+    invocation =
+      invocation("ambiguous-research", :researching,
+        minutes_ago: 400,
+        canonical_thread: "ancestor context",
+        canonical_thread_version: "1",
+        research_claim_token: "abandoned-owner",
+        research_claimed_at: DateTime.add(@now, -21_600_001, :millisecond)
+      )
+
+    job = executing_job(invocation, "ContextBot.Workers.ResearchWorker", :research)
+
+    entry =
+      %BudgetEntry{}
+      |> BudgetEntry.changeset(%{
+        attempt_key: "maintenance-ambiguous-research",
+        invocation_id: invocation.id,
+        budget_date: DateTime.to_date(@now),
+        kind: :research,
+        reserved_microdollars: 5_000_000,
+        state: :sent,
+        sent_at: DateTime.add(@now, -21_600_001, :millisecond),
+        research_claim_token: "abandoned-owner"
+      })
+      |> Repo.insert!()
+
+    configure()
+    assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :failed
+    assert persisted.failure_detail == %{"reason" => "interrupted_after_send"}
+    assert Repo.reload!(entry).state == :indeterminate
+    assert Repo.reload!(job).state == "discarded"
+    assert Repo.aggregate(BudgetEntry, :count) == 1
   end
 
   test "reconsiders a bounded oldest-first batch and leaves future deferrals untouched" do
@@ -205,9 +266,12 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
     on_exit(fn -> Logger.configure(level: previous_level) end)
 
     log =
-      capture_log([level: :info], fn ->
-        assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}, attempt: 3})
-      end)
+      capture_log(
+        [level: :info, formatter: {ContextBot.Logging.JSONFormatter, %{}}],
+        fn ->
+          assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}, attempt: 3})
+        end
+      )
 
     assert log =~ "context_bot_attempt"
     assert log =~ "\"invocation_id\":#{invocation.id}"
@@ -325,7 +389,7 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
     assert Repo.reload!(later_active).stage == :received
   end
 
-  test "discarded and cancelled jobs terminalize safely without receiving fresh retries" do
+  test "terminal Oban histories are preserved while safe work receives a replacement" do
     discarded = invocation("discarded", :received, minutes_ago: 5)
     cancelled = invocation("cancelled", :checking_eligibility, minutes_ago: 4)
     missing = invocation("after-terminal-history", :capturing_thread, minutes_ago: 3)
@@ -336,18 +400,18 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
 
     assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
 
-    assert Repo.reload!(discarded).stage == :failed
-    assert Repo.reload!(discarded).failure_category == :identity_unavailable
-    assert Repo.reload!(cancelled).stage == :failed
-    assert Repo.reload!(cancelled).failure_category == :identity_unavailable
+    assert Repo.reload!(discarded).stage == :received
+    assert Repo.reload!(cancelled).stage == :checking_eligibility
+    assert Enum.count(Repo.all(Oban.Job), &(&1.args == job_args(discarded))) == 2
+    assert Enum.count(Repo.all(Oban.Job), &(&1.args == job_args(cancelled))) == 2
     refute Enum.any?(Repo.all(Oban.Job), &(&1.args == job_args(missing)))
 
     assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
     assert Enum.any?(Repo.all(Oban.Job), &(&1.args == job_args(missing)))
 
     assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
-    assert Enum.count(Repo.all(Oban.Job), &(&1.args == job_args(discarded))) == 1
-    assert Enum.count(Repo.all(Oban.Job), &(&1.args == job_args(cancelled))) == 1
+    assert Enum.count(Repo.all(Oban.Job), &(&1.args == job_args(discarded))) == 2
+    assert Enum.count(Repo.all(Oban.Job), &(&1.args == job_args(cancelled))) == 2
   end
 
   test "recovery repairs a deferred claim whose enqueue failed after an older job completed" do
@@ -388,7 +452,7 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
            end) == 2
   end
 
-  test "a completed same-generation job without a handoff still terminalizes recovery" do
+  test "a completed same-generation job without a handoff receives one replacement" do
     invocation = invocation("same-generation-no-handoff", :received, minutes_ago: 5)
     transitioned_at = DateTime.add(@now, -10, :second)
 
@@ -408,9 +472,8 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
     assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
 
     persisted = Repo.reload!(invocation)
-    assert persisted.stage == :failed
-    assert persisted.failure_detail == %{"reason" => "job_completed_without_handoff"}
-    assert Enum.count(Repo.all(Oban.Job), &(&1.args == job_args(invocation))) == 1
+    assert persisted.stage == :received
+    assert Enum.count(Repo.all(Oban.Job), &(&1.args == job_args(invocation))) == 2
   end
 
   test "fresh research and publication leases suppress completed no-op recovery until expiry" do
@@ -437,7 +500,7 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
     assert Enum.count(Repo.all(Oban.Job), &(&1.args == job_args(fresh_publication))) == 1
 
     configure(
-      now: DateTime.add(@now, 61, :second),
+      now: DateTime.add(@now, 21_600_001, :millisecond),
       batch_size: 10,
       research_claim_lease_ms: 60_000,
       publication_claim_lease_ms: 60_000
@@ -461,8 +524,11 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
     configure(batch_size: 2)
     assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
 
-    assert Enum.count(invocations, &(Repo.reload!(&1).stage == :failed)) == 2
-    assert Enum.count(invocations, &(Repo.reload!(&1).stage == :received)) == 3
+    assert Enum.all?(invocations, &(Repo.reload!(&1).stage == :received))
+
+    assert Enum.map(invocations, fn invocation ->
+             Enum.count(Repo.all(Oban.Job), &(&1.args == job_args(invocation)))
+           end) == [2, 2, 1, 1, 1]
   end
 
   test "workflow recovery query has a matching partial fairness index" do
@@ -575,6 +641,22 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
 
     job
     |> Ecto.Changeset.change(changes)
+    |> Repo.update!()
+  end
+
+  defp executing_job(invocation, worker, queue) do
+    job =
+      invocation
+      |> job_args()
+      |> Oban.Job.new(worker: worker, queue: queue)
+      |> Repo.insert!()
+
+    job
+    |> Ecto.Changeset.change(
+      state: "executing",
+      attempted_at: DateTime.add(@now, -21_600_001, :millisecond),
+      attempted_by: ["abandoned-node"]
+    )
     |> Repo.update!()
   end
 end
