@@ -16,29 +16,7 @@ defmodule ContextBot.DryRun.Interrupts do
     untrap_signal = Keyword.get(options, :untrap_signal, &System.untrap_signal/2)
 
     if is_function(trap_signal, 3) and is_function(untrap_signal, 2) do
-      token = make_ref()
-
-      case trap_signal.(:sigint, token, fn -> notify(owner, :sigint) end) do
-        {:ok, ^token} ->
-          case trap_signal.(:sigterm, token, fn -> notify(owner, :sigterm) end) do
-            {:ok, ^token} ->
-              {:ok, token}
-
-            {:error, reason} ->
-              safe_untrap(untrap_signal, :sigint, token)
-              {:error, reason}
-
-            _unexpected ->
-              safe_untrap(untrap_signal, :sigint, token)
-              {:error, :signal_trap_failed}
-          end
-
-        {:error, reason} ->
-          {:error, reason}
-
-        _unexpected ->
-          {:error, :signal_trap_failed}
-      end
+      install_sigint(owner, trap_signal, untrap_signal, make_ref())
     else
       {:error, :invalid_input}
     end
@@ -63,6 +41,31 @@ defmodule ContextBot.DryRun.Interrupts do
   end
 
   def remove(_token, _options), do: :ok
+
+  defp install_sigint(owner, trap_signal, untrap_signal, token) do
+    case trap_signal.(:sigint, token, fn -> notify(owner, :sigint) end) do
+      {:ok, ^token} -> install_sigterm(owner, trap_signal, untrap_signal, token)
+      {:error, reason} -> {:error, reason}
+      _unexpected -> {:error, :signal_trap_failed}
+    end
+  end
+
+  defp install_sigterm(owner, trap_signal, untrap_signal, token) do
+    result = trap_signal.(:sigterm, token, fn -> notify(owner, :sigterm) end)
+
+    case result do
+      {:ok, ^token} ->
+        {:ok, token}
+
+      {:error, reason} ->
+        safe_untrap(untrap_signal, :sigint, token)
+        {:error, reason}
+
+      _unexpected ->
+        safe_untrap(untrap_signal, :sigint, token)
+        {:error, :signal_trap_failed}
+    end
+  end
 
   defp notify(owner, signal) do
     send(owner, {:context_bot_interrupt, signal})

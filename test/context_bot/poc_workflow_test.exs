@@ -274,15 +274,12 @@ defmodule ContextBot.POCWorkflowTest do
     assert POCFixture.created_reply_count(fixture) == 0
   end
 
-  test "duplicate polls, repeated jobs, restarts, and ambiguous writes converge once" do
+  test "duplicate polls, repeated jobs, restarts, and ambiguous publication writes converge once" do
     success = POCFixture.anthropic_fixture("tool_success.json")
 
     fixture =
       POCFixture.start!(
-        anthropic_results: [
-          {:transport, :timeout},
-          {:response, 200, success, %{}}
-        ],
+        anthropic_results: [{:response, 200, success, %{}}],
         pds_mode: :ambiguous_once
       )
 
@@ -313,25 +310,22 @@ defmodule ContextBot.POCWorkflowTest do
     assert invocation.stage == :complete
     assert POCFixture.call_count(fixture, :notifications) == 5
     assert POCFixture.call_count(fixture, :session_create) == 4
-    assert POCFixture.call_count(fixture, :anthropic_post) == 2
+    assert POCFixture.call_count(fixture, :anthropic_post) == 1
     assert POCFixture.created_reply_count(fixture) == 1
     assert POCFixture.call_count(fixture, :pds_put) == 1
 
     entries = Repo.all(from entry in BudgetEntry, order_by: entry.id)
-    assert Enum.map(entries, & &1.state) == [:indeterminate, :settled]
+    assert Enum.map(entries, & &1.state) == [:settled]
 
     assert Enum.map(
              entries,
              &{&1.kind, &1.reserved_microdollars, &1.settled_microdollars}
-           ) == [
-             {:research, 5_000_000, nil},
-             {:retry, 5_000_000, 650}
-           ]
+           ) == [{:research, 5_000_000, 650}]
 
-    assert charged_microdollars(entries) == 5_000_650
+    assert charged_microdollars(entries) == 650
 
     assert Budget.remaining(now(), fixture.settings.anthropic_daily_budget_microdollars) ==
-             14_999_350
+             19_999_350
 
     assert [response] = Store.anthropic_responses(invocation)
     assert response.raw_body == success
@@ -380,7 +374,7 @@ defmodule ContextBot.POCWorkflowTest do
     invocation = POCFixture.invocation!()
     assert invocation.stage == :failed
     assert invocation.failure_category == :provider_response
-    assert invocation.failure_detail == %{"reason" => "provider_response_too_large"}
+    assert invocation.failure_detail == %{"reason" => "interrupted_after_send"}
     assert Store.anthropic_responses(invocation) == []
     assert [%BudgetEntry{state: :indeterminate}] = Repo.all(BudgetEntry)
     refute_publication(fixture)

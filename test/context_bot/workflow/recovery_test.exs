@@ -228,6 +228,8 @@ defmodule ContextBot.Workflow.RecoveryTest do
     )
   end
 
+  # Fixture construction intentionally covers the full recovery stage matrix.
+  # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp invocation(stage, dry_run, suffix, extra \\ []) do
     uri = "local://recovery/#{suffix}"
     cid = "local:#{suffix}"

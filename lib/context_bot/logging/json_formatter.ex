@@ -56,29 +56,37 @@ defmodule ContextBot.Logging.JSONFormatter do
   end
 
   defp safe_metadata_value(key, value) do
-    cond do
-      MapSet.member?(@numeric_metadata, key) and is_integer(value) and value >= 0 ->
-        {:ok, value}
-
-      MapSet.member?(@token_metadata, key) ->
-        safe_token(value)
-
-      key == :worker and is_binary(value) and Regex.match?(@worker, value) ->
-        {:ok, value}
-
-      key == :request_id and is_binary(value) and Regex.match?(@request_id, value) ->
-        {:ok, value}
-
-      key == :method and value in ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"] ->
-        {:ok, value}
-
-      key == :path and value == "/health" ->
-        {:ok, value}
-
-      true ->
-        :error
-    end
+    if MapSet.member?(@numeric_metadata, key),
+      do: safe_non_negative(value),
+      else: safe_non_numeric_metadata(key, value)
   end
+
+  defp safe_non_numeric_metadata(key, value) do
+    if MapSet.member?(@token_metadata, key),
+      do: safe_token(value),
+      else: safe_named_metadata(key, value)
+  end
+
+  defp safe_named_metadata(:worker, value), do: safe_regex(value, @worker)
+  defp safe_named_metadata(:request_id, value), do: safe_regex(value, @request_id)
+  defp safe_named_metadata(:method, value), do: safe_method(value)
+  defp safe_named_metadata(:path, "/health"), do: {:ok, "/health"}
+  defp safe_named_metadata(_key, _value), do: :error
+
+  defp safe_non_negative(value) when is_integer(value) and value >= 0, do: {:ok, value}
+  defp safe_non_negative(_value), do: :error
+
+  defp safe_regex(value, regex) when is_binary(value) do
+    if Regex.match?(regex, value), do: {:ok, value}, else: :error
+  end
+
+  defp safe_regex(_value, _regex), do: :error
+
+  defp safe_method(value)
+       when value in ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"],
+       do: {:ok, value}
+
+  defp safe_method(_value), do: :error
 
   defp safe_token(value) when is_atom(value), do: safe_token(Atom.to_string(value))
 

@@ -20,33 +20,41 @@ defmodule ContextBot.Workers.DeferredWorker do
   def perform(%Oban.Job{} = job) do
     dependencies = dependencies()
 
-    with {:ok, _summary} <-
-           dependencies.recovery.recover_orphans(
-             now: dependencies.now,
-             startup?: false,
-             settings: dependencies.settings,
-             batch_size: dependencies.batch_size
-           ) do
-      dependencies
-      |> claim_batch()
-      |> Enum.reduce_while(:ok, fn work, :ok ->
-        started_at = System.monotonic_time(:millisecond)
-        result = enqueue_once(work)
-
-        Operations.log_attempt(work.invocation_id, work.stage,
-          attempt_kind: :maintenance,
-          attempt_index: job.attempt,
-          duration_ms: System.monotonic_time(:millisecond) - started_at
-        )
-
-        case result do
-          :ok -> {:cont, :ok}
-          {:error, reason} -> {:halt, {:error, reason}}
-        end
-      end)
-    else
+    case recover(dependencies) do
+      {:ok, _summary} -> process_claimed_work(claim_batch(dependencies), job)
       {:error, _reason} -> {:error, :recovery_failed}
     end
+  end
+
+  defp recover(dependencies) do
+    dependencies.recovery.recover_orphans(
+      now: dependencies.now,
+      startup?: false,
+      settings: dependencies.settings,
+      batch_size: dependencies.batch_size
+    )
+  end
+
+  defp process_claimed_work(work, job) do
+    Enum.reduce_while(work, :ok, fn claimed, :ok ->
+      case process_claim(claimed, job) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp process_claim(work, job) do
+    started_at = System.monotonic_time(:millisecond)
+    result = enqueue_once(work)
+
+    Operations.log_attempt(work.invocation_id, work.stage,
+      attempt_kind: :maintenance,
+      attempt_index: job.attempt,
+      duration_ms: System.monotonic_time(:millisecond) - started_at
+    )
+
+    result
   end
 
   defp claim_batch(dependencies) do

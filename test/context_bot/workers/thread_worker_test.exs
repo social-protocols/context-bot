@@ -213,7 +213,11 @@ defmodule ContextBot.Workers.ThreadWorkerTest do
     Logger.configure(level: :info)
     on_exit(fn -> Logger.configure(level: previous_level) end)
 
-    log = capture_log([level: :info], fn -> assert :ok = perform(invocation) end)
+    log =
+      capture_log(
+        [level: :info, formatter: {ContextBot.Logging.JSONFormatter, %{}}],
+        fn -> assert :ok = perform(invocation) end
+      )
 
     assert log =~ "\"invocation_id\":#{invocation.id}"
     assert log =~ "\"stage\":\"capturing_thread\""

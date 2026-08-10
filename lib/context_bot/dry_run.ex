@@ -103,35 +103,79 @@ defmodule ContextBot.DryRun do
             {:deferred, invocation}
 
           _nonterminal ->
-            cond do
-              interrupt?.() ->
-                {:error, :interrupted}
-
-              monotonic_ms.() >= deadline ->
-                {:error, :timeout}
-
-              true ->
-                sleep.(poll_interval_ms)
-
-                if interrupt?.() do
-                  {:error, :interrupted}
-                else
-                  await_loop(
-                    id,
-                    deadline,
-                    poll_interval_ms,
-                    sleep,
-                    monotonic_ms,
-                    on_update,
-                    interrupt?,
-                    last_stage
-                  )
-                end
-            end
+            await_nonterminal(
+              id,
+              deadline,
+              poll_interval_ms,
+              sleep,
+              monotonic_ms,
+              on_update,
+              interrupt?,
+              last_stage
+            )
         end
 
       nil ->
         {:error, :not_found}
+    end
+  end
+
+  defp await_nonterminal(
+         id,
+         deadline,
+         poll_interval_ms,
+         sleep,
+         monotonic_ms,
+         on_update,
+         interrupt?,
+         last_stage
+       ) do
+    cond do
+      interrupt?.() ->
+        {:error, :interrupted}
+
+      monotonic_ms.() >= deadline ->
+        {:error, :timeout}
+
+      true ->
+        sleep.(poll_interval_ms)
+
+        resume_after_sleep(
+          id,
+          deadline,
+          poll_interval_ms,
+          sleep,
+          monotonic_ms,
+          on_update,
+          interrupt?,
+          last_stage
+        )
+    end
+  end
+
+  defp resume_after_sleep(
+         id,
+         deadline,
+         poll_interval_ms,
+         sleep,
+         monotonic_ms,
+         on_update,
+         interrupt?,
+         last_stage
+       ) do
+    if interrupt?.() do
+      {:error, :interrupted}
+    else
+      await_loop(
+        id,
+        deadline,
+        poll_interval_ms,
+        sleep,
+        monotonic_ms,
+        on_update,
+        interrupt?,
+        last_stage
+      )
     end
   end
 

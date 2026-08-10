@@ -3,8 +3,8 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
 
   import ExUnit.CaptureLog
 
-  alias ContextBot.Settings
   alias ContextBot.Research.BudgetEntry
+  alias ContextBot.Settings
   alias ContextBot.Workers.DeferredWorker
   alias ContextBot.Workflow.Invocation
   alias Ecto.Adapters.SQL
