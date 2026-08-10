@@ -16,3 +16,4 @@ One-sentence facts and constraints distilled from investigations in this repo. L
 - Route authenticated `app.bsky.*` PDS calls with the explicit Bluesky AppView service-proxy header. ([reports/2026-08-02-live-boundary-hardening.md](reports/2026-08-02-live-boundary-hardening.md))
 - Credential-owning GenServers must redact `format_status` and contain expected adapter exceptions. ([reports/2026-08-02-live-boundary-hardening.md](reports/2026-08-02-live-boundary-hardening.md))
 - Provider storage must cover every permitted response body plus bounded envelope metadata. ([reports/2026-08-02-live-boundary-hardening.md](reports/2026-08-02-live-boundary-hardening.md))
+- `Context`, `ContextBot`, and `GetContext` are crowded AI names; use a distinctive public brand and frame it as invoked research. ([reports/2026-08-10-context-name-collisions.md](reports/2026-08-10-context-name-collisions.md))
