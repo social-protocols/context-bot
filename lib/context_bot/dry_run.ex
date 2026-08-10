@@ -38,7 +38,7 @@ defmodule ContextBot.DryRun do
           {:ok, Invocation.t()}
           | {:error, Invocation.t()}
           | {:deferred, Invocation.t()}
-          | {:error, :timeout | :not_found | :invalid_input}
+          | {:error, :timeout | :not_found | :invalid_input | :interrupted}
   def await(invocation, options \\ [])
 
   def await(%Invocation{id: id, dry_run: true}, options) when is_integer(id) do
@@ -46,13 +46,31 @@ defmodule ContextBot.DryRun do
     poll_interval_ms = Keyword.get(options, :poll_interval_ms, @default_poll_interval_ms)
     sleep = Keyword.get(options, :sleep, &Process.sleep/1)
     on_update = Keyword.get(options, :on_update, fn _invocation -> :ok end)
+    interrupt? = Keyword.get(options, :interrupt?, fn -> false end)
 
     monotonic_ms =
       Keyword.get(options, :monotonic_ms, fn -> System.monotonic_time(:millisecond) end)
 
-    if valid_wait_options?(timeout_ms, poll_interval_ms, sleep, monotonic_ms, on_update) do
+    if valid_wait_options?(
+         timeout_ms,
+         poll_interval_ms,
+         sleep,
+         monotonic_ms,
+         on_update,
+         interrupt?
+       ) do
       deadline = monotonic_ms.() + timeout_ms
-      await_loop(id, deadline, poll_interval_ms, sleep, monotonic_ms, on_update, nil)
+
+      await_loop(
+        id,
+        deadline,
+        poll_interval_ms,
+        sleep,
+        monotonic_ms,
+        on_update,
+        interrupt?,
+        nil
+      )
     else
       {:error, :invalid_input}
     end
@@ -67,6 +85,7 @@ defmodule ContextBot.DryRun do
          sleep,
          monotonic_ms,
          on_update,
+         interrupt?,
          last_stage
        ) do
     case Repo.get(Invocation, id) do
@@ -84,20 +103,30 @@ defmodule ContextBot.DryRun do
             {:deferred, invocation}
 
           _nonterminal ->
-            if monotonic_ms.() >= deadline do
-              {:error, :timeout}
-            else
-              sleep.(poll_interval_ms)
+            cond do
+              interrupt?.() ->
+                {:error, :interrupted}
 
-              await_loop(
-                id,
-                deadline,
-                poll_interval_ms,
-                sleep,
-                monotonic_ms,
-                on_update,
-                last_stage
-              )
+              monotonic_ms.() >= deadline ->
+                {:error, :timeout}
+
+              true ->
+                sleep.(poll_interval_ms)
+
+                if interrupt?.() do
+                  {:error, :interrupted}
+                else
+                  await_loop(
+                    id,
+                    deadline,
+                    poll_interval_ms,
+                    sleep,
+                    monotonic_ms,
+                    on_update,
+                    interrupt?,
+                    last_stage
+                  )
+                end
             end
         end
 
@@ -113,10 +142,17 @@ defmodule ContextBot.DryRun do
     stage
   end
 
-  defp valid_wait_options?(timeout_ms, poll_interval_ms, sleep, monotonic_ms, on_update) do
+  defp valid_wait_options?(
+         timeout_ms,
+         poll_interval_ms,
+         sleep,
+         monotonic_ms,
+         on_update,
+         interrupt?
+       ) do
     is_integer(timeout_ms) and timeout_ms >= 0 and is_integer(poll_interval_ms) and
       poll_interval_ms > 0 and is_function(sleep, 1) and is_function(monotonic_ms, 0) and
-      is_function(on_update, 1)
+      is_function(on_update, 1) and is_function(interrupt?, 0)
   end
 
   defp validate_question(question) do

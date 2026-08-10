@@ -117,6 +117,39 @@ defmodule ContextBot.DryRunTest do
     assert Repo.reload!(invocation).stage == :capturing_thread
   end
 
+  test "await stops promptly on interruption without mutating durable workflow state" do
+    invocation = invocation("interrupted")
+
+    job =
+      %{"uri" => invocation.invocation_uri, "cid" => invocation.notification_cid}
+      |> Oban.Job.new(worker: "ContextBot.Workers.ThreadWorker", queue: :dry_thread)
+      |> Repo.insert!()
+
+    Process.put(:interrupt_checks, 0)
+
+    interrupt? = fn ->
+      checks = Process.get(:interrupt_checks)
+      Process.put(:interrupt_checks, checks + 1)
+      checks > 0
+    end
+
+    assert {:error, :interrupted} =
+             DryRun.await(invocation,
+               timeout_ms: 1_000,
+               poll_interval_ms: 1,
+               sleep: fn _milliseconds -> :ok end,
+               interrupt?: interrupt?
+             )
+
+    assert Repo.reload!(invocation).stage == :capturing_thread
+    assert Repo.reload!(job).state == "available"
+  end
+
+  test "await rejects an invalid interrupt callback" do
+    assert {:error, :invalid_input} =
+             DryRun.await(invocation("invalid-interrupt"), interrupt?: true)
+  end
+
   test "await reports the initial row and each persisted stage transition once" do
     invocation = invocation("stage-updates")
 

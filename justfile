@@ -1,4 +1,5 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
+set dotenv-load := true
 
 default:
     @just --list
@@ -64,7 +65,8 @@ dry-run post question:
     #!/usr/bin/env bash
     set -euo pipefail
     source ./secrets.sh ANTHROPIC_API_KEY
-    BOT_ENABLED=false mix context_bot.dry_run {{quote(post)}} {{quote(question)}}
+    ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-} +B" \
+      BOT_ENABLED=false mix context_bot.dry_run {{quote(post)}} {{quote(question)}}
 
 docker-build:
     docker build --progress=plain -t context-bot:local .

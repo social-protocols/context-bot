@@ -6,7 +6,7 @@ defmodule Mix.Tasks.ContextBot.DryRun do
   import Ecto.Query
 
   alias ContextBot.{DryRun, Repo, Settings}
-  alias ContextBot.DryRun.Progress
+  alias ContextBot.DryRun.{Interrupts, Progress}
   alias ContextBot.Research.BudgetEntry
 
   @requirements ["app.config"]
@@ -18,6 +18,7 @@ defmodule Mix.Tasks.ContextBot.DryRun do
     service = Keyword.get(config, :service, DryRun)
     runtime = Keyword.get(config, :runtime, ContextBot.DryRun.Runtime)
     progress_module = Keyword.get(config, :progress, Progress)
+    interrupts = Keyword.get(config, :interrupts, Interrupts)
     settled_cost = Keyword.get(config, :settled_cost, &settled_cost/1)
     settings = Application.fetch_env!(:context_bot, :settings)
 
@@ -32,9 +33,22 @@ defmodule Mix.Tasks.ContextBot.DryRun do
         anthropic_timeout_ms: settings.anthropic_http_timeout_ms
       )
 
-    {result, progress} = await_with_progress(service, invocation, progress_module, progress)
-    progress_module.finish(progress)
+    token = install_interrupts!(interrupts, progress_module, progress)
 
+    try do
+      {result, _progress} =
+        await_with_progress(service, runtime, invocation, progress_module, progress)
+
+      print_result(result, settled_cost)
+    after
+      progress_module.finish(progress)
+      interrupts.remove(token)
+    end
+  end
+
+  def run(_arguments), do: Mix.raise("expected exactly a post and question")
+
+  defp print_result(result, settled_cost) do
     case result do
       {:ok, settled} ->
         print_complete(settled, settled_cost.(settled))
@@ -51,12 +65,14 @@ defmodule Mix.Tasks.ContextBot.DryRun do
         Mix.shell().info("completed_at=#{datetime(failed.completed_at)}")
         Mix.raise("dry run failed at stage=#{failed.stage}")
 
+      {:error, {:interrupted, invocation_id}} when is_integer(invocation_id) ->
+        Mix.shell().info("status=interrupted")
+        Mix.raise("dry run interrupted; durable invocation id=#{invocation_id}")
+
       {:error, reason} when is_atom(reason) ->
         Mix.raise("dry run did not settle: #{reason}")
     end
   end
-
-  def run(_arguments), do: Mix.raise("expected exactly a post and question")
 
   defp validate_runtime!(settings) do
     if Settings.bot_enabled?(settings), do: Mix.raise("dry run requires BOT_ENABLED=false")
@@ -100,39 +116,54 @@ defmodule Mix.Tasks.ContextBot.DryRun do
     )
   end
 
-  defp await_with_progress(service, invocation, progress_module, progress) do
+  defp install_interrupts!(interrupts, progress_module, progress) do
+    case interrupts.install(self()) do
+      {:ok, token} ->
+        token
+
+      {:error, _reason} ->
+        progress_module.finish(progress)
+        Mix.raise("unable to install dry-run signal handlers")
+    end
+  end
+
+  defp await_with_progress(service, runtime, invocation, progress_module, progress) do
     owner = self()
     token = make_ref()
 
-    {_pid, monitor} =
-      spawn_monitor(fn ->
-        result =
-          service.await(invocation,
-            on_update: fn current -> send(owner, {token, :progress, current}) end
-          )
-
-        send(owner, {token, :result, result})
+    task =
+      Task.async(fn ->
+        service.await(invocation,
+          on_update: fn current -> send(owner, {token, :progress, current}) end
+        )
       end)
 
-    await_foreground(token, monitor, progress_module, progress)
+    Process.unlink(task.pid)
+
+    await_foreground(token, task, runtime, invocation.id, progress_module, progress)
   end
 
-  defp await_foreground(token, monitor, progress_module, progress) do
+  defp await_foreground(token, task, runtime, invocation_id, progress_module, progress) do
     receive do
       {^token, :progress, invocation} ->
         progress = progress_module.update(progress, invocation)
-        await_foreground(token, monitor, progress_module, progress)
+        await_foreground(token, task, runtime, invocation_id, progress_module, progress)
 
-      {^token, :result, result} ->
-        Process.demonitor(monitor, [:flush])
+      {ref, result} when ref == task.ref ->
+        Process.demonitor(ref, [:flush])
         {result, progress}
 
-      {:DOWN, ^monitor, :process, _pid, _reason} ->
+      {:context_bot_interrupt, signal} when signal in [:sigint, :sigterm] ->
+        Task.shutdown(task, 5_000)
+        runtime.stop()
+        {{:error, {:interrupted, invocation_id}}, progress}
+
+      {:DOWN, ref, :process, _pid, _reason} when ref == task.ref ->
         {{:error, :await_failed}, progress}
     after
       100 ->
         progress = progress_module.tick(progress)
-        await_foreground(token, monitor, progress_module, progress)
+        await_foreground(token, task, runtime, invocation_id, progress_module, progress)
     end
   end
 

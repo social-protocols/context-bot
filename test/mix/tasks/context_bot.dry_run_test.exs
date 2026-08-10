@@ -50,6 +50,37 @@ defmodule Mix.Tasks.ContextBot.DryRunTest.Runtime do
     send(config[:test_pid], :runtime_started)
     config[:result]
   end
+
+  def stop do
+    config = Application.fetch_env!(:context_bot, __MODULE__)
+    send(config[:test_pid], :runtime_stopped)
+    :ok
+  end
+end
+
+defmodule Mix.Tasks.ContextBot.DryRunTest.Interrupts do
+  @moduledoc false
+
+  def install(owner) do
+    config = Application.fetch_env!(:context_bot, __MODULE__)
+    token = make_ref()
+    send(config[:test_pid], {:interrupts_installed, token})
+
+    if signal = config[:signal] do
+      spawn(fn ->
+        Process.sleep(20)
+        send(owner, {:context_bot_interrupt, signal})
+      end)
+    end
+
+    {:ok, token}
+  end
+
+  def remove(token) do
+    config = Application.fetch_env!(:context_bot, __MODULE__)
+    send(config[:test_pid], {:interrupts_removed, token})
+    :ok
+  end
 end
 
 defmodule Mix.Tasks.ContextBot.DryRunTest do
@@ -58,7 +89,7 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
   alias ContextBot.Settings
   alias ContextBot.Workflow.Invocation
   alias Mix.Tasks.ContextBot.DryRun, as: DryRunTask
-  alias Mix.Tasks.ContextBot.DryRunTest.{Progress, Runtime, Service}
+  alias Mix.Tasks.ContextBot.DryRunTest.{Interrupts, Progress, Runtime, Service}
 
   setup do
     original_shell = Mix.shell()
@@ -68,6 +99,7 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     original_service = Application.get_env(:context_bot, Service, :missing)
     original_runtime = Application.get_env(:context_bot, Runtime, :missing)
     original_progress = Application.get_env(:context_bot, Progress, :missing)
+    original_interrupts = Application.get_env(:context_bot, Interrupts, :missing)
 
     Mix.shell(Mix.Shell.Process)
     flush_mailbox()
@@ -81,11 +113,13 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     Application.put_env(:context_bot, :anthropic_api_key, "task-test-provider-key")
     Application.put_env(:context_bot, Runtime, test_pid: self(), result: :ok)
     Application.put_env(:context_bot, Progress, test_pid: self())
+    Application.put_env(:context_bot, Interrupts, test_pid: self())
 
     Application.put_env(:context_bot, Mix.Tasks.ContextBot.DryRun,
       service: Service,
       runtime: Runtime,
       progress: Progress,
+      interrupts: Interrupts,
       settled_cost: fn _invocation -> 321 end
     )
 
@@ -97,6 +131,7 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
       restore_env(Service, original_service)
       restore_env(Runtime, original_runtime)
       restore_env(Progress, original_progress)
+      restore_env(Interrupts, original_interrupts)
     end)
 
     :ok
@@ -116,6 +151,14 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
 
   test "loads configuration without starting the application before validation" do
     assert DryRunTask.__info__(:attributes)[:requirements] == ["app.config"]
+  end
+
+  test "just dry-run disables the Erlang BREAK menu and retains dotenv loading" do
+    {recipe, 0} =
+      System.cmd("just", ["--dry-run", "dry-run", "post", "question"], stderr_to_stdout: true)
+
+    assert recipe =~ ~s(ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-} +B")
+    assert File.read!("justfile") =~ "set dotenv-load := true"
   end
 
   test "fails closed when the public bot is enabled" do
@@ -214,6 +257,45 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     assert_received {:progress_update, 45, :complete}
     assert_received {:progress_tick, 45}
     assert_received {:progress_finish, 45}
+  end
+
+  test "interrupts a blocked await, stops workers once, and prints only durable safe state" do
+    created = %Invocation{id: 46, dry_run: true, stage: :researching}
+
+    Application.put_env(:context_bot, Service,
+      test_pid: self(),
+      create_result: {:ok, created},
+      await_delay_ms: :infinity,
+      await_result: :never
+    )
+
+    Application.put_env(:context_bot, Interrupts, test_pid: self(), signal: :sigterm)
+
+    error =
+      assert_raise Mix.Error, fn ->
+        run([
+          "https://bsky.app/profile/private.example/post/secret",
+          "private question with task-test-provider-key"
+        ])
+      end
+
+    assert error.message =~ "interrupted"
+    assert error.message =~ "46"
+    refute error.message =~ "private"
+    refute error.message =~ "task-test-provider-key"
+
+    assert_received {:interrupts_installed, token}
+    assert_received {:interrupts_removed, ^token}
+    assert_received {:await, 46, _options}
+    assert_received {:progress_finish, 46}
+    assert_received :runtime_stopped
+    refute_received :runtime_stopped
+
+    output = shell_output()
+    assert length(Regex.scan(~r/^dry_run_id=46$/m, output)) == 1
+    assert length(Regex.scan(~r/^status=interrupted$/m, output)) == 1
+    refute output =~ "private"
+    refute output =~ "task-test-provider-key"
   end
 
   test "turns structured public-read failures into a finite safe Mix error" do
