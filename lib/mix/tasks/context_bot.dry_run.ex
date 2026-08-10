@@ -144,13 +144,15 @@ defmodule Mix.Tasks.ContextBot.DryRun do
   end
 
   defp await_foreground(token, task, runtime, invocation_id, progress_module, progress) do
+    task_ref = task.ref
+
     receive do
       {^token, :progress, invocation} ->
         progress = progress_module.update(progress, invocation)
         await_foreground(token, task, runtime, invocation_id, progress_module, progress)
 
-      {ref, result} when ref == task.ref ->
-        Process.demonitor(ref, [:flush])
+      {^task_ref, result} ->
+        _shutdown_result = Task.shutdown(task, 0)
         {result, progress}
 
       {:context_bot_interrupt, signal} when signal in [:sigint, :sigterm] ->
@@ -158,7 +160,7 @@ defmodule Mix.Tasks.ContextBot.DryRun do
         runtime.stop()
         {{:error, {:interrupted, invocation_id}}, progress}
 
-      {:DOWN, ref, :process, _pid, _reason} when ref == task.ref ->
+      {:DOWN, ^task_ref, :process, _pid, _reason} ->
         {{:error, :await_failed}, progress}
     after
       100 ->
