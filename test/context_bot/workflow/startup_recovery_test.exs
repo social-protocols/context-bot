@@ -52,11 +52,44 @@ defmodule ContextBot.Workflow.StartupRecoveryTest do
     assert_receive {:recover, _pid, startup?: true, now: @now}
   end
 
+  test "successful startup recovery is temporary and cannot rerun beside live consumers" do
+    configure_fake({:ok, %{examined: 0, resumed: 0, terminalized: 0, unchanged: 0}}, false)
+    name = :startup_recovery_non_restarting_test
+
+    children = [
+      {StartupRecovery, [recovery: FakeRecovery, now: fn -> @now end, name: name]},
+      %{
+        id: :live_consumer,
+        start: {Agent, :start_link, [fn -> :live end]}
+      }
+    ]
+
+    assert {:ok, supervisor} = Supervisor.start_link(children, strategy: :one_for_one)
+    assert_receive {:recover, recovery_pid, startup?: true, now: @now}
+    consumer_pid = supervisor |> Supervisor.which_children() |> child_pid(:live_consumer)
+    monitor = Process.monitor(recovery_pid)
+
+    Process.exit(recovery_pid, :kill)
+    assert_receive {:DOWN, ^monitor, :process, ^recovery_pid, :killed}
+    assert Process.alive?(consumer_pid)
+    assert Process.whereis(name) == nil
+    refute_receive {:recover, _replacement, _options}, 50
+    Supervisor.stop(supervisor)
+  end
+
   defp configure_fake(result, wait?) do
     Application.put_env(:context_bot, FakeRecovery, %{
       test_pid: self(),
       result: result,
       wait?: wait?
     })
+  end
+
+  defp child_pid(children, id) do
+    children
+    |> Enum.find_value(fn
+      {^id, pid, _type, _modules} -> pid
+      _other -> nil
+    end)
   end
 end

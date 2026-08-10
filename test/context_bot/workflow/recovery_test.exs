@@ -73,6 +73,31 @@ defmodule ContextBot.Workflow.RecoveryTest do
            )
   end
 
+  test "an older ambiguous attempt terminalizes despite a newer legacy reservation" do
+    invocation = invocation(:researching, false, "older-ambiguous")
+    job = executing_job(invocation, "ContextBot.Workers.ResearchWorker", :research)
+    ambiguous = budget_entry(invocation, :sent, nil)
+
+    reserved =
+      %BudgetEntry{}
+      |> BudgetEntry.changeset(%{
+        attempt_key: "recovery-#{invocation.id}-retry-reserved",
+        invocation_id: invocation.id,
+        budget_date: DateTime.to_date(@now),
+        kind: :retry,
+        reserved_microdollars: 5_000_000,
+        state: :reserved,
+        research_claim_token: "old-research-owner"
+      })
+      |> Repo.insert!()
+
+    assert :terminalized = recover_invocation(invocation, startup?: true)
+    assert Repo.reload!(invocation).stage == :failed
+    assert Repo.reload!(ambiguous).state == :indeterminate
+    assert Repo.reload!(reserved).state == :reserved
+    assert Repo.reload!(job).state == "discarded"
+  end
+
   test "a stored provider envelope resumes processing without a new reservation" do
     invocation = invocation(:researching, false, "recorded")
     job = executing_job(invocation, "ContextBot.Workers.ResearchWorker", :research)

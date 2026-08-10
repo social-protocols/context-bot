@@ -10,11 +10,27 @@ defmodule ContextBot.Research.Budget do
   import Ecto.Query
 
   alias ContextBot.Repo
-  alias ContextBot.Research.{BudgetEntry, Pricing}
+  alias ContextBot.Research.{BudgetEntry, Pricing, ResponseEnvelope}
   alias ContextBot.Workflow.Invocation
 
   @type mutation_error :: :daily_budget_exhausted | :stale_claim
   @type claim_token :: String.t() | nil
+
+  @spec unrecorded_exposed_attempt(Invocation.t()) :: BudgetEntry.t() | nil
+  def unrecorded_exposed_attempt(%Invocation{id: invocation_id}) do
+    BudgetEntry
+    |> join(:left, [entry], envelope in ResponseEnvelope,
+      on: envelope.budget_entry_id == entry.id
+    )
+    |> where(
+      [entry, envelope],
+      entry.invocation_id == ^invocation_id and
+        entry.state in [:sent, :indeterminate] and is_nil(envelope.id)
+    )
+    |> order_by([entry], asc: entry.id)
+    |> limit(1)
+    |> Repo.one()
+  end
 
   @spec reserve_next(
           Invocation.t(),
@@ -173,6 +189,30 @@ defmodule ContextBot.Research.Budget do
       end
     end)
   end
+
+  @spec mark_unrecorded_indeterminate(BudgetEntry.t(), DateTime.t(), claim_token()) ::
+          {:ok, BudgetEntry.t()} | {:error, :stale_claim}
+  def mark_unrecorded_indeterminate(%BudgetEntry{id: id}, %DateTime{} = now, claim_token) do
+    update_immediately(id, claim_token, now, fn entry ->
+      if response_envelope_exists?(entry) do
+        entry
+      else
+        mark_entry_indeterminate(entry)
+      end
+    end)
+  end
+
+  defp response_envelope_exists?(entry) do
+    Repo.exists?(from envelope in ResponseEnvelope, where: envelope.budget_entry_id == ^entry.id)
+  end
+
+  defp mark_entry_indeterminate(%BudgetEntry{state: :sent} = entry) do
+    entry
+    |> BudgetEntry.changeset(%{state: :indeterminate, settled_microdollars: nil})
+    |> Repo.update!()
+  end
+
+  defp mark_entry_indeterminate(entry), do: entry
 
   @spec reconcile_attempt(BudgetEntry.t()) ::
           {:reuse, BudgetEntry.t()}

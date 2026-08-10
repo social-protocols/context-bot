@@ -49,7 +49,21 @@ defmodule ContextBot.Research.Runner do
 
   defp resume(invocation, config) do
     invocation = Repo.reload!(invocation)
-    resume_attempt(invocation, latest_attempt(invocation), config)
+
+    case config.budget.unrecorded_exposed_attempt(invocation) do
+      nil -> resume_attempt(invocation, latest_attempt(invocation), config)
+      ambiguous -> terminalize_ambiguous_attempt(ambiguous, config)
+    end
+  end
+
+  defp terminalize_ambiguous_attempt(%BudgetEntry{state: :indeterminate}, _config),
+    do: {:error, :interrupted_after_send}
+
+  defp terminalize_ambiguous_attempt(%BudgetEntry{} = entry, config) do
+    case config.budget.mark_unrecorded_indeterminate(entry, now(config), config.claim_token) do
+      {:ok, _indeterminate} -> {:error, :interrupted_after_send}
+      {:error, :stale_claim} -> {:error, :stale_claim}
+    end
   end
 
   defp resume_attempt(invocation, nil, config),

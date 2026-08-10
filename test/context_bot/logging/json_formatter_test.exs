@@ -26,7 +26,7 @@ defmodule ContextBot.Logging.JSONFormatterTest do
     assert %{
              "timestamp" => "2026-08-10T18:20:00.000000Z",
              "severity" => "info",
-             "message" => "research_finished",
+             "message" => "logger_event",
              "invocation_id" => 42,
              "stage" => "researching",
              "duration_ms" => 125
@@ -51,6 +51,18 @@ defmodule ContextBot.Logging.JSONFormatterTest do
         |> IO.iodata_to_binary()
 
       assert %{"message" => "logger_event", "severity" => "error"} = Jason.decode!(line)
+      refute line =~ secret
+    end
+  end
+
+  test "redacts token-shaped arbitrary messages that merely look like event names" do
+    for secret <- ["privatequestion", "password123", "skantsecret"] do
+      line =
+        %{level: :error, msg: {:string, secret}, meta: %{time: 0}}
+        |> JSONFormatter.format(%{})
+        |> IO.iodata_to_binary()
+
+      assert %{"message" => "logger_event"} = Jason.decode!(line)
       refute line =~ secret
     end
   end

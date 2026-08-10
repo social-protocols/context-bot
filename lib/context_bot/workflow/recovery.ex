@@ -9,7 +9,7 @@ defmodule ContextBot.Workflow.Recovery do
   import Ecto.Query
 
   alias ContextBot.Repo
-  alias ContextBot.Research.{BudgetEntry, ResponseEnvelope}
+  alias ContextBot.Research.{Budget, BudgetEntry, ResponseEnvelope}
   alias ContextBot.Workflow.Invocation
 
   @candidate_stages [
@@ -136,17 +136,13 @@ defmodule ContextBot.Workflow.Recovery do
 
   defp recover_stage(%Invocation{stage: stage} = invocation, job, work, config)
        when stage in [:thread_ready, :researching] do
-    case latest_budget_entry(invocation) do
-      %BudgetEntry{state: state} = entry when state in [:sent, :indeterminate] ->
-        if response_envelope?(entry) do
-          resume_research(invocation, job, work, config.now)
-        else
-          mark_budget_indeterminate(entry)
-          terminalize(invocation, job, :provider_response, "interrupted_after_send", config.now)
-        end
+    case Budget.unrecorded_exposed_attempt(invocation) do
+      %BudgetEntry{} = entry ->
+        mark_budget_indeterminate(entry)
+        terminalize(invocation, job, :provider_response, "interrupted_after_send", config.now)
 
-      _safe_or_unexposed ->
-        resume_research(invocation, job, work, config.now)
+      nil ->
+        recover_safe_research(invocation, job, work, config)
     end
   end
 
@@ -170,6 +166,21 @@ defmodule ContextBot.Workflow.Recovery do
     mark_checked(invocation, config.now)
     make_available(job, invocation, work, config.now)
     :resumed
+  end
+
+  defp recover_safe_research(invocation, job, work, config) do
+    case latest_budget_entry(invocation) do
+      %BudgetEntry{state: state} = entry when state in [:sent, :indeterminate] ->
+        if response_envelope?(entry) do
+          resume_research(invocation, job, work, config.now)
+        else
+          mark_budget_indeterminate(entry)
+          terminalize(invocation, job, :provider_response, "interrupted_after_send", config.now)
+        end
+
+      _safe_or_unexposed ->
+        resume_research(invocation, job, work, config.now)
+    end
   end
 
   defp orphaned?(%Invocation{stage: stage} = invocation, nil, config)

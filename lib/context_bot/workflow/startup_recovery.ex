@@ -9,6 +9,15 @@ defmodule ContextBot.Workflow.StartupRecovery do
 
   alias ContextBot.Workflow.Recovery
 
+  def child_spec(options) do
+    %{
+      id: __MODULE__,
+      start: {__MODULE__, :start_link, [options]},
+      restart: :temporary,
+      type: :worker
+    }
+  end
+
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(options \\ []) when is_list(options) do
     GenServer.start_link(__MODULE__, options, name: Keyword.get(options, :name, __MODULE__))

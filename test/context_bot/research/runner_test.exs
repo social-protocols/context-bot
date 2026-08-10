@@ -330,6 +330,19 @@ defmodule ContextBot.Research.RunnerTest do
              )
   end
 
+  test "an older ambiguous attempt blocks a newer legacy reservation" do
+    invocation = invocation("legacy-ambiguous-before-reserved")
+
+    ambiguous = insert_budget_entry(invocation, 1, :research, :sent)
+    reserved = insert_budget_entry(invocation, 2, :retry, :reserved)
+    Process.put(:runner_client_results, [])
+
+    assert {:error, :interrupted_after_send} = Runner.run(invocation, options())
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+    assert Repo.reload!(ambiguous).state == :indeterminate
+    assert Repo.reload!(reserved).state == :reserved
+  end
+
   test "a crash after HTTP return but before persistence never replays" do
     invocation = invocation("crash-http")
     body = fixture("tool_success.json")
@@ -910,6 +923,21 @@ defmodule ContextBot.Research.RunnerTest do
       )
 
     bytes
+  end
+
+  defp insert_budget_entry(invocation, sequence, kind, state) do
+    %BudgetEntry{}
+    |> BudgetEntry.changeset(%{
+      attempt_key: "invocation-#{invocation.id}-attempt-#{sequence}-#{kind}",
+      invocation_id: invocation.id,
+      budget_date: DateTime.to_date(@now),
+      kind: kind,
+      reserved_microdollars: 1_000_000,
+      state: state,
+      sent_at: if(state == :sent, do: @now),
+      research_claim_token: @claim_token
+    })
+    |> Repo.insert!()
   end
 
   defp decoded_fixture(name), do: name |> fixture() |> Jason.decode!()

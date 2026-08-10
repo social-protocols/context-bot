@@ -20,7 +20,7 @@ defmodule ContextBot.Logging.JSONFormatter do
     queue attempt_kind stage failure_category failure_reason
   )a)
 
-  @event_name ~r/\A[a-z][a-z0-9_.-]{0,127}\z/
+  @safe_messages MapSet.new(~w(context_bot_attempt context_bot_startup_recovery))
   @token ~r/\A[a-z][a-z0-9_-]{0,127}\z/
   @worker ~r/\AElixir\.[A-Za-z0-9_.]{1,240}\z|\A[A-Z][A-Za-z0-9_.]{1,247}\z/
   @request_id ~r/\A[A-Za-z0-9_-]{1,128}\z/
@@ -102,7 +102,7 @@ defmodule ContextBot.Logging.JSONFormatter do
   defp safe_message(_value), do: "logger_event"
 
   defp event_name(value) when is_binary(value) do
-    if Regex.match?(@event_name, value), do: value, else: "logger_event"
+    if MapSet.member?(@safe_messages, value), do: value, else: "logger_event"
   end
 
   defp event_name(_value), do: "logger_event"
