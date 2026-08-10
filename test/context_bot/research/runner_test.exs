@@ -307,7 +307,7 @@ defmodule ContextBot.Research.RunnerTest do
     assert attempt_key == reserved.attempt_key
   end
 
-  test "a crash after sent makes the exposed attempt indeterminate and replay reserves a retry" do
+  test "a crash after sent becomes terminal without another provider call" do
     invocation = invocation("crash-sent")
     Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
 
@@ -320,13 +320,17 @@ defmodule ContextBot.Research.RunnerTest do
     assert [%BudgetEntry{state: :sent, response_recorded_at: nil}] = Repo.all(BudgetEntry)
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
 
-    assert {:ok, _result} = Runner.run(invocation, options(crash: crash))
+    assert {:error, :interrupted_after_send} = Runner.run(invocation, options(crash: crash))
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
 
-    assert Enum.map(Repo.all(from entry in BudgetEntry, order_by: entry.id), &{&1.kind, &1.state}) ==
-             [{:research, :indeterminate}, {:retry, :settled}]
+    assert [{:research, :indeterminate}] ==
+             Enum.map(
+               Repo.all(from entry in BudgetEntry, order_by: entry.id),
+               &{&1.kind, &1.state}
+             )
   end
 
-  test "a crash after HTTP return but before persistence replays with a new charged key" do
+  test "a crash after HTTP return but before persistence never replays" do
     invocation = invocation("crash-http")
     body = fixture("tool_success.json")
 
@@ -343,11 +347,16 @@ defmodule ContextBot.Research.RunnerTest do
 
     assert responses(invocation) == []
     assert [%BudgetEntry{state: :sent, response_recorded_at: nil}] = Repo.all(BudgetEntry)
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
 
-    assert {:ok, _result} = Runner.run(invocation, options(crash: crash))
+    assert {:error, :interrupted_after_send} = Runner.run(invocation, options(crash: crash))
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
 
-    assert Enum.map(Repo.all(from entry in BudgetEntry, order_by: entry.id), &{&1.kind, &1.state}) ==
-             [{:research, :indeterminate}, {:retry, :settled}]
+    assert [{:research, :indeterminate}] ==
+             Enum.map(
+               Repo.all(from entry in BudgetEntry, order_by: entry.id),
+               &{&1.kind, &1.state}
+             )
   end
 
   test "a crash after response persistence resumes decode and settlement without another POST" do
@@ -398,7 +407,7 @@ defmodule ContextBot.Research.RunnerTest do
     assert attempt_key == reserved.attempt_key
   end
 
-  test "a new owner replays an exposed attempt only under a new reservation and key" do
+  test "a new owner terminalizes an exposed attempt without replay" do
     invocation = invocation("stale-sent")
     Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
     crash = crash_once(:after_sent)
@@ -407,25 +416,17 @@ defmodule ContextBot.Research.RunnerTest do
       Runner.run(invocation, options(crash: crash))
     end
 
-    assert [%BudgetEntry{state: :sent, attempt_key: exposed_key}] = Repo.all(BudgetEntry)
+    assert [%BudgetEntry{state: :sent}] = Repo.all(BudgetEntry)
     assert {:ok, _new_owner} = take_over(invocation, "new-owner")
 
     assert {:error, :stale_claim} = Runner.run(invocation, options(crash: crash))
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
 
-    assert {:ok, _result} =
-             Runner.run(
-               invocation,
-               options(claim_token: "new-owner", crash: crash)
-             )
+    assert {:error, :interrupted_after_send} =
+             Runner.run(invocation, options(claim_token: "new-owner", crash: crash))
 
-    assert_received {:anthropic_call, _request, %{attempt_key: replay_key}, false}
-    refute replay_key == exposed_key
-
-    assert Enum.map(Repo.all(from entry in BudgetEntry, order_by: entry.id), & &1.state) == [
-             :indeterminate,
-             :settled
-           ]
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+    assert Enum.map(Repo.all(BudgetEntry), & &1.state) == [:indeterminate]
   end
 
   test "a takeover after the sent marker stops the stale owner before POST" do
@@ -537,44 +538,25 @@ defmodule ContextBot.Research.RunnerTest do
     assert Repo.reload!(invocation).anthropic_messages == initial_request
   end
 
-  test "an ambiguous timeout retries only once and retains both reservations" do
-    invocation = invocation("ambiguous-timeout")
-    Process.put(:runner_client_results, [{:error, :timeout}, {:error, :timeout}])
+  test "every transport result after send is terminal and never retried" do
+    for reason <- [:timeout, :transport, :response_too_large, :unknown_transport] do
+      invocation = invocation("terminal-transport-#{reason}")
+      Process.put(:runner_client_results, [{:error, reason}])
 
-    assert {:error, :ambiguous_timeout} = Runner.run(invocation, options())
-    assert_received {:anthropic_call, _request, %{kind: :research}, false}
-    assert_received {:anthropic_call, _request, %{kind: :retry}, false}
-    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+      assert {:error, :interrupted_after_send} = Runner.run(invocation, options())
+      assert_received {:anthropic_call, _request, %{kind: :research}, false}
+      refute_received {:anthropic_call, _request, _metadata, _in_transaction}
 
-    entries = Repo.all(from entry in BudgetEntry, order_by: entry.id)
-
-    assert Enum.map(entries, &{&1.kind, &1.state}) == [
-             {:research, :indeterminate},
-             {:retry, :indeterminate}
-           ]
-  end
-
-  test "known transport failures use the configured bounded retry count with fresh reservations" do
-    invocation = invocation("transport-retries")
-
-    Process.put(:runner_client_results, [
-      {:error, :transport},
-      {:error, :transport},
-      {:error, :transport}
-    ])
-
-    assert {:error, :provider_transport} = Runner.run(invocation, options())
-    assert_received {:anthropic_call, _request, %{kind: :research}, false}
-    assert_received {:anthropic_call, _request, %{kind: :retry}, false}
-    assert_received {:anthropic_call, _request, %{kind: :retry}, false}
-    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
-
-    assert Enum.map(Repo.all(from entry in BudgetEntry, order_by: entry.id), &{&1.kind, &1.state}) ==
-             [
-               {:research, :indeterminate},
-               {:retry, :indeterminate},
-               {:retry, :indeterminate}
-             ]
+      assert [{:research, :indeterminate}] ==
+               Enum.map(
+                 Repo.all(
+                   from entry in BudgetEntry,
+                     where: entry.invocation_id == ^invocation.id,
+                     order_by: entry.id
+                 ),
+                 &{&1.kind, &1.state}
+               )
+    end
   end
 
   test "continues pause turns with opaque content and aggregates all usage and tool counts" do

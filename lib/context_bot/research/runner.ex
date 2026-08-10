@@ -64,23 +64,23 @@ defmodule ContextBot.Research.Runner do
   end
 
   defp resume_attempt(
-         invocation,
+         _invocation,
          %BudgetEntry{state: :sent, response_recorded_at: nil} = entry,
          config
        ) do
     case config.budget.reconcile_attempt(entry, now(config), config.claim_token) do
-      {:indeterminate, indeterminate} -> retry_exposed(invocation, indeterminate, config)
+      {:indeterminate, _indeterminate} -> {:error, :interrupted_after_send}
       {:error, :stale_claim} -> {:error, :stale_claim}
       _unexpected -> {:error, :invalid_attempt_state}
     end
   end
 
   defp resume_attempt(
-         invocation,
-         %BudgetEntry{state: :indeterminate, response_recorded_at: nil} = entry,
-         config
+         _invocation,
+         %BudgetEntry{state: :indeterminate, response_recorded_at: nil},
+         _config
        ),
-       do: retry_exposed(invocation, entry, config)
+       do: {:error, :interrupted_after_send}
 
   defp resume_attempt(invocation, %BudgetEntry{} = entry, config) do
     case stored_response(invocation, entry.attempt_key, config) do
@@ -157,52 +157,10 @@ defmodule ContextBot.Research.Runner do
     end
   end
 
-  defp handle_transport_error(invocation, sent, :timeout, config) do
-    with {:ok, _indeterminate} <-
-           config.budget.mark_indeterminate(sent, now(config), config.claim_token) do
-      if ambiguous_attempt_count(invocation) <= 1 do
-        config.sleep.(retry_delay_ms(ambiguous_attempt_count(invocation), nil, config))
-        start_attempt(Repo.reload!(invocation), :retry, config)
-      else
-        {:error, :ambiguous_timeout}
-      end
-    end
-  end
-
-  defp handle_transport_error(invocation, sent, :transport, config) do
-    with {:ok, _indeterminate} <-
-           config.budget.mark_indeterminate(sent, now(config), config.claim_token) do
-      retry_count = unrecorded_transport_retry_count(invocation)
-
-      if retry_count < config.max_http_retries do
-        config.sleep.(retry_delay_ms(retry_count + 1, nil, config))
-        start_attempt(Repo.reload!(invocation), :retry, config)
-      else
-        {:error, :provider_transport}
-      end
-    end
-  end
-
-  defp handle_transport_error(_invocation, sent, :response_too_large, config) do
-    with {:ok, _indeterminate} <-
-           config.budget.mark_indeterminate(sent, now(config), config.claim_token) do
-      {:error, :provider_response_too_large}
-    end
-  end
-
   defp handle_transport_error(_invocation, sent, _reason, config) do
     with {:ok, _indeterminate} <-
            config.budget.mark_indeterminate(sent, now(config), config.claim_token) do
-      {:error, :provider_transport}
-    end
-  end
-
-  defp retry_exposed(invocation, _entry, config) do
-    if ambiguous_attempt_count(invocation) <= 1 do
-      config.sleep.(retry_delay_ms(ambiguous_attempt_count(invocation), nil, config))
-      start_attempt(Repo.reload!(invocation), :retry, config)
-    else
-      {:error, :ambiguous_timeout}
+      {:error, :interrupted_after_send}
     end
   end
 
@@ -444,32 +402,12 @@ defmodule ContextBot.Research.Runner do
     )
   end
 
-  defp ambiguous_attempt_count(invocation) do
-    BudgetEntry
-    |> where(
-      [entry],
-      entry.invocation_id == ^invocation.id and entry.state == :indeterminate and
-        is_nil(entry.response_recorded_at)
-    )
-    |> Repo.aggregate(:count)
-  end
-
   defp recorded_retry_count(invocation) do
     BudgetEntry
     |> where(
       [entry],
       entry.invocation_id == ^invocation.id and entry.kind == :retry and
         not is_nil(entry.response_recorded_at)
-    )
-    |> Repo.aggregate(:count)
-  end
-
-  defp unrecorded_transport_retry_count(invocation) do
-    BudgetEntry
-    |> where(
-      [entry],
-      entry.invocation_id == ^invocation.id and entry.kind == :retry and
-        entry.state == :indeterminate and is_nil(entry.response_recorded_at)
     )
     |> Repo.aggregate(:count)
   end

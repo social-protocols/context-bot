@@ -196,7 +196,11 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     Logger.configure(level: :info)
     on_exit(fn -> Logger.configure(level: previous_level) end)
 
-    log = capture_log([level: :info], fn -> assert :ok = perform(invocation) end)
+    log =
+      capture_log(
+        [level: :info, formatter: {ContextBot.Logging.JSONFormatter, %{}}],
+        fn -> assert :ok = perform(invocation) end
+      )
 
     assert log =~ "\"invocation_id\":#{invocation.id}"
     assert log =~ "\"stage\":\"researching\""
@@ -392,6 +396,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     for {suffix, runner_error, category} <- [
           {"auth", :provider_auth, :provider_auth},
           {"malformed", :malformed_provider_response, :provider_response},
+          {"interrupted", :interrupted_after_send, :provider_response},
           {"tool-cap", :tool_use_limit_exceeded, :provider_response}
         ] do
       invocation = invocation(suffix, :thread_ready)
