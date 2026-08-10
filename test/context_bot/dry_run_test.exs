@@ -117,6 +117,67 @@ defmodule ContextBot.DryRunTest do
     assert Repo.reload!(invocation).stage == :capturing_thread
   end
 
+  test "await reports the initial row and each persisted stage transition once" do
+    invocation = invocation("stage-updates")
+
+    sleep = fn _milliseconds ->
+      current = Repo.reload!(invocation)
+
+      next_stage =
+        case current.stage do
+          :capturing_thread -> :thread_ready
+          :thread_ready -> :researching
+          :researching -> :complete
+        end
+
+      current
+      |> Invocation.transition_changeset(%{status: next_stage, stage: next_stage})
+      |> Repo.update!()
+    end
+
+    owner = self()
+
+    assert {:ok, settled} =
+             DryRun.await(invocation,
+               timeout_ms: 1_000,
+               poll_interval_ms: 1,
+               sleep: sleep,
+               on_update: fn current -> send(owner, {:stage, current.stage}) end
+             )
+
+    assert settled.stage == :complete
+    assert_receive {:stage, :capturing_thread}
+    assert_receive {:stage, :thread_ready}
+    assert_receive {:stage, :researching}
+    assert_receive {:stage, :complete}
+    refute_receive {:stage, _duplicate}
+  end
+
+  test "await does not repeat callbacks while the persisted stage is unchanged" do
+    invocation = invocation("same-stage")
+    Process.put(:monotonic_call, 0)
+
+    monotonic_ms = fn ->
+      value = Process.get(:monotonic_call)
+      Process.put(:monotonic_call, value + 1)
+      value
+    end
+
+    owner = self()
+
+    assert {:error, :timeout} =
+             DryRun.await(invocation,
+               timeout_ms: 3,
+               poll_interval_ms: 1,
+               sleep: fn _milliseconds -> :ok end,
+               monotonic_ms: monotonic_ms,
+               on_update: fn current -> send(owner, {:stage, current.stage}) end
+             )
+
+    assert_receive {:stage, :capturing_thread}
+    refute_receive {:stage, :capturing_thread}
+  end
+
   defp invocation(suffix) do
     run_id = Ecto.UUID.generate()
 

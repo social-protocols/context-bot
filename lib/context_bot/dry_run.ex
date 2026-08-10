@@ -45,13 +45,14 @@ defmodule ContextBot.DryRun do
     timeout_ms = Keyword.get(options, :timeout_ms, @default_timeout_ms)
     poll_interval_ms = Keyword.get(options, :poll_interval_ms, @default_poll_interval_ms)
     sleep = Keyword.get(options, :sleep, &Process.sleep/1)
+    on_update = Keyword.get(options, :on_update, fn _invocation -> :ok end)
 
     monotonic_ms =
       Keyword.get(options, :monotonic_ms, fn -> System.monotonic_time(:millisecond) end)
 
-    if valid_wait_options?(timeout_ms, poll_interval_ms, sleep, monotonic_ms) do
+    if valid_wait_options?(timeout_ms, poll_interval_ms, sleep, monotonic_ms, on_update) do
       deadline = monotonic_ms.() + timeout_ms
-      await_loop(id, deadline, poll_interval_ms, sleep, monotonic_ms)
+      await_loop(id, deadline, poll_interval_ms, sleep, monotonic_ms, on_update, nil)
     else
       {:error, :invalid_input}
     end
@@ -59,23 +60,45 @@ defmodule ContextBot.DryRun do
 
   def await(%Invocation{}, _options), do: {:error, :invalid_input}
 
-  defp await_loop(id, deadline, poll_interval_ms, sleep, monotonic_ms) do
+  defp await_loop(
+         id,
+         deadline,
+         poll_interval_ms,
+         sleep,
+         monotonic_ms,
+         on_update,
+         last_stage
+       ) do
     case Repo.get(Invocation, id) do
-      %Invocation{stage: :complete} = invocation ->
-        {:ok, invocation}
+      %Invocation{} = invocation ->
+        last_stage = notify_stage(invocation, last_stage, on_update)
 
-      %Invocation{stage: :failed} = invocation ->
-        {:error, invocation}
+        case invocation.stage do
+          :complete ->
+            {:ok, invocation}
 
-      %Invocation{stage: :deferred_budget} = invocation ->
-        {:deferred, invocation}
+          :failed ->
+            {:error, invocation}
 
-      %Invocation{} ->
-        if monotonic_ms.() >= deadline do
-          {:error, :timeout}
-        else
-          sleep.(poll_interval_ms)
-          await_loop(id, deadline, poll_interval_ms, sleep, monotonic_ms)
+          :deferred_budget ->
+            {:deferred, invocation}
+
+          _nonterminal ->
+            if monotonic_ms.() >= deadline do
+              {:error, :timeout}
+            else
+              sleep.(poll_interval_ms)
+
+              await_loop(
+                id,
+                deadline,
+                poll_interval_ms,
+                sleep,
+                monotonic_ms,
+                on_update,
+                last_stage
+              )
+            end
         end
 
       nil ->
@@ -83,9 +106,17 @@ defmodule ContextBot.DryRun do
     end
   end
 
-  defp valid_wait_options?(timeout_ms, poll_interval_ms, sleep, monotonic_ms) do
+  defp notify_stage(%Invocation{stage: stage}, stage, _on_update), do: stage
+
+  defp notify_stage(%Invocation{stage: stage} = invocation, _last_stage, on_update) do
+    on_update.(invocation)
+    stage
+  end
+
+  defp valid_wait_options?(timeout_ms, poll_interval_ms, sleep, monotonic_ms, on_update) do
     is_integer(timeout_ms) and timeout_ms >= 0 and is_integer(poll_interval_ms) and
-      poll_interval_ms > 0 and is_function(sleep, 1) and is_function(monotonic_ms, 0)
+      poll_interval_ms > 0 and is_function(sleep, 1) and is_function(monotonic_ms, 0) and
+      is_function(on_update, 1)
   end
 
   defp validate_question(question) do

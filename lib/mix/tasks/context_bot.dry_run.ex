@@ -6,6 +6,7 @@ defmodule Mix.Tasks.ContextBot.DryRun do
   import Ecto.Query
 
   alias ContextBot.{DryRun, Repo, Settings}
+  alias ContextBot.DryRun.Progress
   alias ContextBot.Research.BudgetEntry
 
   @requirements ["app.config"]
@@ -16,6 +17,7 @@ defmodule Mix.Tasks.ContextBot.DryRun do
     config = Application.get_env(:context_bot, __MODULE__, [])
     service = Keyword.get(config, :service, DryRun)
     runtime = Keyword.get(config, :runtime, ContextBot.DryRun.Runtime)
+    progress_module = Keyword.get(config, :progress, Progress)
     settled_cost = Keyword.get(config, :settled_cost, &settled_cost/1)
     settings = Application.fetch_env!(:context_bot, :settings)
 
@@ -23,20 +25,27 @@ defmodule Mix.Tasks.ContextBot.DryRun do
     ensure_runtime!(runtime)
 
     invocation = create!(service, post, question)
+    Mix.shell().info("dry_run_id=#{invocation.id}")
 
-    case service.await(invocation) do
+    progress =
+      progress_module.start(invocation,
+        anthropic_timeout_ms: settings.anthropic_http_timeout_ms
+      )
+
+    {result, progress} = await_with_progress(service, invocation, progress_module, progress)
+    progress_module.finish(progress)
+
+    case result do
       {:ok, settled} ->
         print_complete(settled, settled_cost.(settled))
         :ok
 
       {:deferred, deferred} ->
-        Mix.shell().info("dry_run_id=#{deferred.id}")
         Mix.shell().info("status=deferred_budget")
         Mix.shell().info("defer_until=#{datetime(deferred.defer_until)}")
         Mix.raise("dry run deferred by the configured Anthropic daily budget")
 
       {:error, %ContextBot.Workflow.Invocation{} = failed} ->
-        Mix.shell().info("dry_run_id=#{failed.id}")
         Mix.shell().info("status=failed")
         Mix.shell().info("failure_category=#{failure_category(failed.failure_category)}")
         Mix.shell().info("completed_at=#{datetime(failed.completed_at)}")
@@ -80,7 +89,6 @@ defmodule Mix.Tasks.ContextBot.DryRun do
   defp print_complete(invocation, cost_microdollars) do
     totals = get_in(invocation.anthropic_usage || %{}, ["totals"]) || %{}
 
-    Mix.shell().info("dry_run_id=#{invocation.id}")
     Mix.shell().info("status=complete")
     Mix.shell().info("answer=#{one_line(invocation.selected_reply)}")
 
@@ -90,6 +98,42 @@ defmodule Mix.Tasks.ContextBot.DryRun do
         "tool_uses=#{integer((invocation.anthropic_usage || %{})["tool_uses"])} " <>
         "cost_microdollars=#{integer(cost_microdollars)}"
     )
+  end
+
+  defp await_with_progress(service, invocation, progress_module, progress) do
+    owner = self()
+    token = make_ref()
+
+    {_pid, monitor} =
+      spawn_monitor(fn ->
+        result =
+          service.await(invocation,
+            on_update: fn current -> send(owner, {token, :progress, current}) end
+          )
+
+        send(owner, {token, :result, result})
+      end)
+
+    await_foreground(token, monitor, progress_module, progress)
+  end
+
+  defp await_foreground(token, monitor, progress_module, progress) do
+    receive do
+      {^token, :progress, invocation} ->
+        progress = progress_module.update(progress, invocation)
+        await_foreground(token, monitor, progress_module, progress)
+
+      {^token, :result, result} ->
+        Process.demonitor(monitor, [:flush])
+        {result, progress}
+
+      {:DOWN, ^monitor, :process, _pid, _reason} ->
+        {{:error, :await_failed}, progress}
+    after
+      100 ->
+        progress = progress_module.tick(progress)
+        await_foreground(token, monitor, progress_module, progress)
+    end
   end
 
   defp settled_cost(invocation) do

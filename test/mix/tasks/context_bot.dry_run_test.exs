@@ -7,10 +7,38 @@ defmodule Mix.Tasks.ContextBot.DryRunTest.Service do
     config[:create_result]
   end
 
-  def await(invocation) do
+  def await(invocation, options) do
     config = Application.fetch_env!(:context_bot, __MODULE__)
-    send(config[:test_pid], {:await, invocation.id})
+    send(config[:test_pid], {:await, invocation.id, options})
+
+    Enum.each(Keyword.get(config, :updates, []), options[:on_update])
+    Process.sleep(Keyword.get(config, :await_delay_ms, 0))
     config[:await_result]
+  end
+end
+
+defmodule Mix.Tasks.ContextBot.DryRunTest.Progress do
+  @moduledoc false
+
+  def start(invocation, options) do
+    test_pid = Application.fetch_env!(:context_bot, __MODULE__)[:test_pid]
+    send(test_pid, {:progress_start, invocation.id, options})
+    %{test_pid: test_pid, invocation_id: invocation.id}
+  end
+
+  def update(state, invocation) do
+    send(state.test_pid, {:progress_update, invocation.id, invocation.stage})
+    state
+  end
+
+  def tick(state) do
+    send(state.test_pid, {:progress_tick, state.invocation_id})
+    state
+  end
+
+  def finish(state) do
+    send(state.test_pid, {:progress_finish, state.invocation_id})
+    :ok
   end
 end
 
@@ -30,7 +58,7 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
   alias ContextBot.Settings
   alias ContextBot.Workflow.Invocation
   alias Mix.Tasks.ContextBot.DryRun, as: DryRunTask
-  alias Mix.Tasks.ContextBot.DryRunTest.{Runtime, Service}
+  alias Mix.Tasks.ContextBot.DryRunTest.{Progress, Runtime, Service}
 
   setup do
     original_shell = Mix.shell()
@@ -39,6 +67,7 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     original_task = Application.get_env(:context_bot, Mix.Tasks.ContextBot.DryRun, :missing)
     original_service = Application.get_env(:context_bot, Service, :missing)
     original_runtime = Application.get_env(:context_bot, Runtime, :missing)
+    original_progress = Application.get_env(:context_bot, Progress, :missing)
 
     Mix.shell(Mix.Shell.Process)
     flush_mailbox()
@@ -51,10 +80,12 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
 
     Application.put_env(:context_bot, :anthropic_api_key, "task-test-provider-key")
     Application.put_env(:context_bot, Runtime, test_pid: self(), result: :ok)
+    Application.put_env(:context_bot, Progress, test_pid: self())
 
     Application.put_env(:context_bot, Mix.Tasks.ContextBot.DryRun,
       service: Service,
       runtime: Runtime,
+      progress: Progress,
       settled_cost: fn _invocation -> 321 end
     )
 
@@ -65,6 +96,7 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
       restore_env(Mix.Tasks.ContextBot.DryRun, original_task)
       restore_env(Service, original_service)
       restore_env(Runtime, original_runtime)
+      restore_env(Progress, original_progress)
     end)
 
     :ok
@@ -141,7 +173,11 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     assert_received {:create, "https://bsky.app/profile/example.test/post/3abc",
                      "What's missing?", []}
 
-    assert_received {:await, 42}
+    assert_received {:await, 42, await_options}
+    assert is_function(await_options[:on_update], 1)
+    assert_received {:progress_start, 42, progress_options}
+    assert progress_options[:anthropic_timeout_ms] == 300_000
+    assert_received {:progress_finish, 42}
 
     output = shell_output()
     assert output =~ "dry_run_id=42"
@@ -156,6 +192,28 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     refute output =~ "headers"
     refute output =~ "raw_body"
     refute output =~ "\e"
+    assert length(Regex.scan(~r/^dry_run_id=42$/m, output)) == 1
+  end
+
+  test "forwards durable stage changes and animates while awaiting" do
+    created = %Invocation{id: 45, dry_run: true, stage: :capturing_thread}
+    researching = %{created | stage: :researching}
+    complete = %{created | stage: :complete, selected_reply: "Done."}
+
+    Application.put_env(:context_bot, Service,
+      test_pid: self(),
+      create_result: {:ok, created},
+      updates: [created, researching, complete],
+      await_delay_ms: 120,
+      await_result: {:ok, complete}
+    )
+
+    assert :ok = run(["post", "question"])
+    assert_received {:progress_update, 45, :capturing_thread}
+    assert_received {:progress_update, 45, :researching}
+    assert_received {:progress_update, 45, :complete}
+    assert_received {:progress_tick, 45}
+    assert_received {:progress_finish, 45}
   end
 
   test "turns structured public-read failures into a finite safe Mix error" do
