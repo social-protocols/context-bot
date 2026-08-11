@@ -33,6 +33,26 @@ anthropic_only_output="$(
 [[ "$anthropic_only_output" != *"anthropic-key-test-value"* ]] ||
 	fail "Anthropic-only loading leaked the secret value"
 
+live_run_output="$(
+	(
+		export BITWARDEN_ITEM_ID="test-item"
+		bw() {
+			printf '%s\n' '{"fields":[{"name":"BOT_APP_PASSWORD","value":"app-password-test-value"},{"name":"ANTHROPIC_API_KEY","value":"anthropic-key-test-value"}]}'
+		}
+		# shellcheck source=secrets.sh
+		source "$project_root/secrets.sh" BOT_APP_PASSWORD ANTHROPIC_API_KEY
+		[[ "$BOT_APP_PASSWORD" == "app-password-test-value" ]]
+		[[ "$ANTHROPIC_API_KEY" == "anthropic-key-test-value" ]]
+		[[ -z "${FLY_API_TOKEN+x}" ]]
+		[[ -z "${SECRET_KEY_BASE+x}" ]]
+	) 2>&1
+)"
+
+[[ "$live_run_output" == $'secrets: loaded BOT_APP_PASSWORD\nsecrets: loaded ANTHROPIC_API_KEY' ]] ||
+	fail "live-run loading did not export exactly the requested secrets"
+[[ "$live_run_output" != *"app-password-test-value"* ]] || fail "live-run loading leaked the bot password"
+[[ "$live_run_output" != *"anthropic-key-test-value"* ]] || fail "live-run loading leaked the Anthropic key"
+
 if empty_request_output="$(
 	(
 		export BITWARDEN_ITEM_ID="test-item"

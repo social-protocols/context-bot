@@ -27,19 +27,20 @@ test path="":
       mix test
       bash test/secrets_test.sh
       bash test/dry_run_wrapper_test.sh
+      bash test/live_run_wrapper_test.sh
     fi
 
 format:
     mix format
-    shfmt -w dry-run.sh secrets.sh test/dry_run_wrapper_test.sh test/secrets_test.sh
+    shfmt -w dry-run.sh live-run.sh secrets.sh test/dry_run_wrapper_test.sh test/live_run_wrapper_test.sh test/secrets_test.sh
 
 format-check:
     mix format --check-formatted
-    shfmt -d dry-run.sh secrets.sh test/dry_run_wrapper_test.sh test/secrets_test.sh
+    shfmt -d dry-run.sh live-run.sh secrets.sh test/dry_run_wrapper_test.sh test/live_run_wrapper_test.sh test/secrets_test.sh
 
 lint:
     mix credo --strict
-    shellcheck dry-run.sh secrets.sh test/dry_run_wrapper_test.sh test/secrets_test.sh
+    shellcheck dry-run.sh live-run.sh secrets.sh test/dry_run_wrapper_test.sh test/live_run_wrapper_test.sh test/secrets_test.sh
 
 typecheck:
     mix dialyzer
@@ -64,6 +65,9 @@ db-reset:
 
 dry-run post question:
     ./dry-run.sh {{quote(post)}} {{quote(question)}}
+
+live-run invocation_url:
+    ./live-run.sh {{quote(invocation_url)}}
 
 reprocess invocation_id:
     mix context_bot.reprocess {{quote(invocation_id)}}
