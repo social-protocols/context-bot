@@ -1,28 +1,43 @@
 defmodule ContextBot.DryRun.Runtime do
   @moduledoc false
 
-  alias ContextBot.Settings
+  alias ContextBot.{Settings, Workers.DeferredWorker}
   alias ContextBot.Workflow.Recovery
 
   @safe_queues [:dry_research, :dry_thread]
   @public_children [ContextBot.ATProto.Session, ContextBot.Mentions.Poller]
 
-  @spec ensure_started(keyword()) :: :ok | {:error, atom()}
-  def ensure_started(options \\ []) when is_list(options) do
+  @spec ensure_application_started() :: :ok | {:error, atom()}
+  def ensure_application_started do
     settings = Application.fetch_env!(:context_bot, :settings)
-    recovery = Keyword.get(options, :recovery, Recovery)
-    now = Keyword.get(options, :now, &DateTime.utc_now/0)
 
     if Settings.bot_enabled?(settings) do
       {:error, :bot_enabled}
     else
       with {:ok, _applications} <- Application.ensure_all_started(:context_bot),
-           false <- public_child_running?() do
-        ensure_oban(recovery, now)
+           false <- public_child_running?(),
+           nil <- Oban.whereis(Oban) do
+        :ok
       else
         true -> {:error, :public_worker_running}
+        oban_pid when is_pid(oban_pid) -> {:error, :unsafe_oban_runtime}
         {:error, _reason} -> {:error, :application_start_failed}
       end
+    end
+  end
+
+  @spec start_workers(keyword()) :: :ok | {:error, atom()}
+  def start_workers(options \\ []) when is_list(options) do
+    recovery = Keyword.get(options, :recovery, Recovery)
+    deferred = Keyword.get(options, :deferred, DeferredWorker)
+    now = Keyword.get(options, :now, &DateTime.utc_now/0)
+    settings = Application.fetch_env!(:context_bot, :settings)
+    timestamp = now.()
+
+    with :ok <- ensure_application_started(),
+         :ok <- recover_orphans(recovery, timestamp),
+         :ok <- reconsider_due(deferred, timestamp, settings) do
+      start_minimal_oban()
     end
   end
 
@@ -61,19 +76,24 @@ defmodule ContextBot.DryRun.Runtime do
 
   def safe_oban_config?(_config, _active_queues), do: false
 
-  defp ensure_oban(recovery, now) do
-    cond do
-      is_nil(Oban.whereis(Oban)) -> recover_then_start(recovery, now)
-      safe_existing_oban?() -> :ok
-      true -> {:error, :unsafe_oban_runtime}
+  defp recover_orphans(recovery, now) do
+    case recovery.recover_orphans(startup?: true, now: now) do
+      {:ok, _summary} -> :ok
+      {:error, _reason} -> {:error, :startup_recovery_failed}
+      _invalid_result -> {:error, :startup_recovery_failed}
     end
+  rescue
+    _recovery_error -> {:error, :startup_recovery_failed}
   end
 
-  defp recover_then_start(recovery, now) do
-    case recovery.recover_orphans(startup?: true, now: now.()) do
-      {:ok, _summary} -> start_minimal_oban()
-      {:error, _reason} -> {:error, :startup_recovery_failed}
+  defp reconsider_due(deferred, now, settings) do
+    case deferred.reconsider_due(workflow: :dry_run, now: now, settings: settings) do
+      :ok -> :ok
+      {:error, _reason} -> {:error, :deferred_reconciliation_failed}
+      _invalid_result -> {:error, :deferred_reconciliation_failed}
     end
+  rescue
+    _deferred_error -> {:error, :deferred_reconciliation_failed}
   end
 
   defp start_minimal_oban do
@@ -89,7 +109,7 @@ defmodule ContextBot.DryRun.Runtime do
         :ok
 
       {:error, {:already_started, _pid}} ->
-        if safe_existing_oban?(), do: :ok, else: {:error, :unsafe_oban_runtime}
+        {:error, :unsafe_oban_runtime}
 
       {:error, _reason} ->
         {:error, :oban_start_failed}
