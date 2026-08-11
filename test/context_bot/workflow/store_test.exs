@@ -47,38 +47,71 @@ defmodule ContextBot.Workflow.StoreTest do
     assert Repo.aggregate(Oban.Job, :count) == 1
   end
 
-  test "atomically creates unique dry runs at thread capture without eligibility work" do
-    target_uri = "at://did:plc:target/app.bsky.feed.post/3test"
+  test "attaches to the newest matching nonterminal dry run without inserting another job" do
+    target_uri = "at://did:plc:target/app.bsky.feed.post/attach-newest"
 
-    assert {:ok, first} =
-             Store.create_dry_run(target_uri, "What's missing?", @received_at, &thread_job/2)
+    assert {:ok, first, :created} =
+             Store.create_or_attach_dry_run(target_uri, "Question", @received_at, &thread_job/2)
 
-    assert {:ok, second} =
-             Store.create_dry_run(target_uri, "What's missing?", @received_at, &thread_job/2)
+    newer = DateTime.add(@received_at, 1, :second)
+    duplicate = dry_invocation!(target_uri, "Question", newer, :thread_ready)
 
-    assert first.dry_run
-    assert first.status == :capturing_thread
-    assert first.stage == :capturing_thread
-    assert first.target_uri == target_uri
-    assert first.invocation_text == "What's missing?"
-    assert first.actor_did == "local:operator"
-    assert String.starts_with?(first.invocation_uri, "local://context-bot/dry-runs/")
-    assert String.starts_with?(first.notification_cid, "local:")
-    assert first.current_cid == first.notification_cid
-    refute first.invocation_uri == second.invocation_uri
-    refute first.notification_cid == second.notification_cid
+    assert {:ok, attached, :attached} =
+             Store.create_or_attach_dry_run(target_uri, "Question", @received_at, &thread_job/2)
 
-    assert Repo.aggregate(from(job in Oban.Job, where: job.queue == "thread"), :count) == 2
-    assert Repo.aggregate(from(job in Oban.Job, where: job.queue == "eligibility"), :count) == 0
+    assert attached.id == duplicate.id
+    assert attached.id != first.id
+    assert Repo.aggregate(Invocation, :count) == 2
+    assert Repo.aggregate(Oban.Job, :count) == 1
   end
 
-  test "rejects invalid dry-run questions before inserting a row or job" do
+  test "creates a new run after a matching invocation becomes terminal" do
+    target_uri = "at://did:plc:target/app.bsky.feed.post/attach-terminal"
+    terminal = dry_invocation!(target_uri, "Question", @received_at, :complete)
+
+    assert {:ok, created, :created} =
+             Store.create_or_attach_dry_run(target_uri, "Question", @received_at, &thread_job/2)
+
+    assert created.id != terminal.id
+    assert Repo.aggregate(Invocation, :count) == 2
+    assert Repo.aggregate(Oban.Job, :count) == 1
+  end
+
+  test "creates a distinct run when the question differs exactly" do
+    target_uri = "at://did:plc:target/app.bsky.feed.post/attach-question"
+    dry_invocation!(target_uri, "Question", @received_at, :thread_ready)
+
+    assert {:ok, created, :created} =
+             Store.create_or_attach_dry_run(target_uri, "Question?", @received_at, &thread_job/2)
+
+    assert created.invocation_text == "Question?"
+    assert Repo.aggregate(Invocation, :count) == 2
+    assert Repo.aggregate(Oban.Job, :count) == 1
+  end
+
+  test "does not attach to a public invocation with the same target and question" do
+    target_uri = "at://did:plc:target/app.bsky.feed.post/attach-public"
+    public = dry_invocation!(target_uri, "Question", @received_at, :thread_ready, dry_run: false)
+
+    assert {:ok, created, :created} =
+             Store.create_or_attach_dry_run(target_uri, "Question", @received_at, &thread_job/2)
+
+    assert created.id != public.id
+    assert created.dry_run
+    assert Repo.aggregate(Invocation, :count) == 2
+    assert Repo.aggregate(Oban.Job, :count) == 1
+  end
+
+  test "rejects invalid dry-run inputs before inserting a row or job" do
     target_uri = "at://did:plc:target/app.bsky.feed.post/3invalid"
 
     for invalid <- ["", "  \n\t", <<255>>, String.duplicate("x", 10_001)] do
       assert {:error, :invalid_input} =
-               Store.create_dry_run(target_uri, invalid, @received_at, &thread_job/2)
+               Store.create_or_attach_dry_run(target_uri, invalid, @received_at, &thread_job/2)
     end
+
+    assert {:error, :invalid_input} =
+             Store.create_or_attach_dry_run("", "Question", @received_at, &thread_job/2)
 
     assert Repo.aggregate(Invocation, :count) == 0
     assert Repo.aggregate(Oban.Job, :count) == 0
@@ -126,8 +159,13 @@ defmodule ContextBot.Workflow.StoreTest do
   test "keeps dry-run identity and publication safety fields immutable" do
     target_uri = "at://did:plc:actor/app.bsky.feed.post/dry-immutable"
 
-    assert {:ok, invocation} =
-             Store.create_dry_run(target_uri, "What's missing?", @received_at, &thread_job/2)
+    assert {:ok, invocation, :created} =
+             Store.create_or_attach_dry_run(
+               target_uri,
+               "What's missing?",
+               @received_at,
+               &thread_job/2
+             )
 
     changeset =
       Invocation.changeset(invocation, %{
@@ -543,6 +581,27 @@ defmodule ContextBot.Workflow.StoreTest do
       worker: "ContextBot.Workers.ThreadWorker",
       queue: :thread
     )
+  end
+
+  defp dry_invocation!(target_uri, question, received_at, stage, options \\ []) do
+    run_id = Ecto.UUID.generate()
+    dry_run = Keyword.get(options, :dry_run, true)
+
+    %Invocation{}
+    |> Invocation.changeset(%{
+      dry_run: dry_run,
+      target_uri: target_uri,
+      invocation_text: question,
+      invocation_uri: "local://context-bot/fixtures/#{run_id}",
+      notification_cid: "fixture:#{run_id}",
+      current_cid: "fixture:#{run_id}",
+      actor_did: "local:operator",
+      raw_notification: %{"source" => "fixture"},
+      received_at: received_at,
+      status: stage,
+      stage: stage
+    })
+    |> Repo.insert!()
   end
 
   defp researching_invocation(suffix) do

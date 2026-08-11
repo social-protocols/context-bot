@@ -24,18 +24,23 @@ defmodule ContextBot.DryRunTest do
     :ok
   end
 
-  test "normalizes a post and atomically creates the first durable thread job" do
+  test "normalizes before creating or attaching durable thread work" do
     configure_reference({:ok, @target_uri})
+    url = "https://bsky.app/profile/target.test/post/selected"
 
-    assert {:ok, invocation} =
-             DryRun.create("https://bsky.app/profile/target.test/post/selected", "Is this fair?",
-               post_reference: PostReference,
-               resolver: :public_resolver,
-               now: fn -> @now end
-             )
+    options =
+      [
+        post_reference: PostReference,
+        resolver: :public_resolver,
+        now: fn -> @now end
+      ]
 
-    assert_received {:normalize, "https://bsky.app/profile/target.test/post/selected",
-                     :public_resolver}
+    assert {:ok, invocation, :created} = DryRun.prepare(url, "Is this fair?", options)
+    assert {:ok, same, :attached} = DryRun.prepare(url, "Is this fair?", options)
+    assert same.id == invocation.id
+
+    assert_received {:normalize, ^url, :public_resolver}
+    assert_received {:normalize, ^url, :public_resolver}
 
     assert invocation.dry_run
     assert invocation.target_uri == @target_uri
@@ -44,13 +49,15 @@ defmodule ContextBot.DryRunTest do
 
     assert [%Oban.Job{worker: "ContextBot.Workers.ThreadWorker", queue: "dry_thread"}] =
              Repo.all(Oban.Job)
+
+    assert [%Invocation{target_uri: @target_uri}] = Repo.all(Invocation)
   end
 
   test "invalid references and questions create no durable state" do
     configure_reference({:error, :invalid_post_reference})
 
     assert {:error, :invalid_post_reference} =
-             DryRun.create("not-a-post", "Question",
+             DryRun.prepare("not-a-post", "Question",
                post_reference: PostReference,
                resolver: :public_resolver
              )
@@ -63,7 +70,7 @@ defmodule ContextBot.DryRunTest do
     configure_reference({:ok, @target_uri})
 
     assert {:error, :invalid_input} =
-             DryRun.create(@target_uri, "   ",
+             DryRun.prepare(@target_uri, "   ",
                post_reference: PostReference,
                resolver: :public_resolver
              )
@@ -71,7 +78,7 @@ defmodule ContextBot.DryRunTest do
     refute_received {:normalize, @target_uri, :public_resolver}
 
     assert {:error, :invalid_input} =
-             DryRun.create(@target_uri, String.duplicate("x", 10_001),
+             DryRun.prepare(@target_uri, String.duplicate("x", 10_001),
                post_reference: PostReference,
                resolver: :public_resolver
              )

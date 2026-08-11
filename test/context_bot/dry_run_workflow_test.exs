@@ -78,7 +78,7 @@ defmodule ContextBot.DryRunWorkflowTest do
       |> Plug.Conn.send_resp(200, raw_response)
     end)
 
-    assert {:ok, invocation} = DryRun.create(@post_url, "What's missing?")
+    assert {:ok, invocation, :created} = DryRun.prepare(@post_url, "What's missing?")
     assert invocation.stage == :capturing_thread
     assert invocation.dry_run
 
@@ -133,7 +133,7 @@ defmodule ContextBot.DryRunWorkflowTest do
       flunk("Anthropic was called after the daily budget was exhausted")
     end)
 
-    assert {:ok, invocation} = DryRun.create(@post_url, "Can you check this?")
+    assert {:ok, invocation, :created} = DryRun.prepare(@post_url, "Can you check this?")
     perform_and_delete!(:dry_thread)
     perform_and_delete!(:dry_research)
 

@@ -16,11 +16,11 @@ defmodule ContextBot.DryRun do
   @default_timeout_ms 900_000
   @default_poll_interval_ms 250
 
-  @spec create(String.t(), String.t(), keyword()) ::
-          {:ok, Invocation.t()} | {:error, atom()}
-  def create(post_reference, question, options \\ [])
+  @spec prepare(String.t(), String.t(), keyword()) ::
+          {:ok, Invocation.t(), :created | :attached} | {:error, atom()}
+  def prepare(post_reference, question, options \\ [])
 
-  def create(post_reference, question, options)
+  def prepare(post_reference, question, options)
       when is_binary(post_reference) and is_binary(question) and is_list(options) do
     reference_module = Keyword.get(options, :post_reference, PostReference)
     resolver = Keyword.get(options, :resolver, PublicClient)
@@ -28,11 +28,11 @@ defmodule ContextBot.DryRun do
 
     with :ok <- validate_question(question),
          {:ok, target_uri} <- reference_module.normalize(post_reference, resolver) do
-      Store.create_dry_run(target_uri, question, now.(), &thread_job/2)
+      Store.create_or_attach_dry_run(target_uri, question, now.(), &thread_job/2)
     end
   end
 
-  def create(_post_reference, _question, _options), do: {:error, :invalid_input}
+  def prepare(_post_reference, _question, _options), do: {:error, :invalid_input}
 
   @spec await(Invocation.t(), keyword()) ::
           {:ok, Invocation.t()}
