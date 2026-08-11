@@ -340,6 +340,32 @@ defmodule Mix.Tasks.ContextBot.LiveRunTest do
     assert shell_output() =~ "status=complete"
   end
 
+  test "an already failed row reports durable failure without authentication or workers" do
+    failed = %{invocation(:failed) | failure_category: :provider_response}
+
+    Application.put_env(:context_bot, Service,
+      test_pid: self(),
+      resolve_result: {:ok, @uri},
+      find_result: failed,
+      prepare_result: :unused,
+      await_result: :unused,
+      reply_url_result: :unused
+    )
+
+    assert_raise Mix.Error, ~r/failed/, fn -> run([@post]) end
+
+    assert Events.all() == [
+             {:configure_and_start, @database, []},
+             {:resolve, @post, :test_resolver},
+             {:find, @uri}
+           ]
+
+    output = shell_output()
+    assert output =~ "live_run_disposition=terminal"
+    assert output =~ "status=failed"
+    assert output =~ "failure_category=provider_response"
+  end
+
   test "a contending command observes the selected durable row without starting workers" do
     pending = invocation(:researching)
 

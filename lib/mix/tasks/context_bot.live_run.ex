@@ -47,6 +47,10 @@ defmodule Mix.Tasks.ContextBot.LiveRun do
         print_identity(complete, :complete)
         print_complete(service, complete, settings.bot_handle, settled_cost.(complete))
 
+      %Invocation{stage: stage} = terminal when stage in [:failed, :ineligible] ->
+        print_identity(terminal, :terminal)
+        fail_invocation(terminal)
+
       %Invocation{} = existing ->
         run_existing(
           service,
