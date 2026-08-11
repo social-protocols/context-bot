@@ -44,8 +44,8 @@ test "attaches to the newest matching nonterminal dry run without inserting anot
   assert {:ok, first, :created} =
            Store.create_or_attach_dry_run(@target_uri, "Question", @received_at, &thread_job/2)
 
-  older = DateTime.add(@received_at, -1, :second)
-  duplicate = dry_invocation!(@target_uri, "Question", older, :thread_ready)
+  newer = DateTime.add(@received_at, 1, :second)
+  duplicate = dry_invocation!(@target_uri, "Question", newer, :thread_ready)
 
   assert {:ok, attached, :attached} =
            Store.create_or_attach_dry_run(@target_uri, "Question", @received_at, &thread_job/2)
