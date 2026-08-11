@@ -226,6 +226,47 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
     assert [] = Repo.all(Oban.Job)
   end
 
+  test "dry-only due reconciliation resumes canonical dry work without public eligibility evidence" do
+    due_dry = dry_run_budget_invocation("due-dry", minutes_ago: 3)
+    due_public = accepted_budget_invocation("due-public", minutes_ago: 2)
+
+    future_dry =
+      dry_run_budget_invocation("future-dry",
+        minutes_ago: 1,
+        defer_until: DateTime.add(@now, 60, :second)
+      )
+
+    assert :ok =
+             DeferredWorker.reconsider_due(
+               now: @now,
+               settings: settings(),
+               workflow: :dry_run,
+               attempt_index: 1
+             )
+
+    assert Repo.reload!(due_dry).stage == :thread_ready
+    assert Repo.reload!(due_public).stage == :deferred_budget
+    assert Repo.reload!(future_dry).stage == :deferred_budget
+
+    assert [%Oban.Job{queue: "dry_research", worker: "ContextBot.Workers.ResearchWorker"}] =
+             Repo.all(from job in Oban.Job, where: job.args == ^job_args(due_dry))
+  end
+
+  test "due reconciliation normalizes non-raised enqueue failures" do
+    due_dry = dry_run_budget_invocation("rejected-dry", minutes_ago: 3)
+    configure(enqueue_once: fn _work -> {:error, :injected_rejection} end)
+
+    assert {:error, :deferred_reconciliation_failed} =
+             DeferredWorker.reconsider_due(
+               now: @now,
+               settings: settings(),
+               workflow: :dry_run
+             )
+
+    assert Repo.reload!(due_dry).stage == :thread_ready
+    assert [] = Repo.all(Oban.Job)
+  end
+
   test "budget selection uses each actual next-attempt cost cumulatively" do
     cheap =
       accepted_budget_invocation("cheap-repair",
@@ -435,9 +476,8 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
 
     configure()
 
-    assert_raise Exqlite.Error, ~r/injected eligibility enqueue failure/, fn ->
-      DeferredWorker.perform(%Oban.Job{args: %{}})
-    end
+    assert {:error, :deferred_reconciliation_failed} =
+             DeferredWorker.perform(%Oban.Job{args: %{}})
 
     assert Repo.reload!(deferred).stage == :received
     Repo.query!("DROP TRIGGER reject_eligibility_enqueue")
@@ -586,6 +626,26 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
           admitted_at: DateTime.add(@rollover, -2, :hour),
           eligibility_method: "bluesky_elder",
           eligibility_evidence: %{"label" => "bluesky-elder"},
+          canonical_thread: "ancestor context",
+          canonical_thread_version: "1",
+          root_uri: "at://did:plc:root/app.bsky.feed.post/root",
+          root_cid: "bafyroot"
+        ],
+        options
+      )
+    )
+  end
+
+  defp dry_run_budget_invocation(rkey, options) do
+    invocation(
+      rkey,
+      :deferred_budget,
+      Keyword.merge(
+        [
+          dry_run: true,
+          target_uri: "at://did:plc:target/app.bsky.feed.post/#{rkey}",
+          invocation_text: "What context is needed?",
+          defer_until: @rollover,
           canonical_thread: "ancestor context",
           canonical_thread_version: "1",
           root_uri: "at://did:plc:root/app.bsky.feed.post/root",

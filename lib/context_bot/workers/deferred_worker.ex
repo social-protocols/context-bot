@@ -21,9 +21,25 @@ defmodule ContextBot.Workers.DeferredWorker do
     dependencies = dependencies()
 
     case recover(dependencies) do
-      {:ok, _summary} -> process_claimed_work(claim_batch(dependencies), job)
+      {:ok, _summary} -> reconsider_due(workflow: :all, attempt_index: job.attempt)
       {:error, _reason} -> {:error, :recovery_failed}
     end
+  end
+
+  @spec reconsider_due(keyword()) :: :ok | {:error, :deferred_reconciliation_failed}
+  def reconsider_due(options \\ []) do
+    dependencies = dependencies(options)
+    workflow = Keyword.get(options, :workflow, :all)
+    attempt_index = Keyword.get(options, :attempt_index, 1)
+
+    case dependencies
+         |> claim_batch(workflow)
+         |> process_claimed_work(attempt_index, dependencies.enqueue_once) do
+      :ok -> :ok
+      {:error, _reason} -> {:error, :deferred_reconciliation_failed}
+    end
+  rescue
+    _database_or_state_error -> {:error, :deferred_reconciliation_failed}
   end
 
   defp recover(dependencies) do
@@ -35,35 +51,35 @@ defmodule ContextBot.Workers.DeferredWorker do
     )
   end
 
-  defp process_claimed_work(work, job) do
+  defp process_claimed_work(work, attempt_index, enqueue) do
     Enum.reduce_while(work, :ok, fn claimed, :ok ->
-      case process_claim(claimed, job) do
+      case process_claim(claimed, attempt_index, enqueue) do
         :ok -> {:cont, :ok}
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
   end
 
-  defp process_claim(work, job) do
+  defp process_claim(work, attempt_index, enqueue) do
     started_at = System.monotonic_time(:millisecond)
-    result = enqueue_once(work)
+    result = enqueue.(work)
 
     Operations.log_attempt(work.invocation_id, work.stage,
       attempt_kind: :maintenance,
-      attempt_index: job.attempt,
+      attempt_index: attempt_index,
       duration_ms: System.monotonic_time(:millisecond) - started_at
     )
 
     result
   end
 
-  defp claim_batch(dependencies) do
+  defp claim_batch(dependencies, workflow) do
     {:ok, work} =
       Repo.transaction(
         fn ->
           {deferred, _remaining_budget} =
             dependencies.now
-            |> deferred_candidates(dependencies.batch_size)
+            |> deferred_candidates(dependencies.batch_size, workflow)
             |> Enum.reduce(
               {[], remaining_budget(dependencies.now, dependencies.settings)},
               fn invocation, {work, budget} ->
@@ -86,20 +102,27 @@ defmodule ContextBot.Workers.DeferredWorker do
   @spec recovery_query(pos_integer()) :: Ecto.Query.t()
   defdelegate recovery_query(batch_size), to: Recovery, as: :candidate_query
 
-  defp deferred_candidates(_now, remaining) when remaining <= 0, do: []
+  defp deferred_candidates(_now, remaining, _workflow) when remaining <= 0, do: []
 
-  defp deferred_candidates(now, remaining) do
-    Invocation
-    |> where(
-      [invocation],
-      invocation.stage == :deferred_capacity or
-        (invocation.stage in [:deferred_rate, :deferred_budget] and
-           not is_nil(invocation.defer_until) and invocation.defer_until <= ^now)
-    )
+  defp deferred_candidates(now, remaining, workflow) do
+    candidates =
+      Invocation
+      |> where(
+        [invocation],
+        invocation.stage == :deferred_capacity or
+          (invocation.stage in [:deferred_rate, :deferred_budget] and
+             not is_nil(invocation.defer_until) and invocation.defer_until <= ^now)
+      )
+
+    candidates
+    |> filter_workflow(workflow)
     |> order_by([invocation], asc: invocation.received_at, asc: invocation.id)
     |> limit(^remaining)
     |> Repo.all()
   end
+
+  defp filter_workflow(query, :dry_run), do: where(query, [invocation], invocation.dry_run)
+  defp filter_workflow(query, :all), do: query
 
   defp claim_candidate(
          %Invocation{stage: :deferred_capacity} = invocation,
@@ -156,8 +179,7 @@ defmodule ContextBot.Workers.DeferredWorker do
     attempt_kind = invocation.deferred_attempt_kind || :research
     reservation = Settings.anthropic_reservation_microdollars(settings, attempt_kind)
 
-    if accepted_workflow?(invocation) and Admission.resume_available?(invocation, now, settings) and
-         reservation <= remaining_budget do
+    if accepted_workflow?(invocation, now, settings) and reservation <= remaining_budget do
       work =
         invocation
         |> move_to(:thread_ready, %{
@@ -186,13 +208,20 @@ defmodule ContextBot.Workers.DeferredWorker do
     |> Repo.update!()
   end
 
-  defp accepted_workflow?(invocation) do
+  defp accepted_workflow?(%Invocation{dry_run: true} = invocation, _now, _settings),
+    do: durable_thread?(invocation)
+
+  defp accepted_workflow?(invocation, now, settings) do
     is_binary(invocation.eligibility_method) and invocation.eligibility_method != "" and
       is_map(invocation.eligibility_evidence) and map_size(invocation.eligibility_evidence) > 0 and
-      match?(%DateTime{}, invocation.admitted_at) and is_binary(invocation.canonical_thread) and
-      invocation.canonical_thread != "" and is_binary(invocation.current_cid) and
-      invocation.current_cid != ""
+      match?(%DateTime{}, invocation.admitted_at) and durable_thread?(invocation) and
+      Admission.resume_available?(invocation, now, settings)
   end
+
+  defp durable_thread?(invocation),
+    do:
+      is_binary(invocation.canonical_thread) and invocation.canonical_thread != "" and
+        is_binary(invocation.current_cid) and invocation.current_cid != ""
 
   defp remaining_budget(now, %Settings{anthropic_daily_budget_microdollars: limit})
        when is_integer(limit) and limit > 0,
@@ -204,7 +233,10 @@ defmodule ContextBot.Workers.DeferredWorker do
     do: work(invocation, "ContextBot.Workers.EligibilityWorker", :eligibility)
 
   defp research_work(invocation),
-    do: work(invocation, "ContextBot.Workers.ResearchWorker", :research)
+    do: work(invocation, "ContextBot.Workers.ResearchWorker", research_queue(invocation))
+
+  defp research_queue(%Invocation{dry_run: true}), do: :dry_research
+  defp research_queue(%Invocation{}), do: :research
 
   defp work(invocation, worker, queue) do
     %{
@@ -242,14 +274,23 @@ defmodule ContextBot.Workers.DeferredWorker do
     end
   end
 
-  defp dependencies do
+  defp dependencies(options \\ []) do
     config = Application.get_env(:context_bot, __MODULE__, [])
 
     %{
-      batch_size: batch_size(Keyword.get(config, :batch_size, @default_batch_size)),
-      now: Keyword.get(config, :now, DateTime.utc_now()),
-      recovery: Keyword.get(config, :recovery, Recovery),
-      settings: Keyword.get(config, :settings, Application.fetch_env!(:context_bot, :settings))
+      batch_size:
+        batch_size(
+          Keyword.get(options, :batch_size, Keyword.get(config, :batch_size, @default_batch_size))
+        ),
+      now: Keyword.get(options, :now, Keyword.get(config, :now, DateTime.utc_now())),
+      recovery: Keyword.get(options, :recovery, Keyword.get(config, :recovery, Recovery)),
+      enqueue_once: Keyword.get(config, :enqueue_once, &enqueue_once/1),
+      settings:
+        Keyword.get(
+          options,
+          :settings,
+          Keyword.get(config, :settings, Application.fetch_env!(:context_bot, :settings))
+        )
     }
   end
 
