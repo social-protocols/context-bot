@@ -221,7 +221,8 @@ defmodule Mix.Tasks.ContextBot.LiveRun do
          uri,
          settings,
          settled_cost
-       ) do
+       )
+       when is_function(settled_cost, 1) do
     authenticate!(runtime, owner)
     {invocation, disposition} = prepare!(service, uri)
 
@@ -232,7 +233,7 @@ defmodule Mix.Tasks.ContextBot.LiveRun do
 
       :terminal ->
         print_identity(invocation, disposition)
-        print_result({:error, invocation}, service, settings.bot_handle, settled_cost)
+        fail_invocation(invocation)
 
       active when active in [:created, :attached] ->
         run_owned_invocation(
@@ -551,10 +552,7 @@ defmodule Mix.Tasks.ContextBot.LiveRun do
         Mix.raise("live run deferred by the configured Anthropic daily budget")
 
       {:error, %Invocation{} = failed} ->
-        Mix.shell().info("status=failed")
-        Mix.shell().info("failure_category=#{failure_category(failed.failure_category)}")
-        Mix.shell().info("completed_at=#{datetime(failed.completed_at)}")
-        Mix.raise("live run failed at stage=#{failed.stage}")
+        fail_invocation(failed)
 
       {:error, {:interrupted, invocation_id}} when is_integer(invocation_id) ->
         Mix.shell().info("status=interrupted")
@@ -567,6 +565,14 @@ defmodule Mix.Tasks.ContextBot.LiveRun do
       _invalid_result ->
         Mix.raise("live run did not settle: public_service_failure")
     end
+  end
+
+  @spec fail_invocation(Invocation.t()) :: no_return()
+  defp fail_invocation(failed) do
+    Mix.shell().info("status=failed")
+    Mix.shell().info("failure_category=#{failure_category(failed.failure_category)}")
+    Mix.shell().info("completed_at=#{datetime(failed.completed_at)}")
+    Mix.raise("live run failed at stage=#{failed.stage}")
   end
 
   defp print_complete(service, invocation, handle, cost_microdollars) do
