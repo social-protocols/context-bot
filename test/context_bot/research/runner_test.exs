@@ -612,6 +612,48 @@ defmodule ContextBot.Research.RunnerTest do
            ]
   end
 
+  test "tracks code execution across a pause-turn continuation" do
+    invocation = invocation("code-execution-pause-success")
+    fixture = decoded_fixture("pause_then_success.json")
+
+    pause =
+      put_in(fixture, ["pause", "content"], [
+        %{
+          "type" => "server_tool_use",
+          "id" => "code-pause-1",
+          "name" => "code_execution",
+          "input" => %{"code" => "opaque provider program"}
+        }
+      ])["pause"]
+
+    success =
+      put_in(fixture, ["success", "content"], [
+        %{
+          "type" => "code_execution_tool_result",
+          "tool_use_id" => "code-pause-1",
+          "content" => %{
+            "type" => "code_execution_result",
+            "stdout" => "opaque",
+            "stderr" => "",
+            "return_code" => 0,
+            "content" => []
+          }
+        },
+        %{"type" => "text", "text" => "Final context only."}
+      ])["success"]
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(pause))},
+      {:ok, envelope(200, Jason.encode!(success))}
+    ])
+
+    assert {:ok, result} = Runner.run(invocation, options())
+    assert result.text == "Final context only."
+    assert result.usage["tool_use_counts"] == %{"web_fetch" => 0, "web_search" => 0}
+    assert_received {:anthropic_call, _initial, %{kind: :research}, false}
+    assert_received {:anthropic_call, _continued, %{kind: :continuation}, false}
+  end
+
   test "fails silently when the aggregate continuation cap is exceeded" do
     invocation = invocation("continuation-cap")
     fixture = decoded_fixture("pause_then_success.json")

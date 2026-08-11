@@ -26,8 +26,9 @@ defmodule ContextBot.Research.Reply do
 
   A bare stop reason means there are no server-tool calls pending from an earlier response. For a
   continued `pause_turn`, pass `%{stop_reason: reason, pending_server_tools: %{id => name}}` so a
-  leading result block can complete the prior `web_search` or `web_fetch` call. Prior response
-  text is intentionally not accepted here and is never included in the selected reply.
+  leading result block can complete the prior `web_search`, `web_fetch`, or `code_execution` call.
+  Prior response text is intentionally not accepted here and is never included in the selected
+  reply.
   """
   @spec select([map()], term() | selection_context()) :: result()
   def select(
@@ -102,7 +103,7 @@ defmodule ContextBot.Research.Reply do
 
   defp valid_pending_server_tools?(pending_server_tools) do
     Enum.all?(pending_server_tools, fn {id, name} ->
-      is_binary(id) and id != "" and name in ["web_search", "web_fetch"]
+      is_binary(id) and id != "" and name in ["web_search", "web_fetch", "code_execution"]
     end)
   end
 
@@ -149,15 +150,24 @@ defmodule ContextBot.Research.Reply do
     do: {:halt, {:error, :unexpected_tool_use}}
 
   defp collect_block(
+         %{
+           "type" => "server_tool_use",
+           "id" => id,
+           "name" => "code_execution",
+           "input" => input
+         },
+         {:ok, texts, pending, prior_pending}
+       )
+       when is_binary(id) and id != "" and is_map(input) do
+    add_pending_tool(id, "code_execution", texts, pending, prior_pending)
+  end
+
+  defp collect_block(
          %{"type" => "server_tool_use", "id" => id, "name" => name, "input" => _input},
          {:ok, texts, pending, prior_pending}
        )
        when is_binary(id) and id != "" and name in ["web_search", "web_fetch"] do
-    if Map.has_key?(pending, id) do
-      {:halt, {:error, :invalid_content}}
-    else
-      {:cont, {:ok, texts, Map.put(pending, id, name), prior_pending}}
-    end
+    add_pending_tool(id, name, texts, pending, prior_pending)
   end
 
   defp collect_block(
@@ -178,6 +188,18 @@ defmodule ContextBot.Research.Reply do
 
   defp collect_block(
          %{
+           "type" => "code_execution_tool_result",
+           "tool_use_id" => id,
+           "content" => content
+         },
+         {:ok, texts, pending, prior_pending}
+       )
+       when is_binary(id) and id != "" and is_map(content) do
+    complete_tool(id, "code_execution", texts, pending, prior_pending)
+  end
+
+  defp collect_block(
+         %{
            "type" => "web_fetch_tool_result",
            "tool_use_id" => id,
            "content" => content
@@ -193,11 +215,15 @@ defmodule ContextBot.Research.Reply do
   end
 
   defp collect_block(%{"type" => type}, _state)
-       when type in ["web_search_tool_result", "web_fetch_tool_result"],
+       when type in [
+              "web_search_tool_result",
+              "web_fetch_tool_result",
+              "code_execution_tool_result"
+            ],
        do: {:halt, {:error, :invalid_content}}
 
   defp collect_block(%{"type" => "server_tool_use", "name" => name}, _state)
-       when is_binary(name) and name not in ["web_search", "web_fetch"],
+       when is_binary(name) and name not in ["web_search", "web_fetch", "code_execution"],
        do: {:halt, {:error, :unexpected_tool_use}}
 
   defp collect_block(%{"type" => "server_tool_use"}, _state),
@@ -209,6 +235,14 @@ defmodule ContextBot.Research.Reply do
     do: {:halt, {:error, {:unexpected_content_block, type}}}
 
   defp collect_block(_block, _state), do: {:halt, {:error, :invalid_content}}
+
+  defp add_pending_tool(id, name, texts, pending, prior_pending) do
+    if Map.has_key?(pending, id) do
+      {:halt, {:error, :invalid_content}}
+    else
+      {:cont, {:ok, texts, Map.put(pending, id, name), prior_pending}}
+    end
+  end
 
   defp complete_tool(id, expected_name, texts, pending, prior_pending) do
     case Map.fetch(pending, id) do

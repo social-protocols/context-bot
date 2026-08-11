@@ -592,13 +592,17 @@ defmodule ContextBot.Research.Runner do
   defp update_pending_tools(content, pending) do
     Enum.reduce(content, pending, fn
       %{"type" => "server_tool_use", "id" => id, "name" => name}, pending
-      when is_binary(id) and id != "" and name in ["web_search", "web_fetch"] ->
+      when is_binary(id) and id != "" and
+             name in ["web_search", "web_fetch", "code_execution"] ->
         Map.put(pending, id, name)
 
       %{"type" => "web_search_tool_result", "tool_use_id" => id}, pending ->
         Map.delete(pending, id)
 
       %{"type" => "web_fetch_tool_result", "tool_use_id" => id}, pending ->
+        Map.delete(pending, id)
+
+      %{"type" => "code_execution_tool_result", "tool_use_id" => id}, pending ->
         Map.delete(pending, id)
 
       _block, pending ->

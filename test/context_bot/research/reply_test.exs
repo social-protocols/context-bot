@@ -69,6 +69,81 @@ defmodule ContextBot.Research.ReplyTest do
     assert Reply.select(content, :end_turn) == {:ok, "First second."}
   end
 
+  test "accepts paired dynamic-filtering code execution while selecting only model text" do
+    content = [
+      %{"type" => "thinking", "thinking" => "opaque", "signature" => "signed"},
+      %{
+        "type" => "server_tool_use",
+        "id" => "code-1",
+        "name" => "code_execution",
+        "input" => %{"code" => "opaque provider program"}
+      },
+      %{
+        "type" => "code_execution_tool_result",
+        "tool_use_id" => "code-1",
+        "content" => %{
+          "type" => "encrypted_code_execution_result",
+          "encrypted_stdout" => "opaque",
+          "stderr" => "",
+          "return_code" => 0,
+          "content" => []
+        }
+      },
+      text("First "),
+      text("second.")
+    ]
+
+    assert Reply.select(content, :end_turn) == {:ok, "First second."}
+  end
+
+  test "fails closed on malformed, duplicate, mismatched, and orphaned code execution blocks" do
+    call = %{
+      "type" => "server_tool_use",
+      "id" => "code-1",
+      "name" => "code_execution",
+      "input" => %{"code" => "opaque"}
+    }
+
+    result = %{
+      "type" => "code_execution_tool_result",
+      "tool_use_id" => "code-1",
+      "content" => %{"type" => "code_execution_result"}
+    }
+
+    invalid_content = [
+      [Map.delete(call, "id"), result, text("must not publish")],
+      [Map.put(call, "id", ""), result, text("must not publish")],
+      [Map.put(call, "input", "not-a-map"), result, text("must not publish")],
+      [call, Map.delete(result, "content"), text("must not publish")],
+      [call, Map.put(result, "content", []), text("must not publish")],
+      [call, Map.put(result, "tool_use_id", "other"), text("must not publish")],
+      [call, call, result, text("must not publish")],
+      [result, text("must not publish")]
+    ]
+
+    Enum.each(invalid_content, fn content ->
+      assert {:error, _reason} = Reply.select(content, :end_turn)
+    end)
+  end
+
+  test "completes code execution started in a prior pause" do
+    completed_content = [
+      %{
+        "type" => "code_execution_tool_result",
+        "tool_use_id" => "paused-code-1",
+        "content" => %{"type" => "code_execution_result", "content" => []}
+      },
+      text("Final context only.")
+    ]
+
+    context = %{
+      stop_reason: "end_turn",
+      pending_server_tools: %{"paused-code-1" => "code_execution"}
+    }
+
+    assert Reply.select(completed_content, context) == {:ok, "Final context only."}
+  end
+
   test "completes a server tool started in a prior pause without publishing prior partial text" do
     paused_content = [
       text("Partial pre-pause narration must not publish. "),
