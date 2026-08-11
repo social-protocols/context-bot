@@ -149,8 +149,22 @@ defmodule ContextBot.LiveRun.InvocationPost do
          %{"index" => %{"byteStart" => first, "byteEnd" => last}},
          text
        )
-       when is_integer(first) and is_integer(last) and first >= 0 and first < last and
-              last <= byte_size(text) do
+       when is_binary(text) do
+    if valid_range?(first, last, text) do
+      validate_mention_text(first, last, text)
+    else
+      {:error, :invalid_mention_range}
+    end
+  end
+
+  defp mention_range(_facet, _text), do: {:error, :invalid_mention_range}
+
+  defp valid_range?(first, last, text),
+    do:
+      is_integer(first) and is_integer(last) and first >= 0 and first < last and
+        last <= byte_size(text)
+
+  defp validate_mention_text(first, last, text) do
     prefix = binary_part(text, 0, first)
     mention = binary_part(text, first, last - first)
     suffix = binary_part(text, last, byte_size(text) - last)
@@ -162,8 +176,6 @@ defmodule ContextBot.LiveRun.InvocationPost do
       {:error, :invalid_mention_range}
     end
   end
-
-  defp mention_range(_facet, _text), do: {:error, :invalid_mention_range}
 
   defp remove_ranges(text, ranges) do
     ranges

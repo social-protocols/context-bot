@@ -5,9 +5,10 @@ defmodule ContextBot.LiveRun.Runtime do
 
   alias ContextBot.ATProto.Session
   alias ContextBot.DryRun.RuntimeOwner
-  alias ContextBot.{Repo, Settings}
-  alias ContextBot.Workflow.{Invocation, Recovery, Store}
+  alias ContextBot.Repo
+  alias ContextBot.Settings
   alias ContextBot.Workers.ResearchWorker
+  alias ContextBot.Workflow.{Invocation, Recovery, Store}
 
   @safe_queues [:reply, :research, :thread]
   @terminal_stages [:ineligible, :complete, :failed]
