@@ -100,6 +100,23 @@ defmodule ContextBot.DryRun.RuntimeTest do
     assert Oban.Registry.whereis(Oban, {:producer, "dry_research"})
   end
 
+  test "workers fail closed when the selected base application is no longer ready" do
+    configure_recovery({:ok, %{examined: 0, resumed: 0, terminalized: 0, unchanged: 0}})
+    configure_deferred(:ok)
+    on_exit(&stop_oban/0)
+
+    assert {:error, :application_not_started} =
+             Runtime.start_workers(
+               recovery: FakeRecovery,
+               deferred: FakeDeferred,
+               base_ready: fn -> {:error, :application_not_started} end
+             )
+
+    refute_received {:dry_runtime_recovery, _, _, _}
+    refute_received {:dry_runtime_deferred, _, _}
+    assert Oban.whereis(Oban) == nil
+  end
+
   test "a recovery failure leaves standalone Oban stopped" do
     configure_recovery({:error, :recovery_failed})
     configure_deferred(:ok)

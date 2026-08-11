@@ -31,10 +31,11 @@ defmodule ContextBot.DryRun.Runtime do
     recovery = Keyword.get(options, :recovery, Recovery)
     deferred = Keyword.get(options, :deferred, DeferredWorker)
     now = Keyword.get(options, :now, &DateTime.utc_now/0)
+    base_ready = Keyword.get(options, :base_ready, &base_application_ready/0)
     settings = Application.fetch_env!(:context_bot, :settings)
     timestamp = now.()
 
-    with :ok <- ensure_application_started(),
+    with :ok <- base_ready.(),
          :ok <- recover_orphans(recovery, timestamp),
          :ok <- reconsider_due(deferred, timestamp, settings) do
       start_minimal_oban()
@@ -125,6 +126,24 @@ defmodule ContextBot.DryRun.Runtime do
   defp active_queue_names do
     match = [{{{Oban, {:producer, :"$1"}}, :"$2", :_}, [], [:"$1"]}]
     Oban.Registry.select(match)
+  end
+
+  defp base_application_ready do
+    if application_started?(:context_bot) and is_pid(Process.whereis(ContextBot.Repo)) do
+      case {public_child_running?(), Oban.whereis(Oban)} do
+        {false, nil} -> :ok
+        {true, _oban_pid} -> {:error, :public_worker_running}
+        {false, oban_pid} when is_pid(oban_pid) -> {:error, :unsafe_oban_runtime}
+      end
+    else
+      {:error, :application_not_started}
+    end
+  end
+
+  defp application_started?(application) do
+    Enum.any?(Application.started_applications(), fn {name, _description, _version} ->
+      name == application
+    end)
   end
 
   defp public_child_running? do

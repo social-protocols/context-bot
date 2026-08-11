@@ -107,6 +107,9 @@ defmodule Mix.Tasks.ContextBot.DryRun do
 
       {:error, reason} ->
         Mix.raise("unable to prepare dry run: #{safe_prepare_error(reason)}")
+
+      _invalid_result ->
+        Mix.raise("unable to prepare dry run: public_service_failure")
     end
   end
 
@@ -117,6 +120,9 @@ defmodule Mix.Tasks.ContextBot.DryRun do
 
       {:error, reason} ->
         Mix.raise("unable to start safe dry-run workers: #{safe_runtime_error(reason)}")
+
+      _invalid_result ->
+        Mix.raise("unable to start safe dry-run workers: runtime_failure")
     end
   end
 

@@ -305,6 +305,71 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     refute_received {:await, 47, _options}
   end
 
+  test "turns malformed preparation results into a finite content-safe error" do
+    target = "https://bsky.app/profile/sentinel-target/post/sentinel-post"
+    question = "sentinel-question"
+    provider = "sentinel-provider"
+    credential = "sentinel-credential"
+
+    Application.put_env(:context_bot, Service,
+      test_pid: self(),
+      prepare_result:
+        {:unexpected,
+         %{target: target, question: question, provider: provider, credential: credential}},
+      await_result: :unused
+    )
+
+    error = assert_raise Mix.Error, fn -> run([target, question]) end
+
+    assert error.message =~ "public_service_failure"
+    refute error.message =~ target
+    refute error.message =~ question
+    refute error.message =~ provider
+    refute error.message =~ credential
+
+    output = shell_output()
+    refute output =~ target
+    refute output =~ question
+    refute output =~ provider
+    refute output =~ credential
+  end
+
+  test "turns malformed worker startup results into a finite content-safe error" do
+    target = "https://bsky.app/profile/sentinel-target/post/sentinel-post"
+    question = "sentinel-question"
+    provider = "sentinel-provider"
+    credential = "sentinel-credential"
+    invocation = %Invocation{id: 48, dry_run: true, stage: :capturing_thread}
+
+    Application.put_env(:context_bot, Service,
+      test_pid: self(),
+      prepare_result: {:ok, invocation, :created},
+      await_result: :unused
+    )
+
+    Application.put_env(:context_bot, Runtime,
+      test_pid: self(),
+      application_result: :ok,
+      workers_result:
+        {:unexpected,
+         %{target: target, question: question, provider: provider, credential: credential}}
+    )
+
+    error = assert_raise Mix.Error, fn -> run([target, question]) end
+
+    assert error.message =~ "runtime_failure"
+    refute error.message =~ target
+    refute error.message =~ question
+    refute error.message =~ provider
+    refute error.message =~ credential
+
+    output = shell_output()
+    refute output =~ target
+    refute output =~ question
+    refute output =~ provider
+    refute output =~ credential
+  end
+
   test "forwards durable stage changes and animates while awaiting" do
     created = %Invocation{id: 45, dry_run: true, stage: :capturing_thread}
     researching = %{created | stage: :researching}
