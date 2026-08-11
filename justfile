@@ -65,6 +65,9 @@ db-reset:
 dry-run post question:
     ./dry-run.sh {{quote(post)}} {{quote(question)}}
 
+reprocess invocation_id:
+    mix context_bot.reprocess {{quote(invocation_id)}}
+
 docker-build:
     docker build --progress=plain -t context-bot:local .
 
