@@ -39,6 +39,24 @@ defmodule ContextBot.Workflow.Store do
   def create_or_attach_dry_run(_target_uri, _question, _received_at, _job_builder),
     do: {:error, :invalid_input}
 
+  @doc "Creates or attaches to one operator-selected public invocation atomically."
+  @spec create_or_attach_live_run(map(), DateTime.t(), (String.t(), String.t() -> Changeset.t())) ::
+          {:ok, Invocation.t(), :created | :attached | :complete | :terminal}
+          | {:error, :active_invocation, %{id: pos_integer(), uri: String.t()}}
+          | {:error, :contradictory_invocations, [pos_integer()]}
+          | {:error, :invalid_input | Changeset.t()}
+  def create_or_attach_live_run(receipt, %DateTime{} = received_at, job_builder)
+      when is_map(receipt) and is_function(job_builder, 2) do
+    if valid_live_run_receipt?(receipt) do
+      create_or_attach_valid_live_run(receipt, received_at, job_builder)
+    else
+      {:error, :invalid_input}
+    end
+  end
+
+  def create_or_attach_live_run(_receipt, _received_at, _job_builder),
+    do: {:error, :invalid_input}
+
   @spec receive_mention(map(), DateTime.t(), Ecto.Changeset.t() | nil) ::
           {:ok, Invocation.t(), :inserted | :duplicate}
   def receive_mention(notification, received_at, next_job) do
@@ -511,6 +529,124 @@ defmodule ContextBot.Workflow.Store do
   defp valid_dry_run_input?(target_uri, question) do
     target_uri != "" and is_binary(question) and String.valid?(question) and
       byte_size(question) <= @maximum_dry_run_question_bytes and String.trim(question) != ""
+  end
+
+  defp valid_live_run_receipt?(receipt) do
+    valid_nonempty_string?(Map.get(receipt, :uri)) and
+      valid_nonempty_string?(Map.get(receipt, :cid)) and
+      valid_nonempty_string?(Map.get(receipt, :actor_did)) and
+      valid_question?(Map.get(receipt, :invocation_text)) and is_map(Map.get(receipt, :raw)) and
+      valid_optional_string?(Map.get(receipt, :actor_handle))
+  end
+
+  defp valid_question?(question) do
+    is_binary(question) and String.valid?(question) and
+      byte_size(question) <= @maximum_dry_run_question_bytes and String.trim(question) != ""
+  end
+
+  defp valid_nonempty_string?(value),
+    do: is_binary(value) and value != "" and String.valid?(value)
+
+  defp valid_optional_string?(nil), do: true
+  defp valid_optional_string?(value), do: valid_nonempty_string?(value)
+
+  defp create_or_attach_valid_live_run(receipt, received_at, job_builder) do
+    result =
+      Repo.transaction(
+        fn -> live_run_decision(receipt, received_at, job_builder) end,
+        mode: :immediate
+      )
+
+    case result do
+      {:ok, {invocation, disposition}} ->
+        {:ok, invocation, disposition}
+
+      {:error, {:active_invocation, active}} ->
+        {:error, :active_invocation, %{id: active.id, uri: active.invocation_uri}}
+
+      {:error, {:contradictory_invocations, ids}} ->
+        {:error, :contradictory_invocations, ids}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp live_run_decision(receipt, received_at, job_builder) do
+    matches = live_run_matches(receipt.uri)
+
+    case matches do
+      [existing] ->
+        case different_active_invocation(existing.id) do
+          nil -> {existing, live_run_disposition(existing)}
+          active -> Repo.rollback({:active_invocation, active})
+        end
+
+      [] ->
+        case different_active_invocation(nil) do
+          nil -> insert_live_run!(receipt, received_at, job_builder)
+          active -> Repo.rollback({:active_invocation, active})
+        end
+
+      contradictory ->
+        Repo.rollback({:contradictory_invocations, Enum.map(contradictory, & &1.id)})
+    end
+  end
+
+  defp live_run_matches(uri) do
+    Invocation
+    |> where([invocation], invocation.dry_run == false and invocation.invocation_uri == ^uri)
+    |> order_by([invocation], asc: invocation.id)
+    |> Repo.all()
+  end
+
+  defp different_active_invocation(excluded_id) do
+    Invocation
+    |> where([invocation], invocation.stage not in ^@terminal_statuses)
+    |> exclude_invocation(excluded_id)
+    |> order_by([invocation], asc: invocation.received_at, asc: invocation.id)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  defp exclude_invocation(query, nil), do: query
+  defp exclude_invocation(query, id), do: where(query, [invocation], invocation.id != ^id)
+
+  defp live_run_disposition(%Invocation{stage: :complete}), do: :complete
+
+  defp live_run_disposition(%Invocation{stage: stage}) when stage in [:failed, :ineligible],
+    do: :terminal
+
+  defp live_run_disposition(%Invocation{}), do: :attached
+
+  defp insert_live_run!(receipt, received_at, job_builder) do
+    attrs = %{
+      dry_run: false,
+      invocation_text: receipt.invocation_text,
+      invocation_uri: receipt.uri,
+      notification_cid: receipt.cid,
+      current_cid: receipt.cid,
+      actor_did: receipt.actor_did,
+      actor_handle: receipt.actor_handle,
+      raw_notification: receipt.raw,
+      received_at: received_at,
+      status: :capturing_thread,
+      stage: :capturing_thread,
+      eligibility_method: "operator_live_demo",
+      eligibility_evidence: %{"source" => "explicit_local_command"},
+      admitted_at: received_at
+    }
+
+    case Repo.insert(Invocation.changeset(%Invocation{}, attrs)) do
+      {:ok, invocation} ->
+        case Repo.insert(job_builder.(receipt.uri, receipt.cid)) do
+          {:ok, _job} -> {invocation, :created}
+          {:error, reason} -> Repo.rollback(reason)
+        end
+
+      {:error, reason} ->
+        Repo.rollback(reason)
+    end
   end
 
   defp attachable_dry_run(target_uri, question) do

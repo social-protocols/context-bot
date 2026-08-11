@@ -105,6 +105,142 @@ defmodule ContextBot.Workflow.StoreTest do
     assert Repo.aggregate(Oban.Job, :count) == 1
   end
 
+  test "creates one operator-authorized live invocation and thread job atomically" do
+    receipt = live_receipt("at://did:plc:actor/app.bsky.feed.post/live-create", "bafy-live")
+
+    assert {:ok, invocation, :created} =
+             Store.create_or_attach_live_run(receipt, @received_at, &thread_job/2)
+
+    refute invocation.dry_run
+    assert invocation.invocation_uri == receipt.uri
+    assert invocation.notification_cid == receipt.cid
+    assert invocation.current_cid == receipt.cid
+    assert invocation.actor_did == receipt.actor_did
+    assert invocation.actor_handle == receipt.actor_handle
+    assert invocation.invocation_text == receipt.invocation_text
+    assert invocation.raw_notification == receipt.raw
+    assert invocation.stage == :capturing_thread
+    assert invocation.eligibility_method == "operator_live_demo"
+    assert invocation.eligibility_evidence == %{"source" => "explicit_local_command"}
+    assert invocation.admitted_at == @received_at
+
+    assert [%Oban.Job{} = job] = Repo.all(Oban.Job)
+    assert job.queue == "thread"
+    assert job.worker == "ContextBot.Workers.ThreadWorker"
+    assert job.args == %{"uri" => receipt.uri, "cid" => receipt.cid}
+  end
+
+  test "attaches to a live invocation by URI after its CID changes" do
+    uri = "at://did:plc:actor/app.bsky.feed.post/live-edited"
+    original = live_receipt(uri, "bafy-original")
+
+    assert {:ok, first, :created} =
+             Store.create_or_attach_live_run(original, @received_at, &thread_job/2)
+
+    edited = %{original | cid: "bafy-edited", invocation_text: "Edited question?"}
+
+    assert {:ok, attached, :attached} =
+             Store.create_or_attach_live_run(edited, @received_at, &thread_job/2)
+
+    assert attached.id == first.id
+    assert attached.notification_cid == "bafy-original"
+    assert attached.invocation_text == original.invocation_text
+    assert Repo.aggregate(Invocation, :count) == 1
+    assert Repo.aggregate(Oban.Job, :count) == 1
+  end
+
+  test "reports an existing terminal live invocation without creating work" do
+    complete_receipt =
+      live_receipt("at://did:plc:actor/app.bsky.feed.post/live-complete", "bafy-complete")
+
+    complete = live_invocation!(complete_receipt, :complete)
+
+    assert {:ok, existing_complete, :complete} =
+             Store.create_or_attach_live_run(complete_receipt, @received_at, &thread_job/2)
+
+    assert existing_complete.id == complete.id
+
+    failed_receipt =
+      live_receipt("at://did:plc:actor/app.bsky.feed.post/live-failed", "bafy-failed")
+
+    failed = live_invocation!(failed_receipt, :failed)
+
+    assert {:ok, existing_failed, :terminal} =
+             Store.create_or_attach_live_run(failed_receipt, @received_at, &thread_job/2)
+
+    assert existing_failed.id == failed.id
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "rejects a different active live invocation without inserting state" do
+    active_receipt =
+      live_receipt("at://did:plc:actor/app.bsky.feed.post/live-active", "bafy-active")
+
+    active = live_invocation!(active_receipt, :researching)
+
+    other = live_receipt("at://did:plc:other/app.bsky.feed.post/live-other", "bafy-other")
+
+    assert {:error, :active_invocation, %{id: id, uri: uri}} =
+             Store.create_or_attach_live_run(other, @received_at, &thread_job/2)
+
+    assert id == active.id
+    assert uri == active.invocation_uri
+    assert Repo.aggregate(Invocation, :count) == 1
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "fails closed when contradictory rows already exist for one live URI" do
+    uri = "at://did:plc:actor/app.bsky.feed.post/live-contradictory"
+    first = live_invocation!(live_receipt(uri, "bafy-first"), :complete)
+    second = live_invocation!(live_receipt(uri, "bafy-second"), :failed)
+
+    assert {:error, :contradictory_invocations, ids} =
+             Store.create_or_attach_live_run(
+               live_receipt(uri, "bafy-third"),
+               @received_at,
+               &thread_job/2
+             )
+
+    assert Enum.sort(ids) == Enum.sort([first.id, second.id])
+    assert Repo.aggregate(Invocation, :count) == 2
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "rolls back a new live invocation when its initial job is invalid" do
+    receipt =
+      live_receipt("at://did:plc:actor/app.bsky.feed.post/live-rollback", "bafy-rollback")
+
+    invalid_job = fn uri, cid ->
+      uri
+      |> then(&Oban.Job.new(%{"uri" => &1, "cid" => cid}, worker: Worker, queue: :thread))
+      |> Ecto.Changeset.add_error(:args, "forced failure")
+    end
+
+    assert {:error, %Ecto.Changeset{valid?: false}} =
+             Store.create_or_attach_live_run(receipt, @received_at, invalid_job)
+
+    assert Repo.aggregate(Invocation, :count) == 0
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "rejects invalid live receipts before beginning a transaction" do
+    valid = live_receipt("at://did:plc:actor/app.bsky.feed.post/live-invalid", "bafy-invalid")
+
+    for receipt <- [
+          %{valid | uri: ""},
+          %{valid | cid: ""},
+          %{valid | actor_did: ""},
+          %{valid | invocation_text: "  \n"},
+          %{valid | raw: nil}
+        ] do
+      assert {:error, :invalid_input} =
+               Store.create_or_attach_live_run(receipt, @received_at, &thread_job/2)
+    end
+
+    assert Repo.aggregate(Invocation, :count) == 0
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
   test "rejects invalid dry-run inputs before inserting a row or job" do
     target_uri = "at://did:plc:target/app.bsky.feed.post/3invalid"
 
@@ -576,6 +712,39 @@ defmodule ContextBot.Workflow.StoreTest do
         "author" => %{"did" => "did:plc:actor", "handle" => "actor.example"}
       }
     }
+  end
+
+  defp live_receipt(uri, cid) do
+    %{
+      uri: uri,
+      cid: cid,
+      actor_did: "did:plc:actor",
+      actor_handle: "actor.example",
+      invocation_text: "What is missing?",
+      raw: %{"source" => "local_live_demo", "post" => %{"uri" => uri, "cid" => cid}}
+    }
+  end
+
+  defp live_invocation!(receipt, stage) do
+    %Invocation{}
+    |> Invocation.changeset(%{
+      dry_run: false,
+      invocation_text: receipt.invocation_text,
+      invocation_uri: receipt.uri,
+      notification_cid: receipt.cid,
+      current_cid: receipt.cid,
+      actor_did: receipt.actor_did,
+      actor_handle: receipt.actor_handle,
+      raw_notification: receipt.raw,
+      received_at: @received_at,
+      status: stage,
+      stage: stage,
+      eligibility_method: "operator_live_demo",
+      eligibility_evidence: %{"source" => "explicit_local_command"},
+      admitted_at: @received_at,
+      completed_at: if(stage in [:complete, :failed, :ineligible], do: @received_at)
+    })
+    |> Repo.insert!()
   end
 
   defp thread_job(uri, cid) do
