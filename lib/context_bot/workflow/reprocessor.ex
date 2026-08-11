@@ -10,8 +10,8 @@ defmodule ContextBot.Workflow.Reprocessor do
 
   alias ContextBot.Repo
   alias ContextBot.Research.{Budget, BudgetEntry, ResponseEnvelope}
-  alias ContextBot.Workflow.Invocation
   alias ContextBot.Workers.ResearchWorker
+  alias ContextBot.Workflow.Invocation
 
   @type error_reason ::
           :not_found

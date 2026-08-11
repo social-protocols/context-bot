@@ -23,3 +23,4 @@ One-sentence facts and constraints distilled from investigations in this repo. L
 - Separate Mix VMs need a SQLite-path `flock` held through confirmed Oban death; VM-local names cannot serialize recovery. ([reports/2026-08-11-dry-run-process-fencing.md](reports/2026-08-11-dry-run-process-fencing.md))
 - `BASH_ENV` DEBUG traps reach child Bash processes; test the `&`/`$!` race with an explicit wrapper seam. ([reports/2026-08-11-dry-run-process-fencing.md](reports/2026-08-11-dry-run-process-fencing.md))
 - For quick account setup, use `bsky.social`; custom handles are portable, and the concrete PDS URL comes from the DID document. ([reports/2026-08-11-hosted-pds-account-setup.md](reports/2026-08-11-hosted-pds-account-setup.md))
+- Anthropic web-tool dynamic filtering can emit outer code-execution pairs; replay retained envelopes after local parser failures. ([reports/2026-08-11-anthropic-code-execution-replay.md](reports/2026-08-11-anthropic-code-execution-replay.md))
