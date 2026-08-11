@@ -77,27 +77,6 @@ defmodule ContextBot.DryRun.RuntimeTest do
     assert {:error, :unsafe_oban_runtime} = Runtime.ensure_application_started()
   end
 
-  test "legacy startup composes the safe base phase with injectable workers" do
-    configure_recovery({:ok, %{examined: 0, resumed: 0, terminalized: 0, unchanged: 0}})
-    configure_deferred(:ok)
-    on_exit(&stop_oban/0)
-
-    assert :ok =
-             Runtime.ensure_started(
-               recovery: FakeRecovery,
-               deferred: FakeDeferred,
-               now: fn -> @now end
-             )
-
-    assert_receive {:dry_runtime_recovery, [startup?: true, now: @now], repo_pid, nil}
-    assert is_pid(repo_pid)
-
-    assert_receive {:dry_runtime_deferred, [workflow: :dry_run, now: @now, settings: _settings],
-                    nil}
-
-    assert Oban.whereis(Oban)
-  end
-
   test "workers recover then reconcile before starting serial dry queues" do
     configure_recovery({:ok, %{examined: 0, resumed: 0, terminalized: 0, unchanged: 0}})
     configure_deferred(:ok)

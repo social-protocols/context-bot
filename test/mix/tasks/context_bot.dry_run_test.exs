@@ -1,10 +1,10 @@
 defmodule Mix.Tasks.ContextBot.DryRunTest.Service do
   @moduledoc false
 
-  def create(post, question, options) do
+  def prepare(post, question, options) do
     config = Application.fetch_env!(:context_bot, __MODULE__)
-    send(config[:test_pid], {:create, post, question, options})
-    config[:create_result]
+    send(config[:test_pid], {:prepare, post, question, options})
+    config[:prepare_result]
   end
 
   def await(invocation, options) do
@@ -45,10 +45,16 @@ end
 defmodule Mix.Tasks.ContextBot.DryRunTest.Runtime do
   @moduledoc false
 
-  def ensure_started do
+  def ensure_application_started do
     config = Application.fetch_env!(:context_bot, __MODULE__)
-    send(config[:test_pid], :runtime_started)
-    config[:result]
+    send(config[:test_pid], :base_application_started)
+    config[:application_result]
+  end
+
+  def start_workers(options) do
+    config = Application.fetch_env!(:context_bot, __MODULE__)
+    send(config[:test_pid], {:workers_started, options})
+    config[:workers_result]
   end
 
   def stop do
@@ -111,7 +117,13 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     )
 
     Application.put_env(:context_bot, :anthropic_api_key, "task-test-provider-key")
-    Application.put_env(:context_bot, Runtime, test_pid: self(), result: :ok)
+
+    Application.put_env(:context_bot, Runtime,
+      test_pid: self(),
+      application_result: :ok,
+      workers_result: :ok
+    )
+
     Application.put_env(:context_bot, Progress, test_pid: self())
     Application.put_env(:context_bot, Interrupts, test_pid: self())
 
@@ -145,8 +157,8 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
       run(["one", "two", "three"])
     end
 
-    refute_received :runtime_started
-    refute_received {:create, _, _, _}
+    refute_received :base_application_started
+    refute_received {:prepare, _, _, _}
   end
 
   test "loads configuration without starting the application before validation" do
@@ -166,7 +178,7 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     Application.put_env(:context_bot, :settings, %{settings | bot_enabled: true})
 
     assert_raise Mix.Error, ~r/BOT_ENABLED=false/, fn -> run(["post", "question"]) end
-    refute_received :runtime_started
+    refute_received :base_application_started
   end
 
   test "requires a configured daily budget and Anthropic key before durable work" do
@@ -186,8 +198,8 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     Application.delete_env(:context_bot, :anthropic_api_key)
 
     assert_raise Mix.Error, ~r/ANTHROPIC_API_KEY/, fn -> run(["post", "question"]) end
-    refute_received :runtime_started
-    refute_received {:create, _, _, _}
+    refute_received :base_application_started
+    refute_received {:prepare, _, _, _}
   end
 
   test "prints only a compact completed summary" do
@@ -205,17 +217,18 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
 
     Application.put_env(:context_bot, Service,
       test_pid: self(),
-      create_result: {:ok, %{invocation | stage: :capturing_thread}},
+      prepare_result: {:ok, %{invocation | stage: :capturing_thread}, :created},
       await_result: {:ok, invocation}
     )
 
     assert :ok = run(["https://bsky.app/profile/example.test/post/3abc", "What's missing?"])
 
-    assert_received :runtime_started
+    assert_received :base_application_started
 
-    assert_received {:create, "https://bsky.app/profile/example.test/post/3abc",
+    assert_received {:prepare, "https://bsky.app/profile/example.test/post/3abc",
                      "What's missing?", []}
 
+    assert_received {:workers_started, []}
     assert_received {:await, 42, await_options}
     assert is_function(await_options[:on_update], 1)
     assert_received {:progress_start, 42, progress_options}
@@ -224,6 +237,7 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
 
     output = shell_output()
     assert output =~ "dry_run_id=42"
+    assert output =~ "dry_run_disposition=created"
     assert output =~ "status=complete"
     assert output =~ "answer=A concise tested answer."
     assert output =~ "input_tokens=120"
@@ -236,6 +250,59 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     refute output =~ "raw_body"
     refute output =~ "\e"
     assert length(Regex.scan(~r/^dry_run_id=42$/m, output)) == 1
+    assert length(Regex.scan(~r/^dry_run_disposition=created$/m, output)) == 1
+  end
+
+  test "attaches to pending work and prints only safe identity metadata" do
+    invocation = %Invocation{id: 42, dry_run: true, stage: :capturing_thread}
+
+    Application.put_env(:context_bot, Service,
+      test_pid: self(),
+      prepare_result: {:ok, invocation, :attached},
+      await_result: {:ok, %{invocation | stage: :complete, selected_reply: "Done."}}
+    )
+
+    assert :ok =
+             run([
+               "https://bsky.app/profile/private.example/post/secret",
+               "private question with task-test-provider-key"
+             ])
+
+    output = shell_output()
+    assert length(Regex.scan(~r/^dry_run_id=42$/m, output)) == 1
+    assert length(Regex.scan(~r/^dry_run_disposition=attached$/m, output)) == 1
+    refute output =~ "private"
+    refute output =~ "task-test-provider-key"
+  end
+
+  test "cleans up progress and signal handlers when workers cannot start after preparation" do
+    invocation = %Invocation{id: 47, dry_run: true, stage: :capturing_thread}
+
+    Application.put_env(:context_bot, Service,
+      test_pid: self(),
+      prepare_result: {:ok, invocation, :created},
+      await_result: :unused
+    )
+
+    Application.put_env(:context_bot, Runtime,
+      test_pid: self(),
+      application_result: :ok,
+      workers_result: {:error, :startup_recovery_failed}
+    )
+
+    error =
+      assert_raise Mix.Error, fn ->
+        run(["https://bsky.app/profile/private.example/post/secret", "private question"])
+      end
+
+    assert error.message =~ "unable to start safe dry-run workers"
+    refute error.message =~ "private"
+    assert_received {:progress_start, 47, _options}
+    assert_received {:interrupts_installed, token}
+    assert_received {:workers_started, []}
+    assert_received {:progress_finish, 47}
+    assert_received {:interrupts_removed, ^token}
+    refute_received {:await, 47, _options}
   end
 
   test "forwards durable stage changes and animates while awaiting" do
@@ -245,7 +312,7 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
 
     Application.put_env(:context_bot, Service,
       test_pid: self(),
-      create_result: {:ok, created},
+      prepare_result: {:ok, created, :created},
       updates: [created, researching, complete],
       await_delay_ms: 120,
       await_result: {:ok, complete}
@@ -264,7 +331,7 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
 
     Application.put_env(:context_bot, Service,
       test_pid: self(),
-      create_result: {:ok, created},
+      prepare_result: {:ok, created, :created},
       await_delay_ms: :infinity,
       await_result: :never
     )
@@ -301,13 +368,13 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
   test "turns structured public-read failures into a finite safe Mix error" do
     Application.put_env(:context_bot, Service,
       test_pid: self(),
-      create_result: {:error, {:transient, 503}},
+      prepare_result: {:error, {:transient, 503}},
       await_result: :unused
     )
 
     assert_raise Mix.Error, ~r/public_service_unavailable/, fn -> run(["post", "question"]) end
-    assert_received :runtime_started
-    assert_received {:create, "post", "question", []}
+    assert_received :base_application_started
+    assert_received {:prepare, "post", "question", []}
   end
 
   test "prints safe failure and budget timing metadata" do
@@ -320,7 +387,7 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
 
     Application.put_env(:context_bot, Service,
       test_pid: self(),
-      create_result: {:ok, %{deferred | stage: :capturing_thread}},
+      prepare_result: {:ok, %{deferred | stage: :capturing_thread}, :created},
       await_result: {:deferred, deferred}
     )
 
@@ -338,7 +405,7 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
 
     Application.put_env(:context_bot, Service,
       test_pid: self(),
-      create_result: {:ok, %{failed | stage: :capturing_thread}},
+      prepare_result: {:ok, %{failed | stage: :capturing_thread}, :created},
       await_result: {:error, failed}
     )
 

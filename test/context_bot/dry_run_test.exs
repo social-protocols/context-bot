@@ -53,25 +53,6 @@ defmodule ContextBot.DryRunTest do
     assert [%Invocation{target_uri: @target_uri}] = Repo.all(Invocation)
   end
 
-  test "create preserves the legacy two-tuple result for created and attached work" do
-    configure_reference({:ok, @target_uri})
-    url = "https://bsky.app/profile/target.test/post/selected"
-
-    options =
-      [
-        post_reference: PostReference,
-        resolver: :public_resolver,
-        now: fn -> @now end
-      ]
-
-    assert {:ok, created} = DryRun.create(url, "Is this fair?", options)
-    assert {:ok, attached} = DryRun.create(url, "Is this fair?", options)
-    assert attached.id == created.id
-
-    assert_received {:normalize, ^url, :public_resolver}
-    assert_received {:normalize, ^url, :public_resolver}
-  end
-
   test "invalid references and questions create no durable state" do
     configure_reference({:error, :invalid_post_reference})
 

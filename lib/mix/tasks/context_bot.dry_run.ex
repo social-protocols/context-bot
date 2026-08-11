@@ -23,10 +23,10 @@ defmodule Mix.Tasks.ContextBot.DryRun do
     settings = Application.fetch_env!(:context_bot, :settings)
 
     validate_runtime!(settings)
-    ensure_runtime!(runtime)
+    ensure_application_started!(runtime)
 
-    invocation = create!(service, post, question)
-    Mix.shell().info("dry_run_id=#{invocation.id}")
+    {invocation, disposition} = prepare!(service, post, question)
+    print_identity(invocation, disposition)
 
     progress =
       progress_module.start(invocation,
@@ -36,6 +36,8 @@ defmodule Mix.Tasks.ContextBot.DryRun do
     token = install_interrupts!(interrupts, progress_module, progress)
 
     try do
+      start_workers!(runtime)
+
       {result, _progress} =
         await_with_progress(service, runtime, invocation, progress_module, progress)
 
@@ -88,18 +90,39 @@ defmodule Mix.Tasks.ContextBot.DryRun do
     end
   end
 
-  defp ensure_runtime!(runtime) do
-    case runtime.ensure_started() do
-      :ok -> :ok
-      {:error, reason} -> Mix.raise("unable to start safe dry-run workers: #{reason}")
+  defp ensure_application_started!(runtime) do
+    case runtime.ensure_application_started() do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Mix.raise("unable to start safe dry-run application: #{safe_runtime_error(reason)}")
     end
   end
 
-  defp create!(service, post, question) do
-    case service.create(post, question, []) do
-      {:ok, invocation} -> invocation
-      {:error, reason} -> Mix.raise("unable to create dry run: #{safe_create_error(reason)}")
+  defp prepare!(service, post, question) do
+    case service.prepare(post, question, []) do
+      {:ok, invocation, disposition} when disposition in [:created, :attached] ->
+        {invocation, disposition}
+
+      {:error, reason} ->
+        Mix.raise("unable to prepare dry run: #{safe_prepare_error(reason)}")
     end
+  end
+
+  defp start_workers!(runtime) do
+    case runtime.start_workers([]) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Mix.raise("unable to start safe dry-run workers: #{safe_runtime_error(reason)}")
+    end
+  end
+
+  defp print_identity(invocation, disposition) do
+    Mix.shell().info("dry_run_id=#{invocation.id}")
+    Mix.shell().info("dry_run_disposition=#{disposition}")
   end
 
   defp print_complete(invocation, cost_microdollars) do
@@ -191,12 +214,15 @@ defmodule Mix.Tasks.ContextBot.DryRun do
   defp integer(value) when is_integer(value) and value >= 0, do: value
   defp integer(_value), do: 0
 
-  defp safe_create_error({:transient, _detail}), do: "public_service_unavailable"
-  defp safe_create_error({:rate_limited, _retry_after}), do: "public_service_rate_limited"
-  defp safe_create_error(:timeout), do: "public_service_timeout"
-  defp safe_create_error(:response_too_large), do: "public_service_response_too_large"
-  defp safe_create_error(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp safe_create_error(_reason), do: "public_service_failure"
+  defp safe_prepare_error({:transient, _detail}), do: "public_service_unavailable"
+  defp safe_prepare_error({:rate_limited, _retry_after}), do: "public_service_rate_limited"
+  defp safe_prepare_error(:timeout), do: "public_service_timeout"
+  defp safe_prepare_error(:response_too_large), do: "public_service_response_too_large"
+  defp safe_prepare_error(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp safe_prepare_error(_reason), do: "public_service_failure"
+
+  defp safe_runtime_error(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp safe_runtime_error(_reason), do: "runtime_failure"
 
   defp failure_category(category) when is_atom(category), do: Atom.to_string(category)
   defp failure_category(_category), do: "unknown"
