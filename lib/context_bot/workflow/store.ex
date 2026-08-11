@@ -509,7 +509,7 @@ defmodule ContextBot.Workflow.Store do
   end
 
   defp valid_dry_run_input?(target_uri, question) do
-    is_binary(target_uri) and target_uri != "" and is_binary(question) and String.valid?(question) and
+    target_uri != "" and is_binary(question) and String.valid?(question) and
       byte_size(question) <= @maximum_dry_run_question_bytes and String.trim(question) != ""
   end
 

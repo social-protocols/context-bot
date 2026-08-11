@@ -34,6 +34,15 @@ defmodule ContextBot.DryRun do
 
   def prepare(_post_reference, _question, _options), do: {:error, :invalid_input}
 
+  @doc false
+  @spec create(String.t(), String.t(), keyword()) :: {:ok, Invocation.t()} | {:error, atom()}
+  def create(post_reference, question, options \\ []) do
+    case prepare(post_reference, question, options) do
+      {:ok, invocation, _disposition} -> {:ok, invocation}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   @spec await(Invocation.t(), keyword()) ::
           {:ok, Invocation.t()}
           | {:error, Invocation.t()}
