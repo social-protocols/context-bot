@@ -26,6 +26,13 @@ defmodule ContextBot.DryRun.Runtime do
     end
   end
 
+  @spec ensure_started(keyword()) :: :ok | {:error, atom()}
+  def ensure_started(options \\ []) when is_list(options) do
+    with :ok <- ensure_application_started() do
+      start_workers(options)
+    end
+  end
+
   @spec start_workers(keyword()) :: :ok | {:error, atom()}
   def start_workers(options \\ []) when is_list(options) do
     recovery = Keyword.get(options, :recovery, Recovery)
