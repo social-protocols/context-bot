@@ -41,9 +41,15 @@ to be repeated.
   blocks are candidates.
 - A complete retained envelope is sufficient to resume Runner decoding, settlement, selection, and
   repair without another research POST.
+- Pairing validation must retain every previously seen server-tool ID across saved assistant turns;
+  tracking only currently pending calls permits a completed ID to be reused later.
 - Automatic orphan recovery should continue to ignore terminal failures. Reopening a terminal row
   requires an explicit, guarded operator action because genuine and ambiguous provider failures
   must remain terminal.
+- A Mix maintenance task must not start the full application merely to access SQLite: that can
+  start Oban, polling, and authenticated ATProto processes before its guard runs. Start only Ecto's
+  SQLite dependencies and the Repo, require `BOT_ENABLED=false`, and reject an already active local
+  worker runtime.
 
 ## Implications
 
@@ -52,3 +58,5 @@ nested code-execution content opaque. Track code-execution pairs across `pause_t
 them to direct web-search/fetch caps. Before reopening a failed invocation, require a provider
 response failure, saved request/thread, no unrecorded exposure, and a 2xx JSON-object envelope for
 the latest attempt. Perform the state transition and research-job insertion atomically.
+Give the replay job a fresh nonce so a still-`executing` historical Oban job cannot suppress the
+new durable work through uniqueness. Keep the invocation transition as the concurrency guard.

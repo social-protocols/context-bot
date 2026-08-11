@@ -14,7 +14,8 @@ defmodule ContextBot.Research.Reply do
   @type server_tool_name :: String.t()
   @type selection_context :: %{
           required(:stop_reason) => term(),
-          required(:pending_server_tools) => %{optional(String.t()) => server_tool_name()}
+          required(:pending_server_tools) => %{optional(String.t()) => server_tool_name()},
+          optional(:seen_server_tool_ids) => MapSet.t(String.t())
         }
   @type result ::
           {:ok, String.t()}
@@ -33,21 +34,65 @@ defmodule ContextBot.Research.Reply do
   @spec select([map()], term() | selection_context()) :: result()
   def select(
         content_blocks,
-        %{stop_reason: stop_reason, pending_server_tools: pending_server_tools}
+        %{stop_reason: stop_reason, pending_server_tools: pending_server_tools} = context
       )
       when is_map(pending_server_tools) do
-    if valid_pending_server_tools?(pending_server_tools) do
-      select_response(content_blocks, stop_reason, pending_server_tools)
+    seen_tool_ids =
+      Map.get(context, :seen_server_tool_ids, MapSet.new(Map.keys(pending_server_tools)))
+
+    if valid_pending_server_tools?(pending_server_tools) and
+         valid_seen_tool_ids?(seen_tool_ids, pending_server_tools) do
+      select_response(content_blocks, stop_reason, pending_server_tools, seen_tool_ids)
     else
       {:error, :invalid_content}
     end
   end
 
-  def select(content_blocks, stop_reason), do: select_response(content_blocks, stop_reason, %{})
+  def select(content_blocks, stop_reason),
+    do: select_response(content_blocks, stop_reason, %{}, MapSet.new())
 
-  defp select_response(content_blocks, stop_reason, pending_server_tools)
+  @doc "Validates server-tool protocol in saved assistant turns and returns pending/seen state."
+  @spec server_tool_context(map(), [map()]) ::
+          {:ok,
+           %{
+             pending_server_tools: %{optional(String.t()) => server_tool_name()},
+             seen_server_tool_ids: MapSet.t(String.t())
+           }}
+          | {:error, reason()}
+  def server_tool_context(request, additional_content \\ [])
+
+  def server_tool_context(%{"messages" => messages}, additional_content)
+      when is_list(messages) and is_list(additional_content) do
+    contents =
+      Enum.flat_map(messages, fn
+        %{"role" => "assistant", "content" => content} when is_list(content) -> [content]
+        _message -> []
+      end) ++ [additional_content]
+
+    Enum.reduce_while(contents, {:ok, %{}, MapSet.new()}, fn content,
+                                                             {:ok, pending, seen_tool_ids} ->
+      case validate_saved_content(content, pending, seen_tool_ids) do
+        {:ok, next_pending, next_seen} ->
+          {:cont, {:ok, next_pending, next_seen}}
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, pending, seen_tool_ids} ->
+        {:ok, %{pending_server_tools: pending, seen_server_tool_ids: seen_tool_ids}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  def server_tool_context(_request, _additional_content), do: {:error, :invalid_content}
+
+  defp select_response(content_blocks, stop_reason, pending_server_tools, seen_tool_ids)
        when is_list(content_blocks) and stop_reason in ["end_turn", :end_turn] do
-    case content_text(content_blocks, pending_server_tools) do
+    case content_text(content_blocks, pending_server_tools, seen_tool_ids) do
       {:ok, text} ->
         classify_text(text)
 
@@ -56,44 +101,44 @@ defmodule ContextBot.Research.Reply do
     end
   end
 
-  defp select_response(_content_blocks, stop_reason, _pending_server_tools)
+  defp select_response(_content_blocks, stop_reason, _pending_server_tools, _seen_tool_ids)
        when stop_reason in ["end_turn", :end_turn],
        do: {:error, :invalid_content}
 
-  defp select_response(_content_blocks, stop_reason, _pending_server_tools)
+  defp select_response(_content_blocks, stop_reason, _pending_server_tools, _seen_tool_ids)
        when stop_reason in ["refusal", :refusal],
        do: {:error, :refusal}
 
-  defp select_response(_content_blocks, stop_reason, _pending_server_tools)
+  defp select_response(_content_blocks, stop_reason, _pending_server_tools, _seen_tool_ids)
        when stop_reason in ["max_tokens", :max_tokens],
        do: {:error, :max_tokens}
 
-  defp select_response(_content_blocks, stop_reason, _pending_server_tools)
+  defp select_response(_content_blocks, stop_reason, _pending_server_tools, _seen_tool_ids)
        when stop_reason in ["model_context_window_exceeded", :model_context_window_exceeded],
        do: {:error, :model_context_window_exceeded}
 
-  defp select_response(_content_blocks, stop_reason, _pending_server_tools)
+  defp select_response(_content_blocks, stop_reason, _pending_server_tools, _seen_tool_ids)
        when stop_reason in ["pause_turn", :pause_turn],
        do: {:error, :pause_turn}
 
-  defp select_response(_content_blocks, stop_reason, _pending_server_tools)
+  defp select_response(_content_blocks, stop_reason, _pending_server_tools, _seen_tool_ids)
        when stop_reason in ["tool_use", :tool_use],
        do: {:error, :tool_use}
 
-  defp select_response(_content_blocks, stop_reason, _pending_server_tools),
+  defp select_response(_content_blocks, stop_reason, _pending_server_tools, _seen_tool_ids),
     do: {:error, {:unexpected_stop_reason, stop_reason}}
 
-  defp content_text(content_blocks, pending_server_tools) do
+  defp content_text(content_blocks, pending_server_tools, seen_tool_ids) do
     content_blocks
     |> Enum.reduce_while(
-      {:ok, [], pending_server_tools, pending_server_tools},
+      {:ok, [], pending_server_tools, pending_server_tools, seen_tool_ids},
       &collect_block/2
     )
     |> case do
-      {:ok, text, pending, _prior_pending} when map_size(pending) == 0 ->
+      {:ok, text, pending, _prior_pending, _seen_tool_ids} when map_size(pending) == 0 ->
         {:ok, text |> Enum.reverse() |> IO.iodata_to_binary()}
 
-      {:ok, _text, _pending, _prior_pending} ->
+      {:ok, _text, _pending, _prior_pending, _seen_tool_ids} ->
         {:error, :pending_tool_use}
 
       {:error, reason} ->
@@ -107,9 +152,15 @@ defmodule ContextBot.Research.Reply do
     end)
   end
 
+  defp valid_seen_tool_ids?(%MapSet{} = seen_tool_ids, pending_server_tools) do
+    Enum.all?(pending_server_tools, fn {id, _name} -> MapSet.member?(seen_tool_ids, id) end)
+  end
+
+  defp valid_seen_tool_ids?(_seen_tool_ids, _pending_server_tools), do: false
+
   defp collect_block(
          %{"type" => type},
-         {:ok, _texts, _pending, prior_pending}
+         {:ok, _texts, _pending, prior_pending, _seen_tool_ids}
        )
        when map_size(prior_pending) > 0 and
               type in [
@@ -124,10 +175,10 @@ defmodule ContextBot.Research.Reply do
 
   defp collect_block(
          %{"type" => "text", "text" => text},
-         {:ok, texts, pending, prior_pending}
+         {:ok, texts, pending, prior_pending, seen_tool_ids}
        )
        when is_binary(text),
-       do: {:cont, {:ok, [text | texts], pending, prior_pending}}
+       do: {:cont, {:ok, [text | texts], pending, prior_pending, seen_tool_ids}}
 
   defp collect_block(
          %{"type" => "thinking", "thinking" => thinking, "signature" => signature},
@@ -156,18 +207,18 @@ defmodule ContextBot.Research.Reply do
            "name" => "code_execution",
            "input" => input
          },
-         {:ok, texts, pending, prior_pending}
+         {:ok, texts, pending, prior_pending, seen_tool_ids}
        )
        when is_binary(id) and id != "" and is_map(input) do
-    add_pending_tool(id, "code_execution", texts, pending, prior_pending)
+    add_pending_tool(id, "code_execution", texts, pending, prior_pending, seen_tool_ids)
   end
 
   defp collect_block(
          %{"type" => "server_tool_use", "id" => id, "name" => name, "input" => _input},
-         {:ok, texts, pending, prior_pending}
+         {:ok, texts, pending, prior_pending, seen_tool_ids}
        )
        when is_binary(id) and id != "" and name in ["web_search", "web_fetch"] do
-    add_pending_tool(id, name, texts, pending, prior_pending)
+    add_pending_tool(id, name, texts, pending, prior_pending, seen_tool_ids)
   end
 
   defp collect_block(
@@ -176,11 +227,11 @@ defmodule ContextBot.Research.Reply do
            "tool_use_id" => id,
            "content" => content
          },
-         {:ok, texts, pending, prior_pending}
+         {:ok, texts, pending, prior_pending, seen_tool_ids}
        )
        when is_binary(id) and id != "" do
     if valid_tool_result_content?("web_search", content) do
-      complete_tool(id, "web_search", texts, pending, prior_pending)
+      complete_tool(id, "web_search", texts, pending, prior_pending, seen_tool_ids)
     else
       {:halt, {:error, :invalid_content}}
     end
@@ -192,10 +243,10 @@ defmodule ContextBot.Research.Reply do
            "tool_use_id" => id,
            "content" => content
          },
-         {:ok, texts, pending, prior_pending}
+         {:ok, texts, pending, prior_pending, seen_tool_ids}
        )
        when is_binary(id) and id != "" and is_map(content) do
-    complete_tool(id, "code_execution", texts, pending, prior_pending)
+    complete_tool(id, "code_execution", texts, pending, prior_pending, seen_tool_ids)
   end
 
   defp collect_block(
@@ -204,11 +255,11 @@ defmodule ContextBot.Research.Reply do
            "tool_use_id" => id,
            "content" => content
          },
-         {:ok, texts, pending, prior_pending}
+         {:ok, texts, pending, prior_pending, seen_tool_ids}
        )
        when is_binary(id) and id != "" do
     if valid_tool_result_content?("web_fetch", content) do
-      complete_tool(id, "web_fetch", texts, pending, prior_pending)
+      complete_tool(id, "web_fetch", texts, pending, prior_pending, seen_tool_ids)
     else
       {:halt, {:error, :invalid_content}}
     end
@@ -236,21 +287,168 @@ defmodule ContextBot.Research.Reply do
 
   defp collect_block(_block, _state), do: {:halt, {:error, :invalid_content}}
 
-  defp add_pending_tool(id, name, texts, pending, prior_pending) do
-    if Map.has_key?(pending, id) do
+  defp add_pending_tool(id, name, texts, pending, prior_pending, seen_tool_ids) do
+    if MapSet.member?(seen_tool_ids, id) do
       {:halt, {:error, :invalid_content}}
     else
-      {:cont, {:ok, texts, Map.put(pending, id, name), prior_pending}}
+      {:cont,
+       {:ok, texts, Map.put(pending, id, name), prior_pending, MapSet.put(seen_tool_ids, id)}}
     end
   end
 
-  defp complete_tool(id, expected_name, texts, pending, prior_pending) do
+  defp complete_tool(id, expected_name, texts, pending, prior_pending, seen_tool_ids) do
     case Map.fetch(pending, id) do
       {:ok, ^expected_name} ->
-        {:cont, {:ok, texts, Map.delete(pending, id), Map.delete(prior_pending, id)}}
+        {:cont,
+         {:ok, texts, Map.delete(pending, id), Map.delete(prior_pending, id), seen_tool_ids}}
 
       _missing_or_mismatched ->
         {:halt, {:error, :unexpected_tool_use}}
+    end
+  end
+
+  defp validate_saved_content(content, pending, seen_tool_ids) do
+    content
+    |> Enum.reduce_while(
+      {:ok, pending, pending, seen_tool_ids},
+      &validate_saved_block/2
+    )
+    |> case do
+      {:ok, next_pending, _prior_pending, next_seen} ->
+        {:ok, next_pending, next_seen}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp validate_saved_block(
+         %{
+           "type" => "web_search_tool_result",
+           "tool_use_id" => id,
+           "content" => content
+         },
+         {:ok, pending, prior_pending, seen_tool_ids}
+       )
+       when is_binary(id) and id != "" do
+    complete_saved_tool(
+      id,
+      "web_search",
+      content,
+      pending,
+      prior_pending,
+      seen_tool_ids
+    )
+  end
+
+  defp validate_saved_block(
+         %{
+           "type" => "web_fetch_tool_result",
+           "tool_use_id" => id,
+           "content" => content
+         },
+         {:ok, pending, prior_pending, seen_tool_ids}
+       )
+       when is_binary(id) and id != "" do
+    complete_saved_tool(
+      id,
+      "web_fetch",
+      content,
+      pending,
+      prior_pending,
+      seen_tool_ids
+    )
+  end
+
+  defp validate_saved_block(
+         %{
+           "type" => "code_execution_tool_result",
+           "tool_use_id" => id,
+           "content" => content
+         },
+         {:ok, pending, prior_pending, seen_tool_ids}
+       )
+       when is_binary(id) and id != "" and is_map(content) do
+    complete_saved_tool(
+      id,
+      "code_execution",
+      content,
+      pending,
+      prior_pending,
+      seen_tool_ids
+    )
+  end
+
+  defp validate_saved_block(
+         _block,
+         {:ok, _pending, prior_pending, _seen_tool_ids}
+       )
+       when map_size(prior_pending) > 0,
+       do: {:halt, {:error, :unexpected_tool_use}}
+
+  defp validate_saved_block(
+         %{
+           "type" => "server_tool_use",
+           "id" => id,
+           "name" => "code_execution",
+           "input" => input
+         },
+         {:ok, pending, prior_pending, seen_tool_ids}
+       )
+       when is_binary(id) and id != "" and is_map(input) do
+    add_saved_tool(id, "code_execution", pending, prior_pending, seen_tool_ids)
+  end
+
+  defp validate_saved_block(
+         %{"type" => "server_tool_use", "id" => id, "name" => name, "input" => _input},
+         {:ok, pending, prior_pending, seen_tool_ids}
+       )
+       when is_binary(id) and id != "" and name in ["web_search", "web_fetch"] do
+    add_saved_tool(id, name, pending, prior_pending, seen_tool_ids)
+  end
+
+  defp validate_saved_block(%{"type" => "server_tool_use", "name" => name}, _state)
+       when is_binary(name) and name not in ["web_search", "web_fetch", "code_execution"],
+       do: {:halt, {:error, :unexpected_tool_use}}
+
+  defp validate_saved_block(%{"type" => "server_tool_use"}, _state),
+    do: {:halt, {:error, :invalid_content}}
+
+  defp validate_saved_block(%{"type" => "tool_use"}, _state),
+    do: {:halt, {:error, :unexpected_tool_use}}
+
+  defp validate_saved_block(%{"type" => type}, _state)
+       when type in [
+              "web_search_tool_result",
+              "web_fetch_tool_result",
+              "code_execution_tool_result"
+            ],
+       do: {:halt, {:error, :invalid_content}}
+
+  defp validate_saved_block(_opaque_provider_block, state), do: {:cont, state}
+
+  defp add_saved_tool(id, name, pending, prior_pending, seen_tool_ids) do
+    if MapSet.member?(seen_tool_ids, id) do
+      {:halt, {:error, :invalid_content}}
+    else
+      {:cont, {:ok, Map.put(pending, id, name), prior_pending, MapSet.put(seen_tool_ids, id)}}
+    end
+  end
+
+  defp complete_saved_tool(
+         id,
+         expected_name,
+         content,
+         pending,
+         prior_pending,
+         seen_tool_ids
+       ) do
+    with true <- valid_tool_result_content?(expected_name, content),
+         {:ok, ^expected_name} <- Map.fetch(pending, id) do
+      {:cont, {:ok, Map.delete(pending, id), Map.delete(prior_pending, id), seen_tool_ids}}
+    else
+      false -> {:halt, {:error, :invalid_content}}
+      _missing_or_mismatched -> {:halt, {:error, :unexpected_tool_use}}
     end
   end
 
@@ -278,6 +476,8 @@ defmodule ContextBot.Research.Reply do
          %{"type" => "web_fetch_tool_result_error", "error_code" => error_code}
        ),
        do: is_binary(error_code)
+
+  defp valid_tool_result_content?("code_execution", content) when is_map(content), do: true
 
   defp valid_tool_result_content?(_tool_name, _content), do: false
 

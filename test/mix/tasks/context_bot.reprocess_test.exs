@@ -8,29 +8,39 @@ defmodule Mix.Tasks.ContextBot.ReprocessTest.Service do
   end
 end
 
+defmodule Mix.Tasks.ContextBot.ReprocessTest.Runtime do
+  @moduledoc false
+
+  def ensure_started do
+    config = Application.fetch_env!(:context_bot, __MODULE__)
+    send(config[:test_pid], :application_started)
+    config[:result]
+  end
+end
+
 defmodule Mix.Tasks.ContextBot.ReprocessTest do
   use ExUnit.Case, async: false
 
   alias ContextBot.Workflow.Invocation
   alias Mix.Tasks.ContextBot.Reprocess, as: ReprocessTask
-  alias Mix.Tasks.ContextBot.ReprocessTest.Service
+  alias Mix.Tasks.ContextBot.ReprocessTest.{Runtime, Service}
 
   setup do
     original_shell = Mix.shell()
     original_task = Application.get_env(:context_bot, ReprocessTask, :missing)
     original_service = Application.get_env(:context_bot, Service, :missing)
+    original_runtime = Application.get_env(:context_bot, Runtime, :missing)
 
     Mix.shell(Mix.Shell.Process)
     flush_mailbox()
 
     Application.put_env(:context_bot, ReprocessTask,
       reprocessor: Service,
-      application_starter: fn ->
-        send(self(), :application_started)
-        :ok
-      end,
+      runtime: Runtime,
       now: fn -> ~U[2026-08-11 22:30:00.000000Z] end
     )
+
+    Application.put_env(:context_bot, Runtime, test_pid: self(), result: :ok)
 
     Application.put_env(:context_bot, Service,
       test_pid: self(),
@@ -41,6 +51,7 @@ defmodule Mix.Tasks.ContextBot.ReprocessTest do
       Mix.shell(original_shell)
       restore_env(ReprocessTask, original_task)
       restore_env(Service, original_service)
+      restore_env(Runtime, original_runtime)
     end)
 
     :ok
@@ -91,14 +102,13 @@ defmodule Mix.Tasks.ContextBot.ReprocessTest do
   test "maps application startup failures without exposing their details" do
     sentinel = "sentinel-startup-secret"
 
-    Application.put_env(:context_bot, ReprocessTask,
-      reprocessor: Service,
-      application_starter: fn -> {:error, {:startup_failed, sentinel}} end,
-      now: fn -> ~U[2026-08-11 22:30:00.000000Z] end
+    Application.put_env(:context_bot, Runtime,
+      test_pid: self(),
+      result: {:error, {:startup_failed, sentinel}}
     )
 
     error = assert_raise Mix.Error, fn -> run(["42"]) end
-    assert error.message =~ "unable to start application"
+    assert error.message =~ "unable to start worker-free reprocessing runtime"
     refute error.message =~ sentinel
     refute_received {:reprocess, _, _}
   end

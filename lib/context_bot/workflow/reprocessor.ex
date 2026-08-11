@@ -124,10 +124,11 @@ defmodule ContextBot.Workflow.Reprocessor do
   defp research_job(%Invocation{} = invocation) do
     queue = if invocation.dry_run, do: :dry_research, else: :research
 
-    %{"uri" => invocation.invocation_uri, "cid" => invocation.notification_cid}
-    |> ResearchWorker.new(
-      queue: queue,
-      unique: [period: :infinity, fields: [:worker, :args], states: :incomplete]
-    )
+    %{
+      "uri" => invocation.invocation_uri,
+      "cid" => invocation.notification_cid,
+      "reprocess_token" => Ecto.UUID.generate()
+    }
+    |> ResearchWorker.new(queue: queue)
   end
 end

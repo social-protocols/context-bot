@@ -395,6 +395,67 @@ defmodule ContextBot.Research.RunnerTest do
     assert [%BudgetEntry{state: :settled}] = Repo.all(BudgetEntry)
   end
 
+  test "a retained dynamic-filtering response replays into exactly one length repair" do
+    invocation = invocation("retained-code-execution-repair")
+    fixture = decoded_fixture("repair_success.json")
+
+    tool_blocks =
+      Enum.flat_map(1..6, fn index ->
+        id = "srvtoolu_code_#{index}"
+
+        [
+          %{
+            "type" => "server_tool_use",
+            "id" => id,
+            "name" => "code_execution",
+            "input" => %{"code" => "opaque-#{index}"}
+          },
+          %{
+            "type" => "code_execution_tool_result",
+            "tool_use_id" => id,
+            "content" => %{"type" => "code_execution_result", "content" => []}
+          }
+        ]
+      end)
+
+    primary =
+      put_in(
+        fixture,
+        ["primary", "content"],
+        tool_blocks ++ [%{"type" => "text", "text" => String.duplicate("x", 301)}]
+      )["primary"]
+
+    primary_raw = Jason.encode!(primary)
+    repair_raw = Jason.encode!(fixture["repair"])
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, primary_raw)},
+      {:ok, envelope(200, repair_raw)}
+    ])
+
+    crash = crash_once(:after_persistence)
+
+    assert_raise RuntimeError, "injected crash after_persistence", fn ->
+      Runner.run(invocation, options(crash: crash))
+    end
+
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    assert_received {:attempt_at_send, :sent, %DateTime{}, nil}
+
+    assert {:ok, result} = Runner.run(invocation, options(crash: crash))
+    assert result.text == "A concise repaired answer."
+    assert result.validation == %{"result" => "valid", "repair_used" => true}
+
+    assert_received {:anthropic_call, _request, %{kind: :repair}, false}
+    refute_received {:anthropic_call, _request, %{kind: :research}, _in_transaction}
+
+    assert Enum.map(responses(invocation), & &1.raw_body) == [primary_raw, repair_raw]
+
+    assert [{:research, :settled}, {:repair, :settled}] ==
+             Repo.all(from entry in BudgetEntry, order_by: entry.id)
+             |> Enum.map(&{&1.kind, &1.state})
+  end
+
   test "a stale owner cannot send an unexposed reservation after lease takeover" do
     invocation = invocation("stale-reserved")
 
@@ -652,6 +713,67 @@ defmodule ContextBot.Research.RunnerTest do
     assert result.usage["tool_use_counts"] == %{"web_fetch" => 0, "web_search" => 0}
     assert_received {:anthropic_call, _initial, %{kind: :research}, false}
     assert_received {:anthropic_call, _continued, %{kind: :continuation}, false}
+  end
+
+  test "rejects malformed saved tool history before sending a continuation" do
+    code_result = %{
+      "type" => "code_execution_tool_result",
+      "tool_use_id" => "history-call-1",
+      "content" => %{"type" => "code_execution_result", "content" => []}
+    }
+
+    valid_code_call = %{
+      "type" => "server_tool_use",
+      "id" => "history-call-1",
+      "name" => "code_execution",
+      "input" => %{"code" => "opaque"}
+    }
+
+    cases = [
+      {"malformed-input", [Map.put(valid_code_call, "input", "not-a-map")], [code_result]},
+      {"mismatched-result",
+       [
+         %{
+           "type" => "server_tool_use",
+           "id" => "history-call-1",
+           "name" => "web_search",
+           "input" => %{"query" => "claim"}
+         },
+         code_result
+       ], []},
+      {"unknown-tool",
+       [
+         %{
+           "type" => "server_tool_use",
+           "id" => "history-call-1",
+           "name" => "future_server_tool",
+           "input" => %{}
+         }
+       ], []},
+      {"reused-id", [valid_code_call, code_result, valid_code_call], [code_result]}
+    ]
+
+    Enum.each(cases, fn {suffix, pause_content, final_prefix} ->
+      invocation = invocation("invalid-history-#{suffix}")
+      fixture = decoded_fixture("pause_then_success.json")
+      pause = put_in(fixture, ["pause", "content"], pause_content)["pause"]
+
+      success =
+        put_in(
+          fixture,
+          ["success", "content"],
+          final_prefix ++ [%{"type" => "text", "text" => "must not publish"}]
+        )["success"]
+
+      Process.put(:runner_client_results, [
+        {:ok, envelope(200, Jason.encode!(pause))},
+        {:ok, envelope(200, Jason.encode!(success))}
+      ])
+
+      assert {:error, _reason} = Runner.run(invocation, options())
+      assert_received {:anthropic_call, _request, %{kind: :research}, false}
+      refute_received {:anthropic_call, _request, %{kind: :continuation}, false}
+    end)
   end
 
   test "fails silently when the aggregate continuation cap is exceeded" do

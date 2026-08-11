@@ -50,9 +50,11 @@ without another research POST. If its model-authored reply is too long, the exis
 length-repair path may reserve and send one repair request. The daily budget applies normally.
 
 Expose this as `mix context_bot.reprocess INVOCATION_ID` and `just reprocess INVOCATION_ID`. The
-task starts the application, performs only the guarded state transition, and prints the reopened
-invocation ID. A subsequent normal `just dry-run ...` invocation attaches to and processes the
-reopened dry run, preserving the existing progress and interruption behavior.
+command requires `BOT_ENABLED=false` and fails if local Context Bot workers are already running. It
+starts only the database dependencies, never the full application, then performs the guarded state
+transition and prints the reopened invocation ID. Public-invocation reprocessing therefore requires
+a bot-disabled maintenance window. A subsequent normal `just dry-run ...` invocation attaches to
+and processes the reopened dry run, preserving the existing progress and interruption behavior.
 
 ## Verification
 

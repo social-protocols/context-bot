@@ -303,9 +303,10 @@ defmodule ContextBot.Research.Runner do
     if continuation_count(invocation, config) > config.settings.max_tool_continuations do
       {:error, :continuation_limit_exceeded}
     else
-      request = continuation_request(invocation.anthropic_messages, content, config.settings)
-
-      with {:ok, checkpoint} <- checkpoint_request(invocation, request, config) do
+      with {:ok, _tool_context} <-
+             Reply.server_tool_context(invocation.anthropic_messages, content),
+           request = continuation_request(invocation.anthropic_messages, content, config.settings),
+           {:ok, checkpoint} <- checkpoint_request(invocation, request, config) do
         start_attempt(checkpoint, :continuation, config)
       end
     end
@@ -456,10 +457,9 @@ defmodule ContextBot.Research.Runner do
   end
 
   defp select_reply(%{"content" => content, "stop_reason" => stop_reason}, invocation) do
-    Reply.select(content, %{
-      stop_reason: stop_reason,
-      pending_server_tools: pending_server_tools(invocation.anthropic_messages)
-    })
+    with {:ok, tool_context} <- Reply.server_tool_context(invocation.anthropic_messages) do
+      Reply.select(content, Map.put(tool_context, :stop_reason, stop_reason))
+    end
   end
 
   defp select_reply(_response, _invocation), do: {:error, :malformed_provider_response}
@@ -576,39 +576,6 @@ defmodule ContextBot.Research.Runner do
   end
 
   defp count_response_tools(_body, counts), do: counts
-
-  defp pending_server_tools(%{"messages" => messages}) when is_list(messages) do
-    Enum.reduce(messages, %{}, fn
-      %{"role" => "assistant", "content" => content}, pending when is_list(content) ->
-        update_pending_tools(content, pending)
-
-      _message, pending ->
-        pending
-    end)
-  end
-
-  defp pending_server_tools(_request), do: %{}
-
-  defp update_pending_tools(content, pending) do
-    Enum.reduce(content, pending, fn
-      %{"type" => "server_tool_use", "id" => id, "name" => name}, pending
-      when is_binary(id) and id != "" and
-             name in ["web_search", "web_fetch", "code_execution"] ->
-        Map.put(pending, id, name)
-
-      %{"type" => "web_search_tool_result", "tool_use_id" => id}, pending ->
-        Map.delete(pending, id)
-
-      %{"type" => "web_fetch_tool_result", "tool_use_id" => id}, pending ->
-        Map.delete(pending, id)
-
-      %{"type" => "code_execution_tool_result", "tool_use_id" => id}, pending ->
-        Map.delete(pending, id)
-
-      _block, pending ->
-        pending
-    end)
-  end
 
   defp repair_request?(%Invocation{anthropic_messages: %{"messages" => messages}}) do
     case List.last(messages) do

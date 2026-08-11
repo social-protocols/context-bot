@@ -3,7 +3,7 @@ defmodule Mix.Tasks.ContextBot.Reprocess do
 
   use Mix.Task
 
-  alias ContextBot.Workflow.Reprocessor
+  alias ContextBot.Workflow.{Reprocessor, ReprocessorRuntime}
 
   @requirements ["app.config"]
   @shortdoc "Reopen a provider-processing failure from its retained response"
@@ -12,11 +12,11 @@ defmodule Mix.Tasks.ContextBot.Reprocess do
   def run([invocation_id]) do
     id = parse_invocation_id!(invocation_id)
     config = Application.get_env(:context_bot, __MODULE__, [])
-    application_starter = Keyword.get(config, :application_starter, &start_application/0)
+    runtime = Keyword.get(config, :runtime, ReprocessorRuntime)
     reprocessor = Keyword.get(config, :reprocessor, Reprocessor)
     now = Keyword.get(config, :now, &DateTime.utc_now/0)
 
-    start_application!(application_starter)
+    start_runtime!(runtime)
 
     case reprocessor.reprocess(id, now: now.()) do
       {:ok, %{id: ^id}} ->
@@ -41,17 +41,10 @@ defmodule Mix.Tasks.ContextBot.Reprocess do
     end
   end
 
-  defp start_application do
-    case Application.ensure_all_started(:context_bot) do
-      {:ok, _applications} -> :ok
-      {:error, _reason} -> {:error, :application_start_failed}
-    end
-  end
-
-  defp start_application!(application_starter) do
-    case application_starter.() do
+  defp start_runtime!(runtime) do
+    case runtime.ensure_started() do
       :ok -> :ok
-      _error -> Mix.raise("unable to start application")
+      _error -> Mix.raise("unable to start worker-free reprocessing runtime")
     end
   end
 

@@ -73,10 +73,14 @@ just reprocess 42
 ```
 
 The command fails closed unless invocation 42 is a provider-response failure with a complete,
-successful retained envelope and no ambiguous provider attempt. It only returns the invocation to
-durable pending work; it does not contact Anthropic or Bluesky. Start the normal runtime afterward,
-or rerun the matching `just dry-run` command, to process the stored envelope. If the stored answer
-is over the Bluesky limit, the normal budgeted length-repair call may still occur.
+successful retained envelope and no ambiguous provider attempt. Run it only with
+`BOT_ENABLED=false` and no Context Bot runtime already active against the same SQLite database. The
+command starts only the database dependencies, returns the invocation to durable pending work, and
+does not start Oban, the mention poller, an ATProto session, or the full application. It therefore
+does not contact Anthropic or Bluesky. Start the normal runtime afterward, or rerun the matching
+`just dry-run` command, to process the stored envelope. For a public invocation, disable the bot or
+put it into maintenance before reprocessing, then restart it afterward. If the stored answer is over
+the Bluesky limit, the normal budgeted length-repair call may still occur.
 
 Every row created this way has `dry_run = 1`. It skips mention eligibility and mention-rate admission, but retains provider budgets, response/tool/token/storage limits, retries, leases, and full bounded provider response envelopes. It never starts the notification poller or ATProto session, never creates a reply record, and cannot acquire a publication lease. A budget deferral remains durable for later operator inspection; rerunning the command creates a new check.
 
@@ -103,7 +107,7 @@ Running a real check requires an operator-supplied public post and explicit auth
 | `just check` | Run the complete local quality gate. |
 | `just db-create` / `db-migrate` / `db-reset` | Manage the local SQLite database. |
 | `just dry-run <post> <question>` | Run a durable local-only context check; reads Bluesky and spends Anthropic budget. |
-| `just reprocess <invocation-id>` | Reopen a guarded provider-processing failure from its retained response; performs no external I/O. |
+| `just reprocess <invocation-id>` | With the bot disabled and workers stopped, reopen a guarded provider-processing failure from its retained response; performs no external I/O. |
 | `just docker-build` | Build `context-bot:local`. |
 | `just secrets` | Validate the allowlisted Bitwarden fields without printing values. |
 | `just deploy` | Stage the three runtime secrets and deploy to Fly. External authorization is required. |

@@ -132,8 +132,8 @@ Expected: all tests pass consistently.
 
 - [ ] **Step 1: Write failing Mix task tests**
 
-Inject a fake reprocessor, assert strict positive-integer parsing, application startup, success
-output, and credential-safe errors for every rejected result.
+Inject a fake reprocessor, assert strict positive-integer parsing, worker-free database runtime
+startup, success output, and credential-safe errors for every rejected result.
 
 - [ ] **Step 2: Verify the task tests fail because the task is absent**
 
@@ -144,7 +144,8 @@ Expected: compilation fails because `Mix.Tasks.ContextBot.Reprocess` is undefine
 - [ ] **Step 3: Implement the Mix task and just recipe**
 
 Add the thin task, `reprocess invocation_id:` recipe, and README operator instructions explaining
-that processing resumes on the next normal runtime start and can still make a bounded repair call.
+that the bot must be disabled and local workers stopped, processing resumes on the next normal
+runtime start, and a bounded repair call may still occur.
 
 - [ ] **Step 4: Verify focused command and workflow tests**
 

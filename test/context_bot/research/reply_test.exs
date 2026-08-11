@@ -118,6 +118,7 @@ defmodule ContextBot.Research.ReplyTest do
       [call, Map.put(result, "content", []), text("must not publish")],
       [call, Map.put(result, "tool_use_id", "other"), text("must not publish")],
       [call, call, result, text("must not publish")],
+      [call, result, call, result, text("must not publish")],
       [result, text("must not publish")]
     ]
 

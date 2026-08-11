@@ -80,6 +80,32 @@ defmodule ContextBot.Workflow.ReprocessorTest do
     assert [_job] = research_jobs(invocation)
   end
 
+  test "inserts distinct replay work while the failed worker job is still executing" do
+    invocation = reprocessable_invocation(true, "executing-old-job")
+    entry = recorded_attempt(invocation)
+    _envelope = recorded_envelope(invocation, entry)
+
+    old_job =
+      %{"uri" => invocation.invocation_uri, "cid" => invocation.notification_cid}
+      |> Oban.Job.new(worker: ContextBot.Workers.ResearchWorker, queue: :dry_research)
+      |> Repo.insert!()
+      |> Ecto.Changeset.change(%{
+        state: "executing",
+        attempted_at: @now,
+        attempted_by: ["old-node"]
+      })
+      |> Repo.update!()
+
+    assert {:ok, _reopened} = Reprocessor.reprocess(invocation.id, now: @now)
+
+    assert [persisted_old, replay] = research_jobs(invocation)
+    assert persisted_old.id == old_job.id
+    assert persisted_old.state == "executing"
+    assert replay.state == "available"
+    assert is_binary(replay.args["reprocess_token"])
+    assert replay.args["reprocess_token"] != ""
+  end
+
   test "rejects missing, nonterminal, and non-provider failures" do
     assert {:error, :not_found} = Reprocessor.reprocess(999_999, now: @now)
 
