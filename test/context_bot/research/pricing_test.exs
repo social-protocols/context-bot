@@ -91,14 +91,34 @@ defmodule ContextBot.Research.PricingTest do
           :input_tokens,
           :cache_creation_input_tokens,
           :cache_read_input_tokens,
-          :output_tokens,
-          :server_tool_use
+          :output_tokens
         ] do
       assert {:error, :unsafe_usage} = Pricing.calculate(Map.delete(complete, missing), pricing)
     end
 
     assert {:error, :unsafe_usage} =
              Pricing.calculate(put_in(complete, [:server_tool_use], %{}), pricing)
+  end
+
+  test "prices omitted or null server-tool usage as zero requests" do
+    pricing = Pricing.fetch!("sonnet-5-2026-07-28")
+
+    usage = %{
+      input_tokens: 1,
+      cache_creation_input_tokens: 0,
+      cache_creation: %{
+        ephemeral_5m_input_tokens: 0,
+        ephemeral_1h_input_tokens: 0
+      },
+      cache_read_input_tokens: 0,
+      output_tokens: 1
+    }
+
+    assert {:ok, 12} = Pricing.calculate(usage, pricing)
+    assert {:ok, 12} = Pricing.calculate(Map.put(usage, :server_tool_use, nil), pricing)
+
+    assert {:error, :unsafe_usage} =
+             Pricing.calculate(Map.put(usage, :server_tool_use, []), pricing)
   end
 
   test "rejects unknown pricing versions" do

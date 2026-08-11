@@ -157,7 +157,8 @@ defmodule ContextBot.Research.Budget do
     calculated = Pricing.calculate(usage, pricing)
 
     update_immediately(id, claim_token, now, fn
-      %BudgetEntry{state: :sent, response_recorded_at: %DateTime{}} = entry ->
+      %BudgetEntry{state: state, response_recorded_at: %DateTime{}} = entry
+      when state in [:sent, :indeterminate] ->
         settlement_attrs(entry, usage, pricing, calculated)
         |> then(&BudgetEntry.changeset(entry, &1))
         |> Repo.update!()

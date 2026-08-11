@@ -47,6 +47,23 @@ defmodule ContextBot.Workflow.ReprocessorTest do
     assert job.queue == "research"
   end
 
+  test "reopens a response-recorded indeterminate attempt for local resettlement" do
+    invocation = reprocessable_invocation(true, "recorded-indeterminate")
+
+    entry =
+      invocation
+      |> recorded_attempt()
+      |> Ecto.Changeset.change(%{state: :indeterminate, settled_microdollars: nil})
+      |> Repo.update!()
+
+    _envelope = recorded_envelope(invocation, entry)
+
+    assert {:ok, reopened} = Reprocessor.reprocess(invocation.id, now: @now)
+    assert reopened.stage == :thread_ready
+    assert Repo.reload!(entry).state == :indeterminate
+    assert [_job] = research_jobs(invocation)
+  end
+
   test "reprocessing is one-shot and cannot enqueue duplicate work" do
     invocation = reprocessable_invocation(true, "one-shot")
     entry = recorded_attempt(invocation)

@@ -867,6 +867,37 @@ defmodule ContextBot.Research.RunnerTest do
            ]
   end
 
+  test "re-settles a retained repair with omitted server-tool usage without another POST" do
+    invocation = invocation("repair-omitted-server-tool-usage")
+    fixture = decoded_fixture("repair_success.json")
+    repair = update_in(fixture["repair"], ["usage"], &Map.delete(&1, "server_tool_use"))
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(fixture["primary"]))},
+      {:ok, envelope(200, Jason.encode!(repair))}
+    ])
+
+    assert {:ok, first_result} = Runner.run(invocation, options())
+    assert first_result.text == "A concise repaired answer."
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    assert_received {:anthropic_call, _request, %{kind: :repair}, false}
+
+    repair_entry = Repo.get_by!(BudgetEntry, invocation_id: invocation.id, kind: :repair)
+
+    repair_entry
+    |> Ecto.Changeset.change(%{state: :indeterminate, settled_microdollars: nil})
+    |> Repo.update!()
+
+    Process.put(:runner_client_results, [])
+
+    assert {:ok, replayed_result} = Runner.run(Repo.reload!(invocation), options())
+    assert replayed_result.text == "A concise repaired answer."
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+
+    assert Repo.reload!(repair_entry).state == :settled
+    assert length(responses(invocation)) == 2
+  end
+
   test "a repair tool use or second invalid result never triggers another repair" do
     for {suffix, repair_response, expected_reason} <- [
           {

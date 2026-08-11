@@ -91,6 +91,28 @@ defmodule ContextBot.Research.BudgetTest do
     assert Budget.remaining(@now, 1_000) == 550
   end
 
+  test "a recorded indeterminate attempt can settle after local usage validation is corrected" do
+    invocation = invocation("recorded-indeterminate-resettlement")
+    pricing = Pricing.fetch!("sonnet-5-2026-07-28")
+
+    assert {:ok, entry} = Budget.reserve_next(invocation, :repair, @now, 400, 1_000)
+    assert {:ok, sent} = Budget.mark_sent(entry, @now)
+
+    assert {:ok, recorded} =
+             Budget.mark_response_recorded(sent, DateTime.add(@now, 1, :second))
+
+    assert {:ok, indeterminate} =
+             Budget.settle(recorded, %{"output_tokens" => "locally-unrecognized"}, pricing)
+
+    assert indeterminate.state == :indeterminate
+    assert indeterminate.response_recorded_at != nil
+
+    assert {:ok, settled} = Budget.settle(indeterminate, usage(output_tokens: 10), pricing)
+    assert settled.state == :settled
+    assert settled.settled_microdollars == 100
+    assert Budget.remaining(@now, 1_000) == 900
+  end
+
   test "uses the UTC date for daily rollover" do
     invocation = invocation("rollover")
     next_day = ~U[2026-07-30 00:00:00.000000Z]

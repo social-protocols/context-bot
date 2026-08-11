@@ -86,8 +86,7 @@ defmodule ContextBot.Research.Pricing do
              cache_write_aggregate,
              cache_write_5m + cache_write_1h
            ),
-         {:ok, server_tool_use} <- required_child_map(usage, :server_tool_use),
-         {:ok, web_search} <- required_count(server_tool_use, :web_search_requests) do
+         {:ok, web_search} <- web_search_requests(usage) do
       cost =
         {0, 1}
         |> add_cost(input, pricing.input)
@@ -129,10 +128,16 @@ defmodule ContextBot.Research.Pricing do
     end
   end
 
-  defp required_child_map(map, key) do
-    case fetch_required(map, key) do
-      {:ok, value} when is_map(value) -> {:ok, value}
-      _unsafe -> {:error, :unsafe_usage}
+  defp web_search_requests(usage) do
+    case fetch(usage, :server_tool_use, nil) do
+      nil ->
+        {:ok, 0}
+
+      server_tool_use when is_map(server_tool_use) ->
+        required_count(server_tool_use, :web_search_requests)
+
+      _unsafe ->
+        {:error, :unsafe_usage}
     end
   end
 

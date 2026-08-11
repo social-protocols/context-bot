@@ -53,6 +53,13 @@ to be repeated.
 - `Oban.whereis/1` raises when `Oban.Registry` has not started, which is the normal worker-free
   state. Check for the registry first; treat its absence as no Oban runtime and unexpected lookup
   failures as active/unsafe.
+- Anthropic's generated SDK schema defines `usage.server_tool_use` as optional/nullable, and a real
+  no-tool repair response omitted it. Treat an omitted or null breakdown as zero web searches while
+  continuing to reject malformed or incomplete breakdown objects when they are present:
+  <https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/types/usage.py>
+- A locally unrecognized usage shape can leave a complete recorded response marked
+  `indeterminate`. After correcting the validator, that same recorded attempt must be eligible for
+  safe re-settlement; recovery must not make another provider POST.
 
 ## Implications
 
