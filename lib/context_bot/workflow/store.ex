@@ -57,6 +57,36 @@ defmodule ContextBot.Workflow.Store do
   def create_or_attach_live_run(_receipt, _received_at, _job_builder),
     do: {:error, :invalid_input}
 
+  @doc "Requeues a due operator live-demo budget deferral without admission checks."
+  @spec resume_due_live_budget(
+          Invocation.t(),
+          DateTime.t(),
+          (String.t(), String.t() -> Changeset.t())
+        ) :: {:ok, Invocation.t(), :resumed | :unchanged} | {:error, Changeset.t()}
+  def resume_due_live_budget(%Invocation{id: id}, %DateTime{} = now, job_builder)
+      when is_integer(id) and is_function(job_builder, 2) do
+    result =
+      Repo.transaction(
+        fn ->
+          invocation = Repo.get!(Invocation, id)
+
+          if due_live_budget?(invocation, now) do
+            resume_live_budget!(invocation, job_builder)
+          else
+            {invocation, :unchanged}
+          end
+        end,
+        mode: :immediate
+      )
+
+    case result do
+      {:ok, {invocation, disposition}} -> {:ok, invocation, disposition}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def resume_due_live_budget(_invocation, _now, _job_builder), do: {:error, :invalid_input}
+
   @spec receive_mention(map(), DateTime.t(), Ecto.Changeset.t() | nil) ::
           {:ok, Invocation.t(), :inserted | :duplicate}
   def receive_mention(notification, received_at, next_job) do
@@ -618,6 +648,43 @@ defmodule ContextBot.Workflow.Store do
     do: :terminal
 
   defp live_run_disposition(%Invocation{}), do: :attached
+
+  defp due_live_budget?(
+         %Invocation{
+           dry_run: false,
+           stage: :deferred_budget,
+           eligibility_method: "operator_live_demo",
+           defer_until: %DateTime{} = defer_until
+         },
+         now
+       ),
+       do: DateTime.compare(defer_until, now) in [:lt, :eq]
+
+  defp due_live_budget?(_invocation, _now), do: false
+
+  defp resume_live_budget!(invocation, job_builder) do
+    attrs = %{
+      status: :thread_ready,
+      stage: :thread_ready,
+      defer_until: nil,
+      research_claim_token: nil,
+      research_claimed_at: nil,
+      failure_category: nil,
+      failure_detail: nil,
+      completed_at: nil
+    }
+
+    case Repo.update(Invocation.transition_changeset(invocation, attrs)) do
+      {:ok, resumed} ->
+        case Repo.insert(job_builder.(resumed.invocation_uri, resumed.notification_cid)) do
+          {:ok, _job} -> {resumed, :resumed}
+          {:error, reason} -> Repo.rollback(reason)
+        end
+
+      {:error, reason} ->
+        Repo.rollback(reason)
+    end
+  end
 
   defp insert_live_run!(receipt, received_at, job_builder) do
     attrs = %{

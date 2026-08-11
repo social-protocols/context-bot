@@ -241,6 +241,69 @@ defmodule ContextBot.Workflow.StoreTest do
     assert Repo.aggregate(Oban.Job, :count) == 0
   end
 
+  test "resumes only a due operator live-demo budget deferral with one research job" do
+    receipt = live_receipt("at://did:plc:actor/app.bsky.feed.post/live-budget", "bafy-budget")
+    invocation = live_invocation!(receipt, :deferred_budget)
+
+    invocation
+    |> Invocation.transition_changeset(%{
+      defer_until: DateTime.add(@received_at, -1, :second),
+      deferred_attempt_kind: :research,
+      canonical_thread: "durable thread"
+    })
+    |> Repo.update!()
+
+    assert {:ok, resumed, :resumed} =
+             Store.resume_due_live_budget(
+               invocation,
+               @received_at,
+               &research_job/2
+             )
+
+    assert resumed.stage == :thread_ready
+    assert resumed.defer_until == nil
+    assert resumed.deferred_attempt_kind == :research
+    assert [%Oban.Job{queue: "research"}] = Repo.all(Oban.Job)
+
+    assert {:ok, same, :unchanged} =
+             Store.resume_due_live_budget(resumed, @received_at, &research_job/2)
+
+    assert same.id == resumed.id
+    assert Repo.aggregate(Oban.Job, :count) == 1
+  end
+
+  test "does not resume a future or ordinarily admitted public budget deferral" do
+    future_receipt =
+      live_receipt("at://did:plc:actor/app.bsky.feed.post/live-future", "bafy-future")
+
+    future = live_invocation!(future_receipt, :deferred_budget)
+
+    future
+    |> Invocation.transition_changeset(%{
+      defer_until: DateTime.add(@received_at, 1, :second),
+      canonical_thread: "durable thread"
+    })
+    |> Repo.update!()
+
+    assert {:ok, unchanged, :unchanged} =
+             Store.resume_due_live_budget(future, @received_at, &research_job/2)
+
+    assert unchanged.stage == :deferred_budget
+
+    future
+    |> Invocation.transition_changeset(%{
+      eligibility_method: "operator_allowlist",
+      defer_until: DateTime.add(@received_at, -1, :second)
+    })
+    |> Repo.update!()
+
+    assert {:ok, ordinary, :unchanged} =
+             Store.resume_due_live_budget(future, @received_at, &research_job/2)
+
+    assert ordinary.stage == :deferred_budget
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
   test "rejects invalid dry-run inputs before inserting a row or job" do
     target_uri = "at://did:plc:target/app.bsky.feed.post/3invalid"
 
@@ -752,6 +815,15 @@ defmodule ContextBot.Workflow.StoreTest do
       %{"uri" => uri, "cid" => cid},
       worker: "ContextBot.Workers.ThreadWorker",
       queue: :thread
+    )
+  end
+
+  defp research_job(uri, cid) do
+    Oban.Job.new(
+      %{"uri" => uri, "cid" => cid},
+      worker: "ContextBot.Workers.ResearchWorker",
+      queue: :research,
+      unique: [period: :infinity, fields: [:worker, :args], states: :incomplete]
     )
   end
 
