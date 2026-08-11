@@ -11,6 +11,7 @@ defmodule Mix.Tasks.ContextBot.DryRun do
 
   @requirements ["app.config"]
   @shortdoc "Run a durable local context check without posting to Bluesky"
+  @owner_retry_ticks 3
 
   @impl Mix.Task
   def run([post, question]) do
@@ -36,10 +37,8 @@ defmodule Mix.Tasks.ContextBot.DryRun do
     token = install_interrupts!(interrupts, progress_module, progress)
 
     try do
-      start_workers!(runtime)
-
       {result, _progress} =
-        await_with_progress(service, runtime, invocation, progress_module, progress)
+        execute_or_observe(service, runtime, invocation, progress_module, progress)
 
       print_result(result, settled_cost)
     after
@@ -114,8 +113,39 @@ defmodule Mix.Tasks.ContextBot.DryRun do
     end
   end
 
-  defp start_workers!(runtime) do
-    case runtime.start_workers([]) do
+  defp execute_or_observe(service, runtime, invocation, progress_module, progress) do
+    case acquire_owner!(runtime) do
+      {:ok, owner} ->
+        try do
+          start_workers!(runtime, owner)
+          await_with_progress(service, invocation, progress_module, progress)
+        after
+          stop_runtime!(runtime, owner)
+        end
+
+      :contended ->
+        await_while_contended(service, runtime, invocation, progress_module, progress)
+    end
+  end
+
+  defp acquire_owner!(runtime) do
+    case runtime.try_acquire_owner([]) do
+      {:ok, owner} when is_pid(owner) ->
+        {:ok, owner}
+
+      {:error, :runtime_owned} ->
+        :contended
+
+      {:error, reason} ->
+        Mix.raise("unable to acquire safe dry-run runtime: #{safe_runtime_error(reason)}")
+
+      _invalid_result ->
+        Mix.raise("unable to acquire safe dry-run runtime: runtime_failure")
+    end
+  end
+
+  defp start_workers!(runtime, owner) do
+    case runtime.start_workers(owner, []) do
       :ok ->
         :ok
 
@@ -124,6 +154,19 @@ defmodule Mix.Tasks.ContextBot.DryRun do
 
       _invalid_result ->
         Mix.raise("unable to start safe dry-run workers: runtime_failure")
+    end
+  end
+
+  defp stop_runtime!(runtime, owner) do
+    case runtime.stop(owner) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Mix.raise("unable to stop safe dry-run workers: #{safe_runtime_error(reason)}")
+
+      _invalid_result ->
+        Mix.raise("unable to stop safe dry-run workers: runtime_failure")
     end
   end
 
@@ -157,29 +200,67 @@ defmodule Mix.Tasks.ContextBot.DryRun do
     end
   end
 
-  defp await_with_progress(service, runtime, invocation, progress_module, progress) do
+  defp await_with_progress(service, invocation, progress_module, progress) do
+    {token, task} = start_await_task(service, invocation)
+
+    await_foreground(token, task, invocation.id, progress_module, progress)
+  end
+
+  defp await_while_contended(service, runtime, invocation, progress_module, progress) do
+    {token, task} =
+      start_await_task(service, invocation, wait_for_due_deferred: true)
+
+    resume_as_owner = fn current_progress ->
+      await_with_progress(service, invocation, progress_module, current_progress)
+    end
+
+    try do
+      await_contended(
+        token,
+        task,
+        runtime,
+        invocation.id,
+        progress_module,
+        progress,
+        @owner_retry_ticks,
+        resume_as_owner
+      )
+    after
+      _shutdown_result = Task.shutdown(task, 0)
+    end
+  end
+
+  defp start_await_task(service, invocation) do
+    start_await_task(service, invocation, [])
+  end
+
+  defp start_await_task(service, invocation, await_options) do
     owner = self()
     token = make_ref()
 
     task =
       Task.async(fn ->
-        service.await(invocation,
-          on_update: fn current -> send(owner, {token, :progress, current}) end
-        )
+        options =
+          Keyword.put(
+            await_options,
+            :on_update,
+            fn current -> send(owner, {token, :progress, current}) end
+          )
+
+        service.await(invocation, options)
       end)
 
     Process.unlink(task.pid)
-
-    await_foreground(token, task, runtime, invocation.id, progress_module, progress)
+    {token, task}
   end
 
-  defp await_foreground(token, task, runtime, invocation_id, progress_module, progress) do
+  defp await_foreground(token, task, invocation_id, progress_module, progress) do
     task_ref = task.ref
 
     receive do
       {^token, :progress, invocation} ->
         progress = progress_module.update(progress, invocation)
-        await_foreground(token, task, runtime, invocation_id, progress_module, progress)
+        await_foreground(token, task, invocation_id, progress_module, progress)
 
       {^task_ref, result} ->
         _shutdown_result = Task.shutdown(task, 0)
@@ -187,7 +268,6 @@ defmodule Mix.Tasks.ContextBot.DryRun do
 
       {:context_bot_interrupt, signal} when signal in [:sigint, :sigterm] ->
         Task.shutdown(task, 5_000)
-        runtime.stop()
         {{:error, {:interrupted, invocation_id}}, progress}
 
       {:DOWN, ^task_ref, :process, _pid, _reason} ->
@@ -195,7 +275,119 @@ defmodule Mix.Tasks.ContextBot.DryRun do
     after
       100 ->
         progress = progress_module.tick(progress)
-        await_foreground(token, task, runtime, invocation_id, progress_module, progress)
+        await_foreground(token, task, invocation_id, progress_module, progress)
+    end
+  end
+
+  defp await_contended(
+         token,
+         task,
+         runtime,
+         invocation_id,
+         progress_module,
+         progress,
+         retry_ticks,
+         resume_as_owner
+       ) do
+    task_ref = task.ref
+
+    receive do
+      {^token, :progress, invocation} ->
+        progress = progress_module.update(progress, invocation)
+
+        await_contended(
+          token,
+          task,
+          runtime,
+          invocation_id,
+          progress_module,
+          progress,
+          retry_ticks,
+          resume_as_owner
+        )
+
+      {^task_ref, result} ->
+        _shutdown_result = Task.shutdown(task, 0)
+        {result, progress}
+
+      {:context_bot_interrupt, signal} when signal in [:sigint, :sigterm] ->
+        Task.shutdown(task, 5_000)
+        {{:error, {:interrupted, invocation_id}}, progress}
+
+      {:DOWN, ^task_ref, :process, _pid, _reason} ->
+        {{:error, :await_failed}, progress}
+    after
+      100 ->
+        progress = progress_module.tick(progress)
+
+        retry_or_continue(
+          token,
+          task,
+          runtime,
+          invocation_id,
+          progress_module,
+          progress,
+          retry_ticks,
+          resume_as_owner
+        )
+    end
+  end
+
+  defp retry_or_continue(
+         token,
+         task,
+         runtime,
+         invocation_id,
+         progress_module,
+         progress,
+         retry_ticks,
+         resume_as_owner
+       )
+       when retry_ticks > 1 do
+    await_contended(
+      token,
+      task,
+      runtime,
+      invocation_id,
+      progress_module,
+      progress,
+      retry_ticks - 1,
+      resume_as_owner
+    )
+  end
+
+  defp retry_or_continue(
+         token,
+         task,
+         runtime,
+         invocation_id,
+         progress_module,
+         progress,
+         _retry_ticks,
+         resume_as_owner
+       ) do
+    case acquire_owner!(runtime) do
+      {:ok, owner} ->
+        try do
+          _shutdown_result = Task.shutdown(task, 0)
+          start_workers!(runtime, owner)
+          resume_as_owner.(progress)
+        after
+          _shutdown_result = Task.shutdown(task, 0)
+          stop_runtime!(runtime, owner)
+        end
+
+      :contended ->
+        await_contended(
+          token,
+          task,
+          runtime,
+          invocation_id,
+          progress_module,
+          progress,
+          @owner_retry_ticks,
+          resume_as_owner
+        )
     end
   end
 

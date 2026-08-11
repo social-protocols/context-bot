@@ -42,35 +42,22 @@ defmodule ContextBot.DryRun do
   def await(invocation, options \\ [])
 
   def await(%Invocation{id: id, dry_run: true}, options) when is_integer(id) do
-    timeout_ms = Keyword.get(options, :timeout_ms, @default_timeout_ms)
-    poll_interval_ms = Keyword.get(options, :poll_interval_ms, @default_poll_interval_ms)
-    sleep = Keyword.get(options, :sleep, &Process.sleep/1)
-    on_update = Keyword.get(options, :on_update, fn _invocation -> :ok end)
-    interrupt? = Keyword.get(options, :interrupt?, fn -> false end)
+    wait = %{
+      id: id,
+      timeout_ms: Keyword.get(options, :timeout_ms, @default_timeout_ms),
+      poll_interval_ms: Keyword.get(options, :poll_interval_ms, @default_poll_interval_ms),
+      sleep: Keyword.get(options, :sleep, &Process.sleep/1),
+      monotonic_ms:
+        Keyword.get(options, :monotonic_ms, fn -> System.monotonic_time(:millisecond) end),
+      on_update: Keyword.get(options, :on_update, fn _invocation -> :ok end),
+      interrupt: Keyword.get(options, :interrupt?, fn -> false end),
+      wait_for_due_deferred: Keyword.get(options, :wait_for_due_deferred, false),
+      now: Keyword.get(options, :now, &DateTime.utc_now/0)
+    }
 
-    monotonic_ms =
-      Keyword.get(options, :monotonic_ms, fn -> System.monotonic_time(:millisecond) end)
-
-    if valid_wait_options?(
-         timeout_ms,
-         poll_interval_ms,
-         sleep,
-         monotonic_ms,
-         on_update,
-         interrupt?
-       ) do
-      deadline = monotonic_ms.() + timeout_ms
-
-      await_loop(
-        id,
-        deadline,
-        poll_interval_ms,
-        sleep,
-        monotonic_ms,
-        on_update,
-        interrupt?,
-        nil
-      )
+    if valid_wait_options?(wait) do
+      wait = Map.put(wait, :deadline, wait.monotonic_ms.() + wait.timeout_ms)
+      await_loop(wait, nil)
     else
       {:error, :invalid_input}
     end
@@ -78,41 +65,16 @@ defmodule ContextBot.DryRun do
 
   def await(%Invocation{}, _options), do: {:error, :invalid_input}
 
-  defp await_loop(
-         id,
-         deadline,
-         poll_interval_ms,
-         sleep,
-         monotonic_ms,
-         on_update,
-         interrupt?,
-         last_stage
-       ) do
-    case Repo.get(Invocation, id) do
+  defp await_loop(wait, last_stage) do
+    case Repo.get(Invocation, wait.id) do
       %Invocation{} = invocation ->
-        last_stage = notify_stage(invocation, last_stage, on_update)
+        last_stage = notify_stage(invocation, last_stage, wait.on_update)
 
         case invocation.stage do
-          :complete ->
-            {:ok, invocation}
-
-          :failed ->
-            {:error, invocation}
-
-          :deferred_budget ->
-            {:deferred, invocation}
-
-          _nonterminal ->
-            await_nonterminal(
-              id,
-              deadline,
-              poll_interval_ms,
-              sleep,
-              monotonic_ms,
-              on_update,
-              interrupt?,
-              last_stage
-            )
+          :complete -> {:ok, invocation}
+          :failed -> {:error, invocation}
+          :deferred_budget -> await_deferred(invocation, wait, last_stage)
+          _nonterminal -> await_nonterminal(wait, last_stage)
         end
 
       nil ->
@@ -120,62 +82,33 @@ defmodule ContextBot.DryRun do
     end
   end
 
-  defp await_nonterminal(
-         id,
-         deadline,
-         poll_interval_ms,
-         sleep,
-         monotonic_ms,
-         on_update,
-         interrupt?,
-         last_stage
-       ) do
-    cond do
-      interrupt?.() ->
-        {:error, :interrupted}
-
-      monotonic_ms.() >= deadline ->
-        {:error, :timeout}
-
-      true ->
-        sleep.(poll_interval_ms)
-
-        resume_after_sleep(
-          id,
-          deadline,
-          poll_interval_ms,
-          sleep,
-          monotonic_ms,
-          on_update,
-          interrupt?,
-          last_stage
-        )
+  defp await_deferred(invocation, wait, last_stage) do
+    if wait.wait_for_due_deferred and due_deferred?(invocation, wait.now) do
+      await_nonterminal(wait, last_stage)
+    else
+      {:deferred, invocation}
     end
   end
 
-  defp resume_after_sleep(
-         id,
-         deadline,
-         poll_interval_ms,
-         sleep,
-         monotonic_ms,
-         on_update,
-         interrupt?,
-         last_stage
-       ) do
-    if interrupt?.() do
+  defp await_nonterminal(wait, last_stage) do
+    cond do
+      wait.interrupt.() ->
+        {:error, :interrupted}
+
+      wait.monotonic_ms.() >= wait.deadline ->
+        {:error, :timeout}
+
+      true ->
+        wait.sleep.(wait.poll_interval_ms)
+        resume_after_sleep(wait, last_stage)
+    end
+  end
+
+  defp resume_after_sleep(wait, last_stage) do
+    if wait.interrupt.() do
       {:error, :interrupted}
     else
-      await_loop(
-        id,
-        deadline,
-        poll_interval_ms,
-        sleep,
-        monotonic_ms,
-        on_update,
-        interrupt?,
-        last_stage
-      )
+      await_loop(wait, last_stage)
     end
   end
 
@@ -186,18 +119,32 @@ defmodule ContextBot.DryRun do
     stage
   end
 
-  defp valid_wait_options?(
-         timeout_ms,
-         poll_interval_ms,
-         sleep,
-         monotonic_ms,
-         on_update,
-         interrupt?
-       ) do
-    is_integer(timeout_ms) and timeout_ms >= 0 and is_integer(poll_interval_ms) and
-      poll_interval_ms > 0 and is_function(sleep, 1) and is_function(monotonic_ms, 0) and
-      is_function(on_update, 1) and is_function(interrupt?, 0)
+  defp valid_wait_options?(wait),
+    do: valid_wait_timing?(wait) and valid_wait_callbacks?(wait) and valid_wait_mode?(wait)
+
+  defp valid_wait_timing?(wait),
+    do:
+      is_integer(wait.timeout_ms) and wait.timeout_ms >= 0 and
+        is_integer(wait.poll_interval_ms) and wait.poll_interval_ms > 0
+
+  defp valid_wait_callbacks?(wait),
+    do:
+      is_function(wait.sleep, 1) and is_function(wait.monotonic_ms, 0) and
+        is_function(wait.on_update, 1) and is_function(wait.interrupt, 0) and
+        is_function(wait.now, 0)
+
+  defp valid_wait_mode?(wait), do: is_boolean(wait.wait_for_due_deferred)
+
+  defp due_deferred?(%Invocation{defer_until: %DateTime{} = defer_until}, now) do
+    case now.() do
+      %DateTime{} = timestamp -> DateTime.compare(defer_until, timestamp) != :gt
+      _invalid_timestamp -> true
+    end
+  rescue
+    _invalid_timestamp -> true
   end
+
+  defp due_deferred?(_invocation, _now), do: true
 
   defp validate_question(question) do
     if String.valid?(question) and byte_size(question) <= @maximum_question_bytes and

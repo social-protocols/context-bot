@@ -118,6 +118,47 @@ defmodule ContextBot.DryRunTest do
     end
   end
 
+  test "contender observation waits through due budget deferrals but returns future deferrals" do
+    due =
+      "await-due-deferral"
+      |> invocation()
+      |> Invocation.transition_changeset(%{
+        status: :deferred_budget,
+        stage: :deferred_budget,
+        defer_until: @now
+      })
+      |> Repo.update!()
+
+    assert {:error, :timeout} =
+             DryRun.await(due,
+               wait_for_due_deferred: true,
+               now: fn -> @now end,
+               timeout_ms: 0
+             )
+
+    assert {:deferred, default_result} = DryRun.await(due)
+    assert default_result.id == due.id
+
+    future =
+      "await-future-deferral"
+      |> invocation()
+      |> Invocation.transition_changeset(%{
+        status: :deferred_budget,
+        stage: :deferred_budget,
+        defer_until: DateTime.add(@now, 60)
+      })
+      |> Repo.update!()
+
+    assert {:deferred, future_result} =
+             DryRun.await(future,
+               wait_for_due_deferred: true,
+               now: fn -> @now end,
+               timeout_ms: 0
+             )
+
+    assert future_result.id == future.id
+  end
+
   test "await returns a finite timeout without changing the row" do
     invocation = invocation("timeout")
     assert {:error, :timeout} = DryRun.await(invocation, timeout_ms: 0)

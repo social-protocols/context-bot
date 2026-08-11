@@ -33,13 +33,57 @@ defmodule ContextBot.DryRun.RuntimeTest do
     end
   end
 
+  defmodule FakeOwner do
+    def acquire(options) do
+      config = Application.fetch_env!(:context_bot, __MODULE__)
+      send(config[:test_pid], {:dry_runtime_owner_acquire, options})
+      config[:acquire_result]
+    end
+
+    def owned?(owner) do
+      config = Application.fetch_env!(:context_bot, __MODULE__)
+
+      case config[:owned?] do
+        callback when is_function(callback, 1) -> callback.(owner)
+        result -> result
+      end
+    end
+
+    def release(owner) do
+      test_pid = Application.fetch_env!(:context_bot, __MODULE__)[:test_pid]
+      send(test_pid, {:dry_runtime_owner_released, owner, Oban.whereis(Oban)})
+      :ok
+    end
+  end
+
   setup do
     on_exit(fn ->
       Application.delete_env(:context_bot, FakeRecovery)
       Application.delete_env(:context_bot, FakeDeferred)
+      Application.delete_env(:context_bot, FakeOwner)
     end)
 
     :ok
+  end
+
+  test "acquires one cross-process owner through the configured lock implementation" do
+    owner = self()
+    configure_owner({:ok, owner})
+
+    assert {:ok, ^owner} = Runtime.try_acquire_owner(owner: FakeOwner)
+    assert_receive {:dry_runtime_owner_acquire, []}
+  end
+
+  test "normalizes lock contention and malformed owner results without starting work" do
+    configure_owner({:error, :runtime_owned})
+    assert {:error, :runtime_owned} = Runtime.try_acquire_owner(owner: FakeOwner)
+
+    configure_owner({:unexpected, %{secret: "provider-content"}})
+    assert {:error, :runtime_lock_failed} = Runtime.try_acquire_owner(owner: FakeOwner)
+
+    refute_received {:dry_runtime_recovery, _, _, _}
+    refute_received {:dry_runtime_deferred, _, _}
+    assert Oban.whereis(Oban) == nil
   end
 
   test "base phase starts the application without starting Oban" do
@@ -80,16 +124,20 @@ defmodule ContextBot.DryRun.RuntimeTest do
   test "workers recover then reconcile before starting serial dry queues" do
     configure_recovery({:ok, %{examined: 0, resumed: 0, terminalized: 0, unchanged: 0}})
     configure_deferred(:ok)
+    configure_owner({:ok, self()})
     on_exit(&stop_oban/0)
 
     assert :ok =
-             Runtime.start_workers(
+             Runtime.start_workers(self(),
+               owner: FakeOwner,
                recovery: FakeRecovery,
                deferred: FakeDeferred,
                now: fn -> @now end
              )
 
-    assert_receive {:dry_runtime_recovery, [startup?: true, now: @now], repo_pid, nil}
+    assert_receive {:dry_runtime_recovery, [startup?: true, workflow: :dry_run, now: @now],
+                    repo_pid, nil}
+
     assert is_pid(repo_pid)
 
     assert_receive {:dry_runtime_deferred, [workflow: :dry_run, now: @now, settings: _settings],
@@ -103,10 +151,12 @@ defmodule ContextBot.DryRun.RuntimeTest do
   test "workers fail closed when the selected base application is no longer ready" do
     configure_recovery({:ok, %{examined: 0, resumed: 0, terminalized: 0, unchanged: 0}})
     configure_deferred(:ok)
+    configure_owner({:ok, self()})
     on_exit(&stop_oban/0)
 
     assert {:error, :application_not_started} =
-             Runtime.start_workers(
+             Runtime.start_workers(self(),
+               owner: FakeOwner,
                recovery: FakeRecovery,
                deferred: FakeDeferred,
                base_ready: fn -> {:error, :application_not_started} end
@@ -120,15 +170,19 @@ defmodule ContextBot.DryRun.RuntimeTest do
   test "a recovery failure leaves standalone Oban stopped" do
     configure_recovery({:error, :recovery_failed})
     configure_deferred(:ok)
+    configure_owner({:ok, self()})
 
     assert {:error, :startup_recovery_failed} =
-             Runtime.start_workers(
+             Runtime.start_workers(self(),
+               owner: FakeOwner,
                recovery: FakeRecovery,
                deferred: FakeDeferred,
                now: fn -> @now end
              )
 
-    assert_receive {:dry_runtime_recovery, [startup?: true, now: @now], repo_pid, nil}
+    assert_receive {:dry_runtime_recovery, [startup?: true, workflow: :dry_run, now: @now],
+                    repo_pid, nil}
+
     assert is_pid(repo_pid)
     refute_received {:dry_runtime_deferred, _, _}
     assert Oban.whereis(Oban) == nil
@@ -137,15 +191,18 @@ defmodule ContextBot.DryRun.RuntimeTest do
   test "a deferred reconciliation failure leaves standalone Oban stopped" do
     configure_recovery({:ok, %{examined: 0, resumed: 0, terminalized: 0, unchanged: 0}})
     configure_deferred({:error, :deferred_reconciliation_failed})
+    configure_owner({:ok, self()})
 
     assert {:error, :deferred_reconciliation_failed} =
-             Runtime.start_workers(
+             Runtime.start_workers(self(),
+               owner: FakeOwner,
                recovery: FakeRecovery,
                deferred: FakeDeferred,
                now: fn -> @now end
              )
 
-    assert_receive {:dry_runtime_recovery, [startup?: true, now: @now], _repo_pid, nil}
+    assert_receive {:dry_runtime_recovery, [startup?: true, workflow: :dry_run, now: @now],
+                    _repo_pid, nil}
 
     assert_receive {:dry_runtime_deferred, [workflow: :dry_run, now: @now, settings: _settings],
                     nil}
@@ -153,10 +210,52 @@ defmodule ContextBot.DryRun.RuntimeTest do
     assert Oban.whereis(Oban) == nil
   end
 
+  test "workers reject a missing owner before recovery or Oban startup" do
+    configure_recovery({:ok, %{examined: 0, resumed: 0, terminalized: 0, unchanged: 0}})
+    configure_deferred(:ok)
+    configure_owner({:ok, self()}, false)
+
+    assert {:error, :runtime_lock_lost} =
+             Runtime.start_workers(self(),
+               owner: FakeOwner,
+               recovery: FakeRecovery,
+               deferred: FakeDeferred
+             )
+
+    refute_received {:dry_runtime_recovery, _, _, _}
+    refute_received {:dry_runtime_deferred, _, _}
+    assert Oban.whereis(Oban) == nil
+  end
+
+  test "workers recheck ownership after recovery and reconciliation before Oban startup" do
+    configure_recovery({:ok, %{examined: 0, resumed: 0, terminalized: 0, unchanged: 0}})
+    configure_deferred(:ok)
+    Process.put(:owner_checks, 0)
+
+    configure_owner({:ok, self()}, fn _owner ->
+      checks = Process.get(:owner_checks)
+      Process.put(:owner_checks, checks + 1)
+      checks == 0
+    end)
+
+    assert {:error, :runtime_lock_lost} =
+             Runtime.start_workers(self(),
+               owner: FakeOwner,
+               recovery: FakeRecovery,
+               deferred: FakeDeferred,
+               now: fn -> @now end
+             )
+
+    assert_receive {:dry_runtime_recovery, _, _, nil}
+    assert_receive {:dry_runtime_deferred, _, nil}
+    assert Oban.whereis(Oban) == nil
+  end
+
   test "starts only the dedicated serial dry-run queues" do
-    assert :ok = Runtime.start_workers()
+    configure_owner({:ok, self()})
+    assert :ok = Runtime.start_workers(self(), owner: FakeOwner)
     oban_pid = Oban.whereis(Oban)
-    Process.unlink(oban_pid)
+    assert oban_pid in elem(Process.info(self(), :links), 1)
     on_exit(fn -> if Process.alive?(oban_pid), do: Process.exit(oban_pid, :shutdown) end)
 
     config = Oban.config(Oban)
@@ -170,9 +269,22 @@ defmodule ContextBot.DryRun.RuntimeTest do
     refute Oban.Registry.whereis(Oban, {:producer, "research"})
     refute Oban.Registry.whereis(Oban, {:producer, "reply"})
 
-    assert :ok = Runtime.stop()
+    assert :ok = Runtime.stop(self(), owner: FakeOwner)
     refute Process.alive?(oban_pid)
-    assert :ok = Runtime.stop()
+    assert_receive {:dry_runtime_owner_released, _owner, nil}
+    assert :ok = Runtime.stop(nil, owner: FakeOwner)
+  end
+
+  test "keeps ownership when worker shutdown cannot be confirmed" do
+    configure_owner({:ok, self()})
+
+    assert {:error, :worker_shutdown_failed} =
+             Runtime.stop(self(),
+               owner: FakeOwner,
+               stop_oban: fn -> {:error, :injected_timeout} end
+             )
+
+    refute_received {:dry_runtime_owner_released, _owner, _oban}
   end
 
   test "accepts only the exact serial thread and research Oban configuration" do
@@ -215,6 +327,14 @@ defmodule ContextBot.DryRun.RuntimeTest do
 
   defp configure_deferred(result) do
     Application.put_env(:context_bot, FakeDeferred, %{result: result, test_pid: self()})
+  end
+
+  defp configure_owner(acquire_result, owned? \\ true) do
+    Application.put_env(:context_bot, FakeOwner, %{
+      acquire_result: acquire_result,
+      owned?: owned?,
+      test_pid: self()
+    })
   end
 
   defp start_minimal_oban do

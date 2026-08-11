@@ -1,42 +1,74 @@
+defmodule Mix.Tasks.ContextBot.DryRunTest.Events do
+  @moduledoc false
+
+  def record(event) do
+    events = Application.fetch_env!(:context_bot, __MODULE__)[:events]
+    Agent.update(events, &[event | &1])
+  end
+
+  def all do
+    events = Application.fetch_env!(:context_bot, __MODULE__)[:events]
+    Agent.get(events, &Enum.reverse/1)
+  end
+end
+
 defmodule Mix.Tasks.ContextBot.DryRunTest.Service do
   @moduledoc false
 
+  alias Mix.Tasks.ContextBot.DryRunTest.Events
+
   def prepare(post, question, options) do
     config = Application.fetch_env!(:context_bot, __MODULE__)
+    Events.record({:prepare, post, question, options})
     send(config[:test_pid], {:prepare, post, question, options})
     config[:prepare_result]
   end
 
   def await(invocation, options) do
     config = Application.fetch_env!(:context_bot, __MODULE__)
+    Events.record({:await, invocation.id, options})
     send(config[:test_pid], {:await, invocation.id, options})
+
+    if config[:report_await_pid] do
+      send(config[:test_pid], {:await_pid, self()})
+    end
 
     Enum.each(Keyword.get(config, :updates, []), options[:on_update])
     Process.sleep(Keyword.get(config, :await_delay_ms, 0))
-    config[:await_result]
+
+    case config[:await_result] do
+      callback when is_function(callback, 1) -> callback.(options)
+      result -> result
+    end
   end
 end
 
 defmodule Mix.Tasks.ContextBot.DryRunTest.Progress do
   @moduledoc false
 
+  alias Mix.Tasks.ContextBot.DryRunTest.Events
+
   def start(invocation, options) do
     test_pid = Application.fetch_env!(:context_bot, __MODULE__)[:test_pid]
+    Events.record({:progress_start, invocation.id, options})
     send(test_pid, {:progress_start, invocation.id, options})
     %{test_pid: test_pid, invocation_id: invocation.id}
   end
 
   def update(state, invocation) do
+    Events.record({:progress_update, invocation.id, invocation.stage})
     send(state.test_pid, {:progress_update, invocation.id, invocation.stage})
     state
   end
 
   def tick(state) do
+    Events.record({:progress_tick, state.invocation_id})
     send(state.test_pid, {:progress_tick, state.invocation_id})
     state
   end
 
   def finish(state) do
+    Events.record({:progress_finish, state.invocation_id})
     send(state.test_pid, {:progress_finish, state.invocation_id})
     :ok
   end
@@ -45,31 +77,50 @@ end
 defmodule Mix.Tasks.ContextBot.DryRunTest.Runtime do
   @moduledoc false
 
+  alias Mix.Tasks.ContextBot.DryRunTest.Events
+
   def ensure_application_started do
     config = Application.fetch_env!(:context_bot, __MODULE__)
+    Events.record(:base_application_started)
     send(config[:test_pid], :base_application_started)
     config[:application_result]
   end
 
-  def start_workers(options) do
+  def try_acquire_owner(options) do
     config = Application.fetch_env!(:context_bot, __MODULE__)
-    send(config[:test_pid], {:workers_started, options})
+    Events.record({:owner_acquire, options})
+    send(config[:test_pid], {:owner_acquire, options})
+
+    case config[:acquire_owner] do
+      callback when is_function(callback, 0) -> callback.()
+      nil -> {:ok, self()}
+    end
+  end
+
+  def start_workers(owner, options) do
+    config = Application.fetch_env!(:context_bot, __MODULE__)
+    Events.record({:workers_started, owner, options})
+    send(config[:test_pid], {:workers_started, owner, options})
     config[:workers_result]
   end
 
-  def stop do
+  def stop(owner) do
     config = Application.fetch_env!(:context_bot, __MODULE__)
-    send(config[:test_pid], :runtime_stopped)
-    :ok
+    Events.record({:runtime_stopped, owner})
+    send(config[:test_pid], {:runtime_stopped, owner})
+    Keyword.get(config, :stop_result, :ok)
   end
 end
 
 defmodule Mix.Tasks.ContextBot.DryRunTest.Interrupts do
   @moduledoc false
 
+  alias Mix.Tasks.ContextBot.DryRunTest.Events
+
   def install(owner) do
     config = Application.fetch_env!(:context_bot, __MODULE__)
     token = make_ref()
+    Events.record({:interrupts_installed, token})
     send(config[:test_pid], {:interrupts_installed, token})
 
     if signal = config[:signal] do
@@ -84,6 +135,7 @@ defmodule Mix.Tasks.ContextBot.DryRunTest.Interrupts do
 
   def remove(token) do
     config = Application.fetch_env!(:context_bot, __MODULE__)
+    Events.record({:interrupts_removed, token})
     send(config[:test_pid], {:interrupts_removed, token})
     :ok
   end
@@ -95,7 +147,7 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
   alias ContextBot.Settings
   alias ContextBot.Workflow.Invocation
   alias Mix.Tasks.ContextBot.DryRun, as: DryRunTask
-  alias Mix.Tasks.ContextBot.DryRunTest.{Interrupts, Progress, Runtime, Service}
+  alias Mix.Tasks.ContextBot.DryRunTest.{Events, Interrupts, Progress, Runtime, Service}
 
   setup do
     original_shell = Mix.shell()
@@ -106,6 +158,9 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     original_runtime = Application.get_env(:context_bot, Runtime, :missing)
     original_progress = Application.get_env(:context_bot, Progress, :missing)
     original_interrupts = Application.get_env(:context_bot, Interrupts, :missing)
+    original_events = Application.get_env(:context_bot, Events, :missing)
+
+    events = start_supervised!({Agent, fn -> [] end})
 
     Mix.shell(Mix.Shell.Process)
     flush_mailbox()
@@ -121,9 +176,11 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     Application.put_env(:context_bot, Runtime,
       test_pid: self(),
       application_result: :ok,
+      acquire_owner: fn -> {:ok, self()} end,
       workers_result: :ok
     )
 
+    Application.put_env(:context_bot, Events, events: events)
     Application.put_env(:context_bot, Progress, test_pid: self())
     Application.put_env(:context_bot, Interrupts, test_pid: self())
 
@@ -144,6 +201,7 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
       restore_env(Runtime, original_runtime)
       restore_env(Progress, original_progress)
       restore_env(Interrupts, original_interrupts)
+      restore_env(Events, original_events)
     end)
 
     :ok
@@ -223,17 +281,22 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
 
     assert :ok = run(["https://bsky.app/profile/example.test/post/3abc", "What's missing?"])
 
-    assert_received :base_application_started
+    assert [
+             :base_application_started,
+             {:prepare, "https://bsky.app/profile/example.test/post/3abc", "What's missing?", []},
+             {:progress_start, 42, progress_options},
+             {:interrupts_installed, token},
+             {:owner_acquire, []},
+             {:workers_started, owner, []},
+             {:await, 42, await_options},
+             {:runtime_stopped, owner},
+             {:progress_finish, 42},
+             {:interrupts_removed, token}
+           ] = Events.all()
 
-    assert_received {:prepare, "https://bsky.app/profile/example.test/post/3abc",
-                     "What's missing?", []}
-
-    assert_received {:workers_started, []}
-    assert_received {:await, 42, await_options}
+    assert owner == self()
     assert is_function(await_options[:on_update], 1)
-    assert_received {:progress_start, 42, progress_options}
     assert progress_options[:anthropic_timeout_ms] == 300_000
-    assert_received {:progress_finish, 42}
 
     output = shell_output()
     assert output =~ "dry_run_id=42"
@@ -275,6 +338,141 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     refute output =~ "task-test-provider-key"
   end
 
+  test "a contending command only observes work that settles under the current owner" do
+    invocation = %Invocation{id: 49, dry_run: true, stage: :capturing_thread}
+
+    Application.put_env(:context_bot, Service,
+      test_pid: self(),
+      prepare_result: {:ok, invocation, :attached},
+      await_result: {:ok, %{invocation | stage: :complete, selected_reply: "Done."}}
+    )
+
+    Application.put_env(:context_bot, Runtime,
+      test_pid: self(),
+      application_result: :ok,
+      acquire_owner: fn -> {:error, :runtime_owned} end,
+      workers_result: :ok
+    )
+
+    assert :ok = run(["post", "question"])
+
+    assert_received {:owner_acquire, []}
+    assert_received {:await, 49, _options}
+    refute_received {:workers_started, _owner, _options}
+    refute_received {:runtime_stopped, _owner}
+  end
+
+  test "a contender takes ownership and starts catch-up after the prior owner exits" do
+    invocation = %Invocation{id: 50, dry_run: true, stage: :capturing_thread}
+    test_pid = self()
+    acquisitions = start_supervised!({Agent, fn -> 0 end}, id: :ownership_attempts)
+
+    Application.put_env(:context_bot, Service,
+      test_pid: self(),
+      prepare_result: {:ok, invocation, :attached},
+      await_delay_ms: 500,
+      await_result: {:ok, %{invocation | stage: :complete, selected_reply: "Done."}}
+    )
+
+    Application.put_env(:context_bot, Runtime,
+      test_pid: self(),
+      application_result: :ok,
+      acquire_owner: fn ->
+        attempt = Agent.get_and_update(acquisitions, &{&1, &1 + 1})
+        if attempt == 0, do: {:error, :runtime_owned}, else: {:ok, test_pid}
+      end,
+      workers_result: :ok
+    )
+
+    assert :ok = run(["post", "question"])
+
+    assert_received {:owner_acquire, []}
+    assert_received {:owner_acquire, []}
+    refute_received {:owner_acquire, []}
+    assert_received {:workers_started, ^test_pid, []}
+    refute_received {:workers_started, _owner, _options}
+    assert_received {:runtime_stopped, ^test_pid}
+    refute_received {:runtime_stopped, _owner}
+  end
+
+  test "takeover re-observes an unaffordable due deferral with normal settlement semantics" do
+    invocation = %Invocation{
+      id: 52,
+      dry_run: true,
+      stage: :deferred_budget,
+      defer_until: ~U[2026-08-10 18:00:00.000000Z]
+    }
+
+    test_pid = self()
+    acquisitions = start_supervised!({Agent, fn -> 0 end}, id: :due_ownership_attempts)
+
+    Application.put_env(:context_bot, Service,
+      test_pid: self(),
+      prepare_result: {:ok, invocation, :attached},
+      await_result: fn options ->
+        if options[:wait_for_due_deferred] do
+          Process.sleep(500)
+          {:ok, %{invocation | stage: :complete, selected_reply: "Done."}}
+        else
+          {:deferred, invocation}
+        end
+      end
+    )
+
+    Application.put_env(:context_bot, Runtime,
+      test_pid: self(),
+      application_result: :ok,
+      acquire_owner: fn ->
+        attempt = Agent.get_and_update(acquisitions, &{&1, &1 + 1})
+        if attempt == 0, do: {:error, :runtime_owned}, else: {:ok, test_pid}
+      end,
+      workers_result: :ok
+    )
+
+    error = assert_raise Mix.Error, fn -> run(["post", "question"]) end
+    assert error.message =~ "deferred by the configured Anthropic daily budget"
+
+    assert_received {:await, 52, contender_options}
+    assert contender_options[:wait_for_due_deferred]
+    assert_received {:await, 52, owner_options}
+    refute owner_options[:wait_for_due_deferred]
+    assert_received {:workers_started, ^test_pid, []}
+    assert_received {:runtime_stopped, ^test_pid}
+  end
+
+  test "a contender stops its observer task when a later ownership attempt fails" do
+    invocation = %Invocation{id: 51, dry_run: true, stage: :capturing_thread}
+    acquisitions = start_supervised!({Agent, fn -> 0 end}, id: :failed_ownership_attempts)
+
+    Application.put_env(:context_bot, Service,
+      test_pid: self(),
+      prepare_result: {:ok, invocation, :attached},
+      report_await_pid: true,
+      await_delay_ms: 5_000,
+      await_result: {:ok, %{invocation | stage: :complete, selected_reply: "Done."}}
+    )
+
+    Application.put_env(:context_bot, Runtime,
+      test_pid: self(),
+      application_result: :ok,
+      acquire_owner: fn ->
+        attempt = Agent.get_and_update(acquisitions, &{&1, &1 + 1})
+
+        if attempt == 0,
+          do: {:error, :runtime_owned},
+          else: {:error, :runtime_lock_failed}
+      end,
+      workers_result: :ok
+    )
+
+    error = assert_raise Mix.Error, fn -> run(["post", "question"]) end
+    assert error.message =~ "runtime_lock_failed"
+    assert_received {:await_pid, await_pid}
+    refute Process.alive?(await_pid)
+    refute_received {:workers_started, _owner, _options}
+    refute_received {:runtime_stopped, _owner}
+  end
+
   test "cleans up progress and signal handlers when workers cannot start after preparation" do
     invocation = %Invocation{id: 47, dry_run: true, stage: :capturing_thread}
 
@@ -299,10 +497,36 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     refute error.message =~ "private"
     assert_received {:progress_start, 47, _options}
     assert_received {:interrupts_installed, token}
-    assert_received {:workers_started, []}
+    assert_received {:workers_started, owner, []}
+    assert owner == self()
+    assert_received {:runtime_stopped, ^owner}
     assert_received {:progress_finish, 47}
     assert_received {:interrupts_removed, ^token}
     refute_received {:await, 47, _options}
+  end
+
+  test "reports a finite error when worker shutdown cannot be confirmed" do
+    invocation = %Invocation{id: 53, dry_run: true, stage: :capturing_thread}
+
+    Application.put_env(:context_bot, Service,
+      test_pid: self(),
+      prepare_result: {:ok, invocation, :created},
+      await_result: {:ok, %{invocation | stage: :complete, selected_reply: "Done."}}
+    )
+
+    Application.put_env(:context_bot, Runtime,
+      test_pid: self(),
+      application_result: :ok,
+      workers_result: :ok,
+      stop_result: {:error, :worker_shutdown_failed}
+    )
+
+    error = assert_raise Mix.Error, fn -> run(["post", "question"]) end
+    assert error.message =~ "worker_shutdown_failed"
+    assert_received {:runtime_stopped, owner}
+    assert owner == self()
+    assert_received {:progress_finish, 53}
+    assert_received {:interrupts_removed, _token}
   end
 
   test "turns malformed preparation results into a finite content-safe error" do
@@ -449,8 +673,9 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     assert_received {:interrupts_removed, ^token}
     assert_received {:await, 46, _options}
     assert_received {:progress_finish, 46}
-    assert_received :runtime_stopped
-    refute_received :runtime_stopped
+    assert_received {:runtime_stopped, owner}
+    assert owner == self()
+    refute_received {:runtime_stopped, _owner}
 
     output = shell_output()
     assert length(Regex.scan(~r/^dry_run_id=46$/m, output)) == 1

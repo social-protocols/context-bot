@@ -65,16 +65,19 @@ defmodule ContextBot.Workflow.StoreTest do
     assert Repo.aggregate(Oban.Job, :count) == 1
   end
 
-  test "creates a new run after a matching invocation becomes terminal" do
-    target_uri = "at://did:plc:target/app.bsky.feed.post/attach-terminal"
-    terminal = dry_invocation!(target_uri, "Question", @received_at, :complete)
+  test "creates a new run after every matching terminal stage" do
+    for stage <- [:complete, :failed, :ineligible] do
+      target_uri = "at://did:plc:target/app.bsky.feed.post/attach-terminal-#{stage}"
+      terminal = dry_invocation!(target_uri, "Question", @received_at, stage)
 
-    assert {:ok, created, :created} =
-             Store.create_or_attach_dry_run(target_uri, "Question", @received_at, &thread_job/2)
+      assert {:ok, created, :created} =
+               Store.create_or_attach_dry_run(target_uri, "Question", @received_at, &thread_job/2)
 
-    assert created.id != terminal.id
-    assert Repo.aggregate(Invocation, :count) == 2
-    assert Repo.aggregate(Oban.Job, :count) == 1
+      assert created.id != terminal.id
+    end
+
+    assert Repo.aggregate(Invocation, :count) == 6
+    assert Repo.aggregate(Oban.Job, :count) == 3
   end
 
   test "creates a distinct run when the question differs exactly" do

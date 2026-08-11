@@ -14,7 +14,9 @@
     "jq": "latest",
     "curl": "latest",
     "shellcheck": "latest",
-    "shfmt": "latest"
+    "shfmt": "latest",
+    "flock": "latest",
+    "coreutils": "latest"
   },
   "shell": {
     "init_hook": [

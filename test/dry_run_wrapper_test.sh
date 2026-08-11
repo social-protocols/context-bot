@@ -110,9 +110,9 @@ wait_for_file "$context_bot_test_tmp/cleanup" || fail "wrapper exited before del
 [[ "$wrapper_status" -eq 23 ]] || fail "repeated interrupt did not preserve the child status"
 unset CONTEXT_BOT_TEST_DELAYED_CLEANUP
 
-export BASH_ENV="$project_root/test/fixtures/dry_run_interrupt_before_pid.bash"
+export CONTEXT_BOT_TEST_INTERRUPT_BEFORE_PID=1
 start_wrapper launch-race
-unset BASH_ENV
+unset CONTEXT_BOT_TEST_INTERRUPT_BEFORE_PID
 wait_for_wrapper
 
 if [[ "$wrapper_status" -ne 23 && "$wrapper_status" -ne 143 ]]; then

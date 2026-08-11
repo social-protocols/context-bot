@@ -1,6 +1,7 @@
 defmodule ContextBot.DryRun.Runtime do
   @moduledoc false
 
+  alias ContextBot.DryRun.RuntimeOwner
   alias ContextBot.{Settings, Workers.DeferredWorker}
   alias ContextBot.Workflow.Recovery
 
@@ -26,8 +27,27 @@ defmodule ContextBot.DryRun.Runtime do
     end
   end
 
-  @spec start_workers(keyword()) :: :ok | {:error, atom()}
-  def start_workers(options \\ []) when is_list(options) do
+  @spec try_acquire_owner(keyword()) ::
+          {:ok, pid()} | {:error, :runtime_owned | :runtime_lock_failed}
+  def try_acquire_owner(options \\ []) when is_list(options) do
+    owner = Keyword.get(options, :owner, RuntimeOwner)
+    owner_options = Keyword.get(options, :owner_options, [])
+
+    case owner.acquire(owner_options) do
+      {:ok, owner_pid} when is_pid(owner_pid) -> {:ok, owner_pid}
+      {:error, :runtime_owned} -> {:error, :runtime_owned}
+      {:error, :runtime_lock_failed} -> {:error, :runtime_lock_failed}
+      _invalid_result -> {:error, :runtime_lock_failed}
+    end
+  rescue
+    _owner_error -> {:error, :runtime_lock_failed}
+  catch
+    :exit, _reason -> {:error, :runtime_lock_failed}
+  end
+
+  @spec start_workers(pid(), keyword()) :: :ok | {:error, atom()}
+  def start_workers(owner_token, options \\ []) when is_list(options) do
+    owner = Keyword.get(options, :owner, RuntimeOwner)
     recovery = Keyword.get(options, :recovery, Recovery)
     deferred = Keyword.get(options, :deferred, DeferredWorker)
     now = Keyword.get(options, :now, &DateTime.utc_now/0)
@@ -35,28 +55,98 @@ defmodule ContextBot.DryRun.Runtime do
     settings = Application.fetch_env!(:context_bot, :settings)
     timestamp = now.()
 
-    with :ok <- base_ready.(),
+    with :ok <- verify_owner(owner, owner_token),
+         :ok <- base_ready.(),
          :ok <- recover_orphans(recovery, timestamp),
-         :ok <- reconsider_due(deferred, timestamp, settings) do
+         :ok <- reconsider_due(deferred, timestamp, settings),
+         :ok <- verify_owner(owner, owner_token) do
       start_minimal_oban()
     end
   end
 
-  @spec stop(keyword()) :: :ok
-  def stop(_options \\ []) do
+  @spec stop(pid() | nil, keyword()) :: :ok | {:error, :worker_shutdown_failed}
+  def stop(owner_token, options \\ [])
+
+  def stop(nil, _options), do: :ok
+
+  def stop(owner_token, options) when is_pid(owner_token) and is_list(options) do
+    owner = Keyword.get(options, :owner, RuntimeOwner)
+    stop_oban = Keyword.get(options, :stop_oban, &stop_oban/0)
+
+    case stop_oban.() do
+      :ok ->
+        release_owner(owner, owner_token)
+
+      _shutdown_failure ->
+        {:error, :worker_shutdown_failed}
+    end
+  rescue
+    _shutdown_failure -> {:error, :worker_shutdown_failed}
+  catch
+    :exit, _reason -> {:error, :worker_shutdown_failed}
+  end
+
+  defp stop_oban do
     case Oban.whereis(Oban) do
       nil ->
         :ok
 
       pid ->
-        if safe_existing_oban?() and not public_child_running?() do
+        if safe_owned_oban?() and not public_child_running?() do
           config = Oban.config(Oban)
-          _result = Oban.pause_all_queues(Oban)
-          Supervisor.stop(pid, :shutdown, config.shutdown_grace_period + 1_000)
+          stop_owned_oban(pid, config.shutdown_grace_period + 1_000)
+        else
+          {:error, :worker_shutdown_failed}
         end
-
-        :ok
     end
+  end
+
+  defp stop_owned_oban(pid, timeout_ms) do
+    Process.unlink(pid)
+    reference = Process.monitor(pid)
+    pause_owned_oban()
+
+    try do
+      Supervisor.stop(pid, :normal, timeout_ms)
+    catch
+      :exit, _reason ->
+        if Process.alive?(pid), do: Process.exit(pid, :kill)
+    end
+
+    await_oban_down(reference, pid)
+  end
+
+  defp pause_owned_oban do
+    _result = Oban.pause_all_queues(Oban)
+    :ok
+  rescue
+    _pause_failure -> :ok
+  catch
+    :exit, _reason -> :ok
+  end
+
+  defp await_oban_down(reference, pid) do
+    receive do
+      {:DOWN, ^reference, :process, ^pid, _reason} -> :ok
+    after
+      1_000 ->
+        Process.demonitor(reference, [:flush])
+        {:error, :worker_shutdown_failed}
+    end
+  end
+
+  defp verify_owner(owner, owner_token) do
+    if owner.owned?(owner_token), do: :ok, else: {:error, :runtime_lock_lost}
+  rescue
+    _owner_error -> {:error, :runtime_lock_lost}
+  catch
+    :exit, _reason -> {:error, :runtime_lock_lost}
+  end
+
+  defp release_owner(owner, owner_token) do
+    owner.release(owner_token)
+  rescue
+    _owner_error -> :ok
   catch
     :exit, _reason -> :ok
   end
@@ -78,7 +168,7 @@ defmodule ContextBot.DryRun.Runtime do
   def safe_oban_config?(_config, _active_queues), do: false
 
   defp recover_orphans(recovery, now) do
-    case recovery.recover_orphans(startup?: true, now: now) do
+    case recovery.recover_orphans(startup?: true, workflow: :dry_run, now: now) do
       {:ok, _summary} -> :ok
       {:error, _reason} -> {:error, :startup_recovery_failed}
       _invalid_result -> {:error, :startup_recovery_failed}
@@ -117,15 +207,10 @@ defmodule ContextBot.DryRun.Runtime do
     end
   end
 
-  defp safe_existing_oban? do
-    safe_oban_config?(Oban.config(Oban), active_queue_names()) and not public_child_running?()
+  defp safe_owned_oban? do
+    safe_oban_config?(Oban.config(Oban))
   rescue
     _missing_or_invalid_runtime -> false
-  end
-
-  defp active_queue_names do
-    match = [{{{Oban, {:producer, :"$1"}}, :"$2", :_}, [], [:"$1"]}]
-    Oban.Registry.select(match)
   end
 
   defp base_application_ready do

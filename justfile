@@ -31,15 +31,15 @@ test path="":
 
 format:
     mix format
-    shfmt -w dry-run.sh secrets.sh test/dry_run_wrapper_test.sh test/fixtures/dry_run_interrupt_before_pid.bash test/secrets_test.sh
+    shfmt -w dry-run.sh secrets.sh test/dry_run_wrapper_test.sh test/secrets_test.sh
 
 format-check:
     mix format --check-formatted
-    shfmt -d dry-run.sh secrets.sh test/dry_run_wrapper_test.sh test/fixtures/dry_run_interrupt_before_pid.bash test/secrets_test.sh
+    shfmt -d dry-run.sh secrets.sh test/dry_run_wrapper_test.sh test/secrets_test.sh
 
 lint:
     mix credo --strict
-    shellcheck dry-run.sh secrets.sh test/dry_run_wrapper_test.sh test/fixtures/dry_run_interrupt_before_pid.bash test/secrets_test.sh
+    shellcheck dry-run.sh secrets.sh test/dry_run_wrapper_test.sh test/secrets_test.sh
 
 typecheck:
     mix dialyzer

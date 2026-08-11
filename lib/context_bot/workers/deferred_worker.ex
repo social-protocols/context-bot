@@ -32,14 +32,65 @@ defmodule ContextBot.Workers.DeferredWorker do
     workflow = Keyword.get(options, :workflow, :all)
     attempt_index = Keyword.get(options, :attempt_index, 1)
 
-    case dependencies
-         |> claim_batch(workflow)
-         |> process_claimed_work(attempt_index, dependencies.enqueue_once) do
+    case reconcile_due(dependencies, workflow, attempt_index) do
       :ok -> :ok
       {:error, _reason} -> {:error, :deferred_reconciliation_failed}
     end
   rescue
     _database_or_state_error -> {:error, :deferred_reconciliation_failed}
+  end
+
+  defp reconcile_due(dependencies, :dry_run, attempt_index) do
+    boundary_id = dry_boundary_id(dependencies.now)
+
+    drain_dry_pages(
+      dependencies,
+      attempt_index,
+      nil,
+      boundary_id,
+      :calculate
+    )
+  end
+
+  defp reconcile_due(dependencies, :all, attempt_index) do
+    {work, _remaining_budget, _cursor, _candidate_count} =
+      claim_page(
+        dependencies,
+        :all,
+        nil,
+        nil,
+        :calculate
+      )
+
+    process_claimed_work(work, attempt_index, dependencies.enqueue_once)
+  end
+
+  defp drain_dry_pages(_dependencies, _attempt_index, _cursor, nil, _remaining_budget),
+    do: :ok
+
+  defp drain_dry_pages(
+         dependencies,
+         attempt_index,
+         cursor,
+         boundary_id,
+         remaining_budget
+       ) do
+    {work, remaining_budget, next_cursor, candidate_count} =
+      claim_page(dependencies, :dry_run, cursor, boundary_id, remaining_budget)
+
+    with :ok <- process_claimed_work(work, attempt_index, dependencies.enqueue_once) do
+      if candidate_count == dependencies.batch_size do
+        drain_dry_pages(
+          dependencies,
+          attempt_index,
+          next_cursor,
+          boundary_id,
+          remaining_budget
+        )
+      else
+        :ok
+      end
+    end
   end
 
   defp recover(dependencies) do
@@ -73,15 +124,25 @@ defmodule ContextBot.Workers.DeferredWorker do
     result
   end
 
-  defp claim_batch(dependencies, workflow) do
-    {:ok, work} =
+  defp claim_page(dependencies, workflow, cursor, boundary_id, remaining_budget) do
+    {:ok, page} =
       Repo.transaction(
         fn ->
-          {deferred, _remaining_budget} =
-            dependencies.now
-            |> deferred_candidates(dependencies.batch_size, workflow)
+          remaining_budget = resolve_remaining_budget(remaining_budget, dependencies)
+
+          candidates =
+            deferred_candidates(
+              dependencies.now,
+              dependencies.batch_size,
+              workflow,
+              cursor,
+              boundary_id
+            )
+
+          {deferred, remaining_budget} =
+            candidates
             |> Enum.reduce(
-              {[], remaining_budget(dependencies.now, dependencies.settings)},
+              {[], remaining_budget},
               fn invocation, {work, budget} ->
                 {claimed, budget} =
                   claim_candidate(invocation, dependencies.now, dependencies.settings, budget)
@@ -90,39 +151,77 @@ defmodule ContextBot.Workers.DeferredWorker do
               end
             )
 
-          Enum.reverse(deferred)
+          {Enum.reverse(deferred), remaining_budget, candidate_cursor(candidates),
+           length(candidates)}
         end,
         mode: :immediate
       )
 
-    work
+    page
   end
 
   @doc false
   @spec recovery_query(pos_integer()) :: Ecto.Query.t()
   defdelegate recovery_query(batch_size), to: Recovery, as: :candidate_query
 
-  defp deferred_candidates(_now, remaining, _workflow) when remaining <= 0, do: []
-
-  defp deferred_candidates(now, remaining, workflow) do
-    candidates =
-      Invocation
-      |> where(
-        [invocation],
-        invocation.stage == :deferred_capacity or
-          (invocation.stage in [:deferred_rate, :deferred_budget] and
-             not is_nil(invocation.defer_until) and invocation.defer_until <= ^now)
-      )
-
-    candidates
-    |> filter_workflow(workflow)
+  defp deferred_candidates(now, limit, workflow, cursor, boundary_id) do
+    Invocation
+    |> due_candidates(now, workflow)
+    |> after_cursor(cursor)
+    |> before_boundary(boundary_id)
     |> order_by([invocation], asc: invocation.received_at, asc: invocation.id)
-    |> limit(^remaining)
+    |> limit(^limit)
     |> Repo.all()
   end
 
-  defp filter_workflow(query, :dry_run), do: where(query, [invocation], invocation.dry_run)
-  defp filter_workflow(query, :all), do: query
+  defp due_candidates(query, now, :dry_run) do
+    where(
+      query,
+      [invocation],
+      invocation.dry_run and invocation.stage == :deferred_budget and
+        not is_nil(invocation.defer_until) and invocation.defer_until <= ^now
+    )
+  end
+
+  defp due_candidates(query, now, :all) do
+    where(
+      query,
+      [invocation],
+      invocation.stage == :deferred_capacity or
+        (invocation.stage in [:deferred_rate, :deferred_budget] and
+           not is_nil(invocation.defer_until) and invocation.defer_until <= ^now)
+    )
+  end
+
+  defp after_cursor(query, nil), do: query
+
+  defp after_cursor(query, {received_at, id}) do
+    where(
+      query,
+      [invocation],
+      invocation.received_at > ^received_at or
+        (invocation.received_at == ^received_at and invocation.id > ^id)
+    )
+  end
+
+  defp before_boundary(query, nil), do: query
+
+  defp before_boundary(query, boundary_id),
+    do: where(query, [invocation], invocation.id <= ^boundary_id)
+
+  defp dry_boundary_id(now) do
+    Invocation
+    |> due_candidates(now, :dry_run)
+    |> select([invocation], max(invocation.id))
+    |> Repo.one()
+  end
+
+  defp candidate_cursor([]), do: nil
+
+  defp candidate_cursor(candidates) do
+    candidate = List.last(candidates)
+    {candidate.received_at, candidate.id}
+  end
 
   defp claim_candidate(
          %Invocation{stage: :deferred_capacity} = invocation,
@@ -223,11 +322,18 @@ defmodule ContextBot.Workers.DeferredWorker do
       is_binary(invocation.canonical_thread) and invocation.canonical_thread != "" and
         is_binary(invocation.current_cid) and invocation.current_cid != ""
 
-  defp remaining_budget(now, %Settings{anthropic_daily_budget_microdollars: limit})
-       when is_integer(limit) and limit > 0,
-       do: Budget.remaining(now, limit)
+  defp resolve_remaining_budget(:calculate, dependencies) do
+    case dependencies.settings do
+      %Settings{anthropic_daily_budget_microdollars: limit}
+      when is_integer(limit) and limit > 0 ->
+        dependencies.remaining_budget.(dependencies.now, limit)
 
-  defp remaining_budget(_now, _settings), do: 0
+      _missing_budget ->
+        0
+    end
+  end
+
+  defp resolve_remaining_budget(remaining_budget, _dependencies), do: remaining_budget
 
   defp eligibility_work(invocation),
     do: work(invocation, "ContextBot.Workers.EligibilityWorker", :eligibility)
@@ -285,6 +391,7 @@ defmodule ContextBot.Workers.DeferredWorker do
       now: Keyword.get(options, :now, Keyword.get(config, :now, DateTime.utc_now())),
       recovery: Keyword.get(options, :recovery, Keyword.get(config, :recovery, Recovery)),
       enqueue_once: Keyword.get(config, :enqueue_once, &enqueue_once/1),
+      remaining_budget: Keyword.get(config, :remaining_budget, &Budget.remaining/2),
       settings:
         Keyword.get(
           options,

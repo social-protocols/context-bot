@@ -43,11 +43,45 @@ defmodule ContextBot.Workflow.Recovery do
   def recover_orphans(options \\ []) when is_list(options) do
     config = config(options)
 
-    candidates = config.batch_size |> candidate_query() |> Repo.all()
+    if config.workflow == :dry_run do
+      recover_dry_pages(config, options)
+    else
+      config.batch_size
+      |> candidate_query()
+      |> Repo.all()
+      |> recover_candidates(options)
+    end
+  rescue
+    _database_or_state_error -> {:error, :recovery_failed}
+  end
 
-    summary = %{examined: length(candidates), resumed: 0, terminalized: 0, unchanged: 0}
+  defp recover_dry_pages(config, options) do
+    boundary_id = dry_boundary_id()
+    drain_dry_pages(nil, boundary_id, config, options, empty_summary())
+  end
 
-    summary =
+  defp drain_dry_pages(_cursor, nil, _config, _options, summary), do: {:ok, summary}
+
+  defp drain_dry_pages(cursor, boundary_id, config, options, summary) do
+    candidates =
+      config.batch_size
+      |> dry_candidate_query(cursor, boundary_id)
+      |> Repo.all()
+
+    {:ok, page_summary} = recover_candidates(candidates, options)
+    summary = merge_summary(summary, page_summary)
+
+    if length(candidates) == config.batch_size do
+      drain_dry_pages(List.last(candidates).id, boundary_id, config, options, summary)
+    else
+      {:ok, summary}
+    end
+  end
+
+  defp recover_candidates(candidates, options) do
+    summary = %{empty_summary() | examined: length(candidates)}
+
+    recovered =
       Enum.reduce(candidates, summary, fn invocation, counts ->
         case recover_invocation(invocation, options) do
           :resumed -> Map.update!(counts, :resumed, &(&1 + 1))
@@ -56,22 +90,21 @@ defmodule ContextBot.Workflow.Recovery do
         end
       end)
 
-    {:ok, summary}
-  rescue
-    _database_or_state_error -> {:error, :recovery_failed}
+    {:ok, recovered}
+  end
+
+  defp empty_summary,
+    do: %{examined: 0, resumed: 0, terminalized: 0, unchanged: 0}
+
+  defp merge_summary(left, right) do
+    Map.new(left, fn {key, value} -> {key, value + Map.fetch!(right, key)} end)
   end
 
   @doc false
   @spec candidate_query(pos_integer()) :: Ecto.Query.t()
   def candidate_query(batch_size) when is_integer(batch_size) and batch_size > 0 do
     Invocation
-    |> where(
-      [invocation],
-      fragment(
-        "? IN ('received', 'checking_eligibility', 'capturing_thread', 'thread_ready', 'researching', 'reply_ready', 'publishing')",
-        invocation.stage
-      )
-    )
+    |> candidate_stages()
     |> order_by(
       [invocation],
       asc: invocation.recovery_checked_at,
@@ -79,6 +112,37 @@ defmodule ContextBot.Workflow.Recovery do
       asc: invocation.id
     )
     |> limit(^batch_size)
+  end
+
+  defp dry_candidate_query(batch_size, cursor, boundary_id) do
+    Invocation
+    |> candidate_stages()
+    |> where([invocation], invocation.dry_run and invocation.id <= ^boundary_id)
+    |> after_id(cursor)
+    |> order_by([invocation], asc: invocation.id)
+    |> limit(^batch_size)
+  end
+
+  defp candidate_stages(query) do
+    where(
+      query,
+      [invocation],
+      fragment(
+        "? IN ('received', 'checking_eligibility', 'capturing_thread', 'thread_ready', 'researching', 'reply_ready', 'publishing')",
+        invocation.stage
+      )
+    )
+  end
+
+  defp after_id(query, nil), do: query
+  defp after_id(query, id), do: where(query, [invocation], invocation.id > ^id)
+
+  defp dry_boundary_id do
+    Invocation
+    |> candidate_stages()
+    |> where([invocation], invocation.dry_run)
+    |> select([invocation], max(invocation.id))
+    |> Repo.one()
   end
 
   @spec recover_invocation(Invocation.t(), keyword()) :: result()
@@ -407,7 +471,8 @@ defmodule ContextBot.Workflow.Recovery do
         ),
       now: Keyword.get(options, :now, DateTime.utc_now()),
       settings: Keyword.get(options, :settings, Application.fetch_env!(:context_bot, :settings)),
-      startup?: startup?
+      startup?: startup?,
+      workflow: Keyword.get(options, :workflow, :all)
     }
   end
 end

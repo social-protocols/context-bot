@@ -37,6 +37,11 @@ trap context_bot_forward_interrupt INT TERM
 
 ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-} +B i" \
 	BOT_ENABLED=false mix context_bot.dry_run "$1" "$2" &
+
+if [[ "${CONTEXT_BOT_TEST_INTERRUPT_BEFORE_PID:-}" == "1" ]]; then
+	kill -INT "$BASHPID"
+fi
+
 context_bot_child_pid=$!
 
 if [[ "$context_bot_interrupt_pending" == true ]]; then

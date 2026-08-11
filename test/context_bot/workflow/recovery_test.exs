@@ -240,6 +240,30 @@ defmodule ContextBot.Workflow.RecoveryTest do
            ) == 1
   end
 
+  test "dry startup recovery filters before the cap and drains every bounded page" do
+    public =
+      for index <- 1..105 do
+        invocation(:capturing_thread, false, "public-backlog-#{index}")
+      end
+
+    public_jobs =
+      Enum.map(public, &executing_job(&1, "ContextBot.Workers.ThreadWorker", :thread))
+
+    dry =
+      for index <- 1..105 do
+        invocation(:capturing_thread, true, "dry-backlog-#{index}")
+      end
+
+    dry_jobs =
+      Enum.map(dry, &executing_job(&1, "ContextBot.Workers.ThreadWorker", :dry_thread))
+
+    assert {:ok, %{examined: 105, resumed: 105, terminalized: 0, unchanged: 0}} =
+             recover(startup?: true, workflow: :dry_run, batch_size: 100)
+
+    assert Enum.all?(public_jobs, &(Repo.reload!(&1).state == "executing"))
+    assert Enum.all?(dry_jobs, &(Repo.reload!(&1).state == "available"))
+  end
+
   defp recover(options) do
     Recovery.recover_orphans(
       Keyword.merge([now: @now, settings: Settings.load(bot_enabled: false)], options)

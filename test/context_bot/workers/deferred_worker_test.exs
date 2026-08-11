@@ -252,6 +252,144 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
              Repo.all(from job in Oban.Job, where: job.args == ^job_args(due_dry))
   end
 
+  test "dry-only reconciliation leaves capacity and rate deferrals byte-for-byte unchanged" do
+    capacity =
+      invocation("dry-capacity", :deferred_capacity,
+        dry_run: true,
+        minutes_ago: 5,
+        target_uri: "at://did:plc:target/app.bsky.feed.post/dry-capacity",
+        invocation_text: "What context is needed?"
+      )
+
+    rate =
+      invocation("dry-rate", :deferred_rate,
+        dry_run: true,
+        minutes_ago: 4,
+        target_uri: "at://did:plc:target/app.bsky.feed.post/dry-rate",
+        invocation_text: "What context is needed?",
+        defer_until: DateTime.add(@now, -1, :second)
+      )
+
+    budget = dry_run_budget_invocation("dry-budget", minutes_ago: 3)
+
+    assert :ok =
+             DeferredWorker.reconsider_due(
+               now: @now,
+               settings: settings(),
+               workflow: :dry_run
+             )
+
+    assert Repo.reload!(capacity) == capacity
+    assert Repo.reload!(rate) == rate
+    assert Repo.reload!(budget).stage == :thread_ready
+
+    assert Enum.map(Repo.all(Oban.Job), &{&1.worker, &1.queue, &1.args}) == [
+             {"ContextBot.Workers.ResearchWorker", "dry_research", job_args(budget)}
+           ]
+  end
+
+  test "dry-only reconciliation drains every due candidate beyond the bounded page size" do
+    due =
+      for index <- 1..31 do
+        dry_run_budget_invocation("dry-page-#{index}", minutes_ago: 100 - index)
+      end
+
+    assert :ok =
+             DeferredWorker.reconsider_due(
+               now: @now,
+               settings: settings(anthropic_daily_budget_usd: "200.000000"),
+               workflow: :dry_run,
+               batch_size: 25
+             )
+
+    assert Enum.all?(due, &(Repo.reload!(&1).stage == :thread_ready))
+    assert Repo.aggregate(Oban.Job, :count) == 31
+  end
+
+  test "dry-only pagination carries one allowance and skips an unaffordable row for a later cheap row" do
+    first_expensive =
+      dry_run_budget_invocation("allowance-expensive-first",
+        minutes_ago: 8,
+        deferred_attempt_kind: :research
+      )
+
+    second_expensive =
+      dry_run_budget_invocation("allowance-expensive-second",
+        minutes_ago: 7,
+        deferred_attempt_kind: :research
+      )
+
+    third_expensive =
+      dry_run_budget_invocation("allowance-expensive-third",
+        minutes_ago: 6,
+        deferred_attempt_kind: :research
+      )
+
+    later_cheap =
+      dry_run_budget_invocation("allowance-cheap-later",
+        minutes_ago: 5,
+        deferred_attempt_kind: :repair
+      )
+
+    constrained =
+      settings(
+        anthropic_daily_budget_usd: "10.000000",
+        anthropic_research_reservation_usd: "5.500000",
+        anthropic_continuation_reservation_usd: "5.500000",
+        anthropic_repair_reservation_usd: "4.100000",
+        anthropic_retry_reservation_usd: "5.500000"
+      )
+
+    assert :ok =
+             DeferredWorker.reconsider_due(
+               now: @now,
+               settings: constrained,
+               workflow: :dry_run,
+               batch_size: 2
+             )
+
+    assert Repo.reload!(first_expensive).stage == :thread_ready
+    assert Repo.reload!(second_expensive).stage == :deferred_budget
+    assert Repo.reload!(third_expensive).stage == :deferred_budget
+    assert Repo.reload!(later_cheap).stage == :thread_ready
+
+    assert Enum.map(Repo.all(from job in Oban.Job, order_by: [asc: job.id]), & &1.args) == [
+             job_args(first_expensive),
+             job_args(later_cheap)
+           ]
+  end
+
+  test "dry pagination calculates one budget allowance inside the first claim transaction" do
+    for index <- 1..3 do
+      dry_run_budget_invocation("transactional-allowance-#{index}",
+        minutes_ago: 10 - index
+      )
+    end
+
+    test_pid = self()
+
+    configure(
+      remaining_budget: fn now, limit ->
+        send(test_pid, {:remaining_budget, now, limit, Repo.in_transaction?()})
+        limit
+      end
+    )
+
+    configured_settings = settings(anthropic_daily_budget_usd: "20.000000")
+
+    assert :ok =
+             DeferredWorker.reconsider_due(
+               now: @now,
+               settings: configured_settings,
+               workflow: :dry_run,
+               batch_size: 2
+             )
+
+    assert_receive {:remaining_budget, @now, 20_000_000, true}
+    refute_receive {:remaining_budget, _, _, _}
+    assert Repo.aggregate(Oban.Job, :count) == 3
+  end
+
   test "due reconciliation normalizes non-raised enqueue failures" do
     due_dry = dry_run_budget_invocation("rejected-dry", minutes_ago: 3)
     configure(enqueue_once: fn _work -> {:error, :injected_rejection} end)
