@@ -50,6 +50,9 @@ to be repeated.
   start Oban, polling, and authenticated ATProto processes before its guard runs. Start only Ecto's
   SQLite dependencies and the Repo, require `BOT_ENABLED=false`, and reject an already active local
   worker runtime.
+- `Oban.whereis/1` raises when `Oban.Registry` has not started, which is the normal worker-free
+  state. Check for the registry first; treat its absence as no Oban runtime and unexpected lookup
+  failures as active/unsafe.
 
 ## Implications
 

@@ -64,13 +64,31 @@ defmodule ContextBot.Workflow.ReprocessorRuntime do
   defp repo_running?, do: is_pid(Process.whereis(Repo))
 
   defp external_workers_running? do
-    Enum.any?(
-      [
-        Oban.whereis(Oban),
-        Process.whereis(ContextBot.ATProto.Session),
-        Process.whereis(ContextBot.Mentions.Poller)
-      ],
-      &is_pid/1
-    )
+    oban_running?() or
+      Enum.any?(
+        [
+          Process.whereis(ContextBot.ATProto.Session),
+          Process.whereis(ContextBot.Mentions.Poller)
+        ],
+        &is_pid/1
+      )
+  end
+
+  @doc false
+  @spec oban_running?((atom() -> pid() | nil), (atom() -> pid() | nil)) :: boolean()
+  def oban_running?(
+        process_whereis \\ &Process.whereis/1,
+        oban_whereis \\ &Oban.whereis/1
+      )
+      when is_function(process_whereis, 1) and is_function(oban_whereis, 1) do
+    case process_whereis.(Oban.Registry) do
+      nil -> false
+      pid when is_pid(pid) -> is_pid(oban_whereis.(Oban))
+      _invalid_registry -> true
+    end
+  rescue
+    _lookup_error -> true
+  catch
+    :exit, _reason -> true
   end
 end

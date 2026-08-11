@@ -60,6 +60,18 @@ defmodule ContextBot.Workflow.ReprocessorRuntimeTest do
     refute_received {:dependency_started, _application}
   end
 
+  test "treats a missing Oban registry as a worker-free runtime" do
+    refute ReprocessorRuntime.oban_running?(
+             fn Oban.Registry -> nil end,
+             fn _name -> flunk("Oban lookup must not run without its registry") end
+           )
+
+    assert ReprocessorRuntime.oban_running?(
+             fn Oban.Registry -> self() end,
+             fn Oban -> raise "unexpected lookup failure" end
+           )
+  end
+
   test "reuses an existing Repo and normalizes dependency and Repo failures" do
     settings = Settings.load(bot_enabled: false)
 
