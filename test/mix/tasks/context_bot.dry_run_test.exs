@@ -334,6 +334,35 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     refute output =~ credential
   end
 
+  test "turns malformed successful preparation results into a finite content-safe error" do
+    target = "https://bsky.app/profile/sentinel-target/post/sentinel-post"
+    question = "sentinel-question"
+    provider = "sentinel-provider"
+    credential = "sentinel-credential"
+
+    Application.put_env(:context_bot, Service,
+      test_pid: self(),
+      prepare_result:
+        {:ok, %{target: target, question: question, provider: provider, credential: credential},
+         :created},
+      await_result: :unused
+    )
+
+    error = assert_raise Mix.Error, fn -> run([target, question]) end
+
+    assert error.message =~ "public_service_failure"
+    refute error.message =~ target
+    refute error.message =~ question
+    refute error.message =~ provider
+    refute error.message =~ credential
+
+    output = shell_output()
+    refute output =~ target
+    refute output =~ question
+    refute output =~ provider
+    refute output =~ credential
+  end
+
   test "turns malformed worker startup results into a finite content-safe error" do
     target = "https://bsky.app/profile/sentinel-target/post/sentinel-post"
     question = "sentinel-question"

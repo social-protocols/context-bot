@@ -102,7 +102,8 @@ defmodule Mix.Tasks.ContextBot.DryRun do
 
   defp prepare!(service, post, question) do
     case service.prepare(post, question, []) do
-      {:ok, invocation, disposition} when disposition in [:created, :attached] ->
+      {:ok, %ContextBot.Workflow.Invocation{id: id} = invocation, disposition}
+      when is_integer(id) and disposition in [:created, :attached] ->
         {invocation, disposition}
 
       {:error, reason} ->
