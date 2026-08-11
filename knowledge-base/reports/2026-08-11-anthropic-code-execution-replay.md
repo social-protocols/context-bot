@@ -1,6 +1,6 @@
 # Anthropic dynamic-filtering code execution and retained replay
 
-**Date:** 2026-08-11  
+**Date:** 2026-08-11
 **TL;DR:** Anthropic's current web tools can automatically emit outer code-execution call/result
 pairs under dynamic filtering. Treat those pairs as server-tool protocol, and reprocess a complete
 stored envelope after local parser failures instead of repeating paid research.
