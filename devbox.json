@@ -5,18 +5,18 @@
       "disable_plugin": true
     },
     "github:NixOS/nixpkgs/nixpkgs-unstable#beam28Packages.erlang": {},
-    "sqlite": "latest",
-    "just": "latest",
-    "flyctl": "latest",
-    "bitwarden-cli": "latest",
-    "docker-client": "latest",
-    "git": "latest",
-    "jq": "latest",
-    "curl": "latest",
-    "shellcheck": "latest",
-    "shfmt": "latest",
-    "flock": "latest",
-    "coreutils": "latest"
+    "just":                                                        "latest",
+    "flyctl":                                                      "latest",
+    "bitwarden-cli":                                               "latest",
+    "docker-client":                                               "latest",
+    "git":                                                         "latest",
+    "jq":                                                          "latest",
+    "curl":                                                        "latest",
+    "shellcheck":                                                  "latest",
+    "shfmt":                                                       "latest",
+    "flock":                                                       "latest",
+    "coreutils":                                                   "latest",
+    "sqlite-interactive":                                          "latest"
   },
   "shell": {
     "init_hook": [
