@@ -152,7 +152,6 @@ defmodule ContextBot.LiveRunWorkflowTest do
     assert complete.stage == :complete
     assert POCFixture.created_reply_count(fixture) == 1
   end
-  end
 
   defp perform_and_delete!(queue) do
     job =
