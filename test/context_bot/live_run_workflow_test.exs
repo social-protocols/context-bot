@@ -102,7 +102,7 @@ defmodule ContextBot.LiveRunWorkflowTest do
     assert POCFixture.call_count(fixture, :pds_put) == 0
   end
 
-  test "an operator-selected video bypasses research and publishes the deterministic reply once" do
+  test "an operator-selected video proceeds through research and publishes the reply" do
     fixture = POCFixture.start!()
     invocation_uri = POCFixture.notification()["uri"]
 
@@ -122,16 +122,26 @@ defmodule ContextBot.LiveRunWorkflowTest do
 
     perform_and_delete!(:thread)
 
+    # Video threads now go through research
+    thread_ready = Repo.reload!(invocation)
+    assert thread_ready.stage == :thread_ready
+    assert thread_ready.contains_video == true
+
+    assert [%Oban.Job{queue: "research", worker: "ContextBot.Workers.ResearchWorker"}] =
+             Repo.all(Oban.Job)
+
+    # Stub research response
+    POCFixture.set_research_response(fixture, %{
+      "stop_reason" => "end_turn",
+      "content" => [%{"type" => "text", "text" => "Public reports indicate this is a test."}]
+    })
+
+    perform_and_delete!(:research)
+
     reply_ready = Repo.reload!(invocation)
     assert reply_ready.stage == :reply_ready
-
-    assert reply_ready.selected_reply ==
-             "I can't analyze videos yet, so I can't reliably answer a question that may depend on this clip."
-
-    assert reply_ready.reply_validation["reason"] == "video"
-    assert reply_ready.anthropic_messages == nil
-    assert Repo.aggregate(BudgetEntry, :count) == 0
-    assert POCFixture.call_count(fixture, :anthropic_post) == 0
+    assert reply_ready.selected_reply =~ "test"
+    assert POCFixture.call_count(fixture, :anthropic_post) == 1
 
     assert [%Oban.Job{queue: "reply", worker: "ContextBot.Workers.ReplyWorker"}] =
              Repo.all(Oban.Job)
@@ -141,7 +151,7 @@ defmodule ContextBot.LiveRunWorkflowTest do
     assert {:ok, complete} = LiveRun.await(invocation, timeout_ms: 0)
     assert complete.stage == :complete
     assert POCFixture.created_reply_count(fixture) == 1
-    assert POCFixture.call_count(fixture, :anthropic_post) == 0
+  end
   end
 
   defp perform_and_delete!(queue) do

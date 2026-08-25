@@ -2,7 +2,7 @@
 
 An experimental, on-demand Bluesky / ATProto context bot. The proof of concept acts only when directly mentioned in a public thread; it is not a proactive moderation system.
 
-The POC durably receives mentions, checks a narrow eligibility policy, captures the invocation and ancestor chain, sends bounded images to Claude for a concise researched answer, and publishes exactly one correctly rooted Bluesky reply. Video-containing threads fail closed with a deterministic capability reply instead of a text-only model answer. SQLite holds workflow, budget, provider-response, and frozen reply state. Audit-record publication, audit pages, IPFS, descendants, and a UI are intentionally out of scope.
+The POC durably receives mentions, checks a narrow eligibility policy, captures the invocation and ancestor chain, requests Claude analysis with server-side research, and publishes exactly one correctly rooted Bluesky reply. SQLite holds workflow, budget, provider-response, and frozen reply state. Audit-record publication, audit pages, IPFS, descendants, and a UI are intentionally out of scope.
 
 ## Prerequisites
 
@@ -126,9 +126,10 @@ configured bot. This command **publishes a real reply** as the configured `BOT_D
 Running it is the operator authorization that bypasses actor eligibility; all Anthropic reservation,
 daily-budget, response, validation, and publication safeguards remain active.
 
-The same media rules apply to a live run. A supported image enters the bounded Claude request. A
-video or excessive image count bypasses Claude but still freezes and publishes exactly one
-deterministic reply through the normal reconciliation-safe reply worker.
+The same media rules apply to a live run. A supported image enters the bounded Claude request. Threads
+with more than four images receive a capability answer and bypass research, but video threads proceed
+through normal research where Claude answers from public evidence when possible. All replies freeze
+and publish through the normal reconciliation-safe reply worker.
 
 The command forces `BOT_ENABLED=false`, starts no notification poller, and processes only the
 selected invocation on serial `thread`, `research`, and `reply` queues. Durable state defaults to the

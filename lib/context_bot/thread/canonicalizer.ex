@@ -41,13 +41,14 @@ defmodule ContextBot.Thread.Canonicalizer do
           version: 2,
           text: String.t(),
           media: [map()],
+          contains_video: boolean(),
           parent: strong_ref(),
           root: strong_ref(),
           current_cid: String.t()
         }
 
   @type unsupported_result :: %{
-          reason: :video | :image_limit_exceeded,
+          reason: :image_limit_exceeded,
           image_count: non_neg_integer(),
           canonical: result()
         }
@@ -254,16 +255,13 @@ defmodule ContextBot.Thread.Canonicalizer do
         version: 2,
         text: Enum.join(["CONTEXT_BOT_THREAD_V2" | sections], "\n\n"),
         media: media,
+        contains_video: scan.video?,
         parent: parent,
         root: root,
         current_cid: target_post.cid
       }
 
       cond do
-        scan.video? ->
-          {:unsupported_media,
-           %{reason: :video, image_count: length(scan.media), canonical: canonical}}
-
         length(scan.media) > Media.max_images() ->
           {:unsupported_media,
            %{
