@@ -261,17 +261,15 @@ defmodule ContextBot.Thread.Canonicalizer do
         current_cid: target_post.cid
       }
 
-      cond do
-        length(scan.media) > Media.max_images() ->
-          {:unsupported_media,
-           %{
-             reason: :image_limit_exceeded,
-             image_count: length(scan.media),
-             canonical: canonical
-           }}
-
-        true ->
-          {:ok, canonical}
+      if length(scan.media) > Media.max_images() do
+        {:unsupported_media,
+         %{
+           reason: :image_limit_exceeded,
+           image_count: length(scan.media),
+           canonical: canonical
+         }}
+      else
+        {:ok, canonical}
       end
     else
       {:error, _reason} -> {:error, :invalid_thread}
