@@ -322,7 +322,7 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
       dry_run: true,
       stage: :complete,
       selected_reply:
-        "I can't analyze videos yet, so I can't reliably answer a question that may depend on this clip.",
+        "I can analyze up to four images at a time, but this thread contains more than that.",
       anthropic_usage: %{
         "totals" => %{"input_tokens" => 0, "output_tokens" => 0},
         "response_count" => 0,
@@ -344,7 +344,7 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
       await_result: {:ok, invocation}
     )
 
-    assert :ok = run(["https://bsky.app/profile/example.test/post/video", "Is this AI?"])
+    assert :ok = run(["https://bsky.app/profile/example.test/post/images", "What are these?"])
 
     output = shell_output()
     assert output =~ "status=complete"

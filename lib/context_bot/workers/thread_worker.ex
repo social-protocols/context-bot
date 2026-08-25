@@ -19,7 +19,6 @@ defmodule ContextBot.Workers.ThreadWorker do
   @research_worker "ContextBot.Workers.ResearchWorker"
   @reply_worker "ContextBot.Workers.ReplyWorker"
   @maximum_backoff_seconds 300
-  @video_reply "I can't analyze videos yet, so I can't reliably answer a question that may depend on this clip."
   @image_limit_reply "I can analyze up to four images at a time, but this thread contains more than that."
 
   @impl Oban.Worker
@@ -154,14 +153,21 @@ defmodule ContextBot.Workers.ThreadWorker do
   end
 
   defp handle_canonicalization(
-         {:unsupported_media, %{reason: reason, image_count: image_count, canonical: canonical}},
+         {:unsupported_media,
+          %{reason: :image_limit_exceeded, image_count: image_count, canonical: canonical}},
          invocation,
          raw_thread,
          dependencies
        ) do
     with :ok <-
-           persist_capability_handoff(invocation, raw_thread, canonical, reason, dependencies) do
-      {:media_capture, media_disposition(reason), image_count}
+           persist_capability_handoff(
+             invocation,
+             raw_thread,
+             canonical,
+             :image_limit_exceeded,
+             dependencies
+           ) do
+      {:media_capture, :image_limit_exceeded, image_count}
     end
   end
 
@@ -223,6 +229,7 @@ defmodule ContextBot.Workers.ThreadWorker do
       canonical_thread: canonical.text,
       canonical_thread_version: Integer.to_string(canonical.version),
       canonical_media: canonical.media,
+      contains_video: canonical.contains_video,
       root_uri: canonical.root["uri"],
       root_cid: canonical.root["cid"],
       current_cid: canonical.current_cid
@@ -335,17 +342,14 @@ defmodule ContextBot.Workers.ThreadWorker do
       canonical_thread: canonical.text,
       canonical_thread_version: Integer.to_string(canonical.version),
       canonical_media: canonical.media,
+      contains_video: canonical.contains_video,
       root_uri: canonical.root["uri"],
       root_cid: canonical.root["cid"],
       current_cid: canonical.current_cid
     }
   end
 
-  defp capability_reply(:video), do: @video_reply
   defp capability_reply(:image_limit_exceeded), do: @image_limit_reply
-
-  defp media_disposition(:video), do: :video_unsupported
-  defp media_disposition(:image_limit_exceeded), do: :image_limit_exceeded
 
   defp capability_validation(reason) do
     %{

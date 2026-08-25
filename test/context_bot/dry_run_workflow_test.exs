@@ -151,28 +151,43 @@ defmodule ContextBot.DryRunWorkflowTest do
     assert queued_jobs() == []
   end
 
-  test "a video dry run completes locally without Anthropic or publication work" do
+  test "a video dry run proceeds through research and handles model response" do
     settings = Settings.load(anthropic_daily_budget_usd: "20.000000")
     Application.put_env(:context_bot, :settings, settings)
     expect_public_thread("atproto/thread_video.json")
 
-    Req.Test.stub(AnthropicClient, fn _conn ->
-      flunk("Anthropic was called for an unsupported video")
+    Req.Test.stub(AnthropicClient, fn conn ->
+      assert conn.method == "POST"
+
+      Req.Test.json(conn, %{
+        "id" => "msg_video",
+        "type" => "message",
+        "role" => "assistant",
+        "model" => "claude-opus-5-sonnet-20250210",
+        "stop_reason" => "end_turn",
+        "content" => [
+          %{"type" => "text", "text" => "Based on public reporting, this event occurred."}
+        ],
+        "usage" => %{
+          "input_tokens" => 100,
+          "output_tokens" => 20,
+          "cache_creation_input_tokens" => 0,
+          "cache_read_input_tokens" => 0
+        }
+      })
     end)
 
     assert {:ok, invocation, :created} = DryRun.prepare(@post_url, "Is this AI?")
     perform_and_delete!(:dry_thread)
+    perform_and_delete!(:dry_research)
 
     assert {:ok, complete} = DryRun.await(invocation, timeout_ms: 0)
     assert complete.stage == :complete
-
-    assert complete.selected_reply ==
-             "I can't analyze videos yet, so I can't reliably answer a question that may depend on this clip."
-
-    assert complete.reply_validation["reason"] == "video"
-    assert complete.anthropic_usage["totals"] == %{"input_tokens" => 0, "output_tokens" => 0}
+    assert complete.contains_video == true
+    assert complete.selected_reply =~ "occurred"
+    assert complete.anthropic_usage["totals"]["input_tokens"] > 0
     assert complete.reply_record == nil
-    assert Repo.aggregate(BudgetEntry, :count) == 0
+    assert Repo.aggregate(BudgetEntry, :count) == 1
     assert queued_jobs() == []
   end
 

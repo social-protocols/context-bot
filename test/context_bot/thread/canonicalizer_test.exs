@@ -15,6 +15,7 @@ defmodule ContextBot.Thread.CanonicalizerTest do
     assert result == %{
              version: 2,
              current_cid: "bafy-invocation-v1",
+             contains_video: false,
              media: [
                %{
                  "type" => "image",
@@ -283,14 +284,15 @@ defmodule ContextBot.Thread.CanonicalizerTest do
     end)
   end
 
-  test "detects video directly and through record-with-media" do
+  test "detects video directly and through record-with-media and flags it in canonical result" do
     direct = fixture("thread_video.json")
 
-    assert {:unsupported_media, %{reason: :video, canonical: direct_result}} =
-             Canonicalizer.build(direct, context())
+    assert {:ok, direct_result} = Canonicalizer.build(direct, context())
 
     assert direct_result.version == 2
     assert direct_result.media == []
+    assert direct_result.contains_video == true
+    assert direct_result.text =~ "Video: present"
 
     nested =
       put_in(direct, ["thread", "post", "embed"], %{
@@ -304,11 +306,11 @@ defmodule ContextBot.Thread.CanonicalizerTest do
         "media" => get_in(direct, ["thread", "post", "embed"])
       })
 
-    assert {:unsupported_media, %{reason: :video}} =
-             Canonicalizer.build_dry_run(nested, dry_run_context())
+    assert {:ok, nested_result} = Canonicalizer.build_dry_run(nested, dry_run_context())
+    assert nested_result.contains_video == true
   end
 
-  test "fails closed above four images and gives video precedence" do
+  test "fails closed above four images" do
     base = fixture("thread_ancestors.json")
 
     five_images =
@@ -327,6 +329,7 @@ defmodule ContextBot.Thread.CanonicalizerTest do
 
     assert length(media) == 4
 
+    # Video is no longer an unsupported reason; it's just a flag in the canonical result
     with_video =
       put_in(
         over_limit,
@@ -334,8 +337,11 @@ defmodule ContextBot.Thread.CanonicalizerTest do
         get_in(fixture("thread_video.json"), ["thread", "post", "embed"])
       )
 
-    assert {:unsupported_media, %{reason: :video}} =
+    # When both video and image limit are present, image limit still takes precedence as unsupported
+    assert {:unsupported_media, %{reason: :image_limit_exceeded, canonical: canonical}} =
              Canonicalizer.build(with_video, context())
+
+    assert canonical.contains_video == true
   end
 
   test "dry-run canonicalization preserves ancestor placeholders and truncation" do
