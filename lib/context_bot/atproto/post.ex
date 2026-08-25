@@ -47,7 +47,6 @@ defmodule ContextBot.ATProto.Post do
   defp build_facets(text, reader_url) when is_binary(reader_url) do
     # Calculate byte position for the link text
     base_text_bytes = byte_size(text)
-    link_text = " (full response)"
     byte_start = base_text_bytes + byte_size(" (")
     byte_end = byte_start + byte_size("full response")
 
