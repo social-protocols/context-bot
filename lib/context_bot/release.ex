@@ -5,6 +5,8 @@ defmodule ContextBot.Release do
   """
   @app :context_bot
 
+  alias ContextBot.Workflow.Reprocessor
+
   def migrate do
     load_app()
 
@@ -18,7 +20,7 @@ defmodule ContextBot.Release do
 
     case Application.ensure_all_started(@app) do
       {:ok, _apps} ->
-        case ContextBot.Workflow.Reprocessor.reprocess(invocation_id, now: DateTime.utc_now()) do
+        case Reprocessor.reprocess(invocation_id, now: DateTime.utc_now()) do
           {:ok, %{id: ^invocation_id}} ->
             IO.puts("status=reopened")
             IO.puts("invocation_id=#{invocation_id}")
