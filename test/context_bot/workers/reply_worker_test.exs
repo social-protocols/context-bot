@@ -709,6 +709,102 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
     assert Enum.count(snapshot.calls, &match?({:put, _, _, _, _}, &1)) == 1
   end
 
+  test "publishes both parts sequentially for a split reply with part2 rebuilt using part1's published CID" do
+    rkey_part1 = "3mreplypart1111"
+    rkey_part2 = "3mreplypart2222"
+    part1_cid = "bafy-part1-published"
+    part2_cid = "bafy-part2-published"
+    invocation_uri = "at://did:plc:actor/app.bsky.feed.post/split"
+
+    invocation =
+      invocation("split", :reply_ready, %{
+        reply_rkey: rkey_part1,
+        reply_part2_rkey: rkey_part2,
+        reply_part2_record: %{
+          "$type" => "app.bsky.feed.post",
+          "text" => "This is part 2 of the split reply.",
+          "createdAt" => "2026-07-29T12:59:01.123456Z",
+          "reply" => %{
+            "parent" => %{
+              "uri" => "at://#{@bot_did}/#{@collection}/#{rkey_part1}"
+            },
+            "root" => %{
+              "uri" => invocation_uri,
+              "cid" => "bafy-current-split"
+            }
+          }
+        }
+      })
+
+    part1_remote_record = remote_record(invocation, part1_cid)
+    part1_uri = part1_remote_record["uri"]
+
+    rebuilt_part2_record = %{
+      "$type" => "app.bsky.feed.post",
+      "text" => "This is part 2 of the split reply.",
+      "createdAt" => "2026-07-29T12:59:01.123456Z",
+      "reply" => %{
+        "parent" => %{
+          "uri" => part1_uri,
+          "cid" => part1_cid
+        },
+        "root" => %{
+          "uri" => part1_uri,
+          "cid" => part1_cid
+        }
+      }
+    }
+
+    part2_remote_record = %{
+      "uri" => "at://#{@bot_did}/#{@collection}/#{rkey_part2}",
+      "cid" => part2_cid,
+      "value" => rebuilt_part2_record
+    }
+
+    remote =
+      configure_remote(
+        get_results: [
+          {:error, :record_not_found},
+          {:ok, 200, %{}, part1_remote_record},
+          {:error, :record_not_found},
+          {:ok, 200, %{}, part2_remote_record}
+        ],
+        put_results: [
+          {:ok, 200, %{}, %{"uri" => part1_uri, "cid" => part1_cid}},
+          {:ok, 200, %{}, %{"uri" => part2_remote_record["uri"], "cid" => part2_cid}}
+        ]
+      )
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert persisted.status == :complete
+    assert persisted.reply_uri == part1_uri
+    assert persisted.reply_cid == part1_cid
+    assert persisted.reply_part2_uri == part2_remote_record["uri"]
+    assert persisted.reply_part2_cid == part2_cid
+    assert persisted.completed_at == @now
+
+    snapshot = Remote.snapshot(remote)
+
+    assert Enum.member?(snapshot.calls, {:get, @bot_did, @collection, rkey_part1})
+
+    assert Enum.member?(
+             snapshot.calls,
+             {:put, @bot_did, @collection, rkey_part1, invocation.reply_record}
+           )
+
+    assert Enum.member?(snapshot.calls, {:get, @bot_did, @collection, rkey_part2})
+
+    assert Enum.member?(
+             snapshot.calls,
+             {:put, @bot_did, @collection, rkey_part2, rebuilt_part2_record}
+           )
+
+    assert length(snapshot.calls) == 6
+  end
+
   defp configure_remote(options \\ []) do
     get_hook = Keyword.get(options, :get_hook)
     put_hook = Keyword.get(options, :put_hook)
