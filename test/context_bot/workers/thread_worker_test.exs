@@ -225,7 +225,7 @@ defmodule ContextBot.Workers.ThreadWorkerTest do
     assert persisted.canonical_thread =~ "Video: present"
     assert persisted.raw_thread == response
     assert persisted.canonical_thread_version == "2"
-    
+
     # Video threads now proceed to research
     assert [%Oban.Job{worker: "ContextBot.Workers.ResearchWorker", queue: "dry_research"}] =
              Repo.all(Oban.Job)
