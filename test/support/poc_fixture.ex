@@ -200,6 +200,39 @@ defmodule ContextBot.POCFixture do
     Agent.update(state, &%{&1 | pds_mode: mode})
   end
 
+  def set_research_response(%__MODULE__{state: state}, response_content) do
+    Agent.update(state, fn state ->
+      # Ensure response has all required Anthropic fields
+      full_response =
+        Map.merge(
+          %{
+            "id" => "msg_test",
+            "type" => "message",
+            "role" => "assistant",
+            "model" => "claude-sonnet-5",
+            "usage" => %{
+              "input_tokens" => 100,
+              "cache_creation_input_tokens" => 100,
+              "cache_creation" => %{
+                "ephemeral_5m_input_tokens" => 100,
+                "ephemeral_1h_input_tokens" => 0
+              },
+              "cache_read_input_tokens" => 0,
+              "output_tokens" => 20,
+              "server_tool_use" => %{
+                "web_search_requests" => 0
+              }
+            },
+            "stop_sequence" => nil
+          },
+          response_content
+        )
+
+      json_content = Jason.encode!(full_response)
+      %{state | anthropic_results: [{:response, 200, json_content, %{}}]}
+    end)
+  end
+
   def notification(actor_did \\ @actor_did, actor_handle \\ @actor_handle) do
     uri = "at://#{actor_did}/app.bsky.feed.post/invocation"
 
