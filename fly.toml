@@ -8,9 +8,9 @@ primary_region = "den"
   # Supply the real public identity before activation. Empty values are safe
   # while BOT_ENABLED remains false and deliberately fail startup when enabled.
   BOT_ENABLED = "false"
-  BOT_DID = ""
-  BOT_HANDLE = ""
-  BOT_PDS_URL = ""
+  BOT_DID = "did:plc:anbhmngzs3exwbq47xxzogk4"
+  BOT_HANDLE = "getcontext.bot"
+  BOT_PDS_URL = "did:plc:anbhmngzs3exwbq47xxzogk4"
   DATABASE_PATH = "/data/context_bot.db"
   PHX_HOST = "context-bot-jwarden.fly.dev"
   PHX_SERVER = "true"
