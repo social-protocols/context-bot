@@ -38,7 +38,9 @@ defmodule ContextBot.Reply.Intent do
   @doc """
   Builds an intent with a second part for split replies.
 
-  Part 2 will reply to part 1 (not to the invocation).
+  Part 2 will reply to part 1 (not to the invocation). At freeze time, part2's record
+  contains only text and createdAt because part1 has not been published yet. ReplyWorker
+  rebuilds the full part2 record with part1's published URI and CID before publishing.
   """
   @spec build_with_part2(
           Invocation.t(),
@@ -63,27 +65,29 @@ defmodule ContextBot.Reply.Intent do
          {:ok, root} <- root_ref(invocation),
          {:ok, record1} <- Post.build(text_part1, parent, root, created_at),
          {:ok, rkey1} <- generate_rkey(created_at, tid_generator),
-         {:ok, record2, rkey2} <- build_part2(text_part2, reply_repo, rkey1, tid_generator) do
+         {:ok, part2_data, rkey2} <- prepare_part2(text_part2, tid_generator) do
       {:ok,
        %{
          reply_repo: reply_repo,
          reply_rkey: rkey1,
          reply_record: record1,
          reply_part2_rkey: rkey2,
-         reply_part2_record: record2
+         reply_part2_record: part2_data
        }}
     end
   end
 
-  defp build_part2(text_part2, reply_repo, part1_rkey, tid_generator) do
+  defp prepare_part2(text_part2, tid_generator) when is_binary(text_part2) do
     part2_timestamp_us = System.unique_integer([:positive, :monotonic])
     part2_created_at = DateTime.from_unix!(part2_timestamp_us, :microsecond)
-    part1_uri = "at://#{reply_repo}/app.bsky.feed.post/#{part1_rkey}"
-    parent = %{"uri" => part1_uri}
 
-    with {:ok, part2_record} <- Post.build(text_part2, parent, nil, part2_created_at),
-         {:ok, part2_rkey} <- generate_rkey(part2_created_at, tid_generator) do
-      {:ok, part2_record, part2_rkey}
+    with {:ok, part2_rkey} <- generate_rkey(part2_created_at, tid_generator) do
+      part2_data = %{
+        "text" => text_part2,
+        "createdAt" => DateTime.to_iso8601(part2_created_at)
+      }
+
+      {:ok, part2_data, part2_rkey}
     end
   end
 

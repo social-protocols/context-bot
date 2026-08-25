@@ -714,25 +714,14 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
     rkey_part2 = "3mreplypart2222"
     part1_cid = "bafy-part1-published"
     part2_cid = "bafy-part2-published"
-    invocation_uri = "at://did:plc:actor/app.bsky.feed.post/split"
 
     invocation =
       invocation("split", :reply_ready, %{
         reply_rkey: rkey_part1,
         reply_part2_rkey: rkey_part2,
         reply_part2_record: %{
-          "$type" => "app.bsky.feed.post",
           "text" => "This is part 2 of the split reply.",
-          "createdAt" => "2026-07-29T12:59:01.123456Z",
-          "reply" => %{
-            "parent" => %{
-              "uri" => "at://#{@bot_did}/#{@collection}/#{rkey_part1}"
-            },
-            "root" => %{
-              "uri" => invocation_uri,
-              "cid" => "bafy-current-split"
-            }
-          }
+          "createdAt" => "2026-07-29T12:59:01.123456Z"
         }
       })
 
