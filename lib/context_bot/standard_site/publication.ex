@@ -6,7 +6,7 @@ defmodule ContextBot.StandardSite.Publication do
   It uses a stable rkey and persists for the lifetime of the bot.
   """
 
-  alias ContextBot.ATProto.{Client, TID}
+  alias ContextBot.ATProto.Client
 
   @collection "site.standard.publication"
   @publication_rkey "context-bot"

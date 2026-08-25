@@ -6,7 +6,7 @@ defmodule ContextBot.StandardSite.Document do
   for inline reading, along with metadata linking to the publication and Bluesky post.
   """
 
-  alias ContextBot.ATProto.Client
+  alias ContextBot.ATProto.{Client, TID}
 
   @collection "site.standard.document"
   @reader_base_url "https://standard-reader.app/a"
