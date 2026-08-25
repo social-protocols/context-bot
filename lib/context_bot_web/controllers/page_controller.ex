@@ -83,33 +83,39 @@ defmodule ContextBotWeb.PageController do
   defp markdown_to_html(markdown) do
     markdown
     |> String.split("\n")
-    |> Enum.reduce({[], false}, fn line, {acc, in_list} ->
-      cond do
-        String.starts_with?(line, "# ") ->
-          html = "<h1>#{escape_html(String.slice(line, 2..-1//1))}</h1>"
-          {acc ++ [close_list_if_needed(in_list), html], false}
+    |> Enum.reduce({[], false}, &process_line/2)
+    |> finalize_html()
+  end
 
-        String.starts_with?(line, "## ") ->
-          html = "<h2>#{escape_html(String.slice(line, 3..-1//1))}</h2>"
-          {acc ++ [close_list_if_needed(in_list), html], false}
+  defp process_line(line, {acc, in_list}) do
+    cond do
+      String.starts_with?(line, "# ") ->
+        html = "<h1>#{escape_html(String.slice(line, 2..-1//1))}</h1>"
+        {acc ++ [close_list_if_needed(in_list), html], false}
 
-        String.starts_with?(line, "- ") ->
-          item_html = process_inline_formatting(String.slice(line, 2..-1//1))
-          html = if in_list, do: "<li>#{item_html}</li>", else: "<ul><li>#{item_html}</li>"
-          {acc ++ [html], true}
+      String.starts_with?(line, "## ") ->
+        html = "<h2>#{escape_html(String.slice(line, 3..-1//1))}</h2>"
+        {acc ++ [close_list_if_needed(in_list), html], false}
 
-        String.starts_with?(line, "---") ->
-          {acc ++ [close_list_if_needed(in_list), "<hr>"], false}
+      String.starts_with?(line, "- ") ->
+        item_html = process_inline_formatting(String.slice(line, 2..-1//1))
+        html = if in_list, do: "<li>#{item_html}</li>", else: "<ul><li>#{item_html}</li>"
+        {acc ++ [html], true}
 
-        String.trim(line) == "" ->
-          {acc ++ [close_list_if_needed(in_list)], false}
+      String.starts_with?(line, "---") ->
+        {acc ++ [close_list_if_needed(in_list), "<hr>"], false}
 
-        true ->
-          html = "<p>#{process_inline_formatting(line)}</p>"
-          {acc ++ [close_list_if_needed(in_list), html], false}
-      end
-    end)
-    |> then(fn {acc, in_list} -> acc ++ [close_list_if_needed(in_list)] end)
+      String.trim(line) == "" ->
+        {acc ++ [close_list_if_needed(in_list)], false}
+
+      true ->
+        html = "<p>#{process_inline_formatting(line)}</p>"
+        {acc ++ [close_list_if_needed(in_list), html], false}
+    end
+  end
+
+  defp finalize_html({acc, in_list}) do
+    (acc ++ [close_list_if_needed(in_list)])
     |> Enum.join("\n")
   end
 
