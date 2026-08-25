@@ -165,7 +165,9 @@ defmodule ContextBot.DryRunWorkflowTest do
         "role" => "assistant",
         "model" => "claude-opus-5-sonnet-20250210",
         "stop_reason" => "end_turn",
-        "content" => [%{"type" => "text", "text" => "Based on public reporting, this event occurred."}],
+        "content" => [
+          %{"type" => "text", "text" => "Based on public reporting, this event occurred."}
+        ],
         "usage" => %{
           "input_tokens" => 100,
           "output_tokens" => 20,

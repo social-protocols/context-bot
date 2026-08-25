@@ -339,7 +339,7 @@ defmodule ContextBot.Thread.CanonicalizerTest do
     # When both video and image limit are present, image limit still takes precedence as unsupported
     assert {:unsupported_media, %{reason: :image_limit_exceeded, canonical: canonical}} =
              Canonicalizer.build(with_video, context())
-    
+
     assert canonical.contains_video == true
   end
 

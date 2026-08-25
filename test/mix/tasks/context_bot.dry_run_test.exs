@@ -321,7 +321,8 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
       id: 43,
       dry_run: true,
       stage: :complete,
-      selected_reply: "I can analyze up to four images at a time, but this thread contains more than that.",
+      selected_reply:
+        "I can analyze up to four images at a time, but this thread contains more than that.",
       anthropic_usage: %{
         "totals" => %{"input_tokens" => 0, "output_tokens" => 0},
         "response_count" => 0,

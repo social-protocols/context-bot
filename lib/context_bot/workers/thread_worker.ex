@@ -153,13 +153,20 @@ defmodule ContextBot.Workers.ThreadWorker do
   end
 
   defp handle_canonicalization(
-        {:unsupported_media, %{reason: :image_limit_exceeded, image_count: image_count, canonical: canonical}},
-        invocation,
-        raw_thread,
-        dependencies
-      ) do
+         {:unsupported_media,
+          %{reason: :image_limit_exceeded, image_count: image_count, canonical: canonical}},
+         invocation,
+         raw_thread,
+         dependencies
+       ) do
     with :ok <-
-           persist_capability_handoff(invocation, raw_thread, canonical, :image_limit_exceeded, dependencies) do
+           persist_capability_handoff(
+             invocation,
+             raw_thread,
+             canonical,
+             :image_limit_exceeded,
+             dependencies
+           ) do
       {:media_capture, :image_limit_exceeded, image_count}
     end
   end
