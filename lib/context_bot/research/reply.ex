@@ -21,6 +21,7 @@ defmodule ContextBot.Research.Reply do
         }
   @type result ::
           {:ok, String.t()}
+          | {:ok, String.t(), String.t()}
           | {:repairable, String.t(), [reason()]}
           | {:split, String.t(), String.t()}
           | {:error, reason()}
@@ -623,10 +624,44 @@ defmodule ContextBot.Research.Reply do
 
   defp classify_text(text) do
     case String.trim(text) do
-      "" -> {:error, :empty_reply}
-      _nonempty -> classify_limits(text, limit_reasons(text))
+      "" ->
+        {:error, :empty_reply}
+
+      nonempty ->
+        case parse_dual_response(nonempty) do
+          {:ok, full_response, compact_reply} ->
+            classify_dual(full_response, compact_reply, limit_reasons(compact_reply))
+
+          :not_dual_format ->
+            classify_limits(text, limit_reasons(text))
+        end
     end
   end
+
+  defp parse_dual_response(text) do
+    separator = "\n---COMPACT_REPLY---\n"
+
+    case String.split(text, separator, parts: 2) do
+      [full_response, compact_reply] when byte_size(full_response) > 0 ->
+        trimmed_full = String.trim(full_response)
+        trimmed_compact = String.trim(compact_reply)
+
+        if trimmed_full != "" and trimmed_compact != "" do
+          {:ok, trimmed_full, trimmed_compact}
+        else
+          :not_dual_format
+        end
+
+      _ ->
+        :not_dual_format
+    end
+  end
+
+  defp classify_dual(full_response, compact_reply, []) when byte_size(full_response) > 0,
+    do: {:ok, full_response, compact_reply}
+
+  defp classify_dual(full_response, compact_reply, reasons) when byte_size(full_response) > 0,
+    do: {:repairable, compact_reply, reasons}
 
   defp classify_limits(text, []), do: {:ok, text}
   defp classify_limits(text, reasons), do: {:repairable, text, reasons}

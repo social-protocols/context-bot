@@ -14,6 +14,7 @@ defmodule ContextBot.Workers.ResearchWorker do
   alias ContextBot.{Operations, Repo}
   alias ContextBot.Reply.Intent
   alias ContextBot.Research.Runner
+  alias ContextBot.StandardSite.{Document, Publication}
   alias ContextBot.Workflow.{Invocation, Store}
 
   @reply_worker "ContextBot.Workers.ReplyWorker"
@@ -102,6 +103,7 @@ defmodule ContextBot.Workers.ResearchWorker do
     attrs = %{
       anthropic_messages: result.messages,
       anthropic_usage: result.usage,
+      full_response: Map.get(result, :full_response),
       selected_reply: result.text,
       reply_validation: result.validation,
       reply_repo: nil,
@@ -132,6 +134,14 @@ defmodule ContextBot.Workers.ResearchWorker do
 
   defp freeze_handoff(invocation, result, token, dependencies) do
     created_at = dependencies.now.()
+    bot_did = dependencies.settings.bot_did
+
+    # Create Standard.site document if we have a full response
+    {document_result, reader_url} =
+      create_standard_site_document(invocation, result, bot_did, created_at)
+
+    # Build intent with reader_url if available
+    intent_opts = if reader_url, do: [reader_url: reader_url], else: []
 
     intent_result =
       if Map.has_key?(result, :text_part2) do
@@ -139,17 +149,19 @@ defmodule ContextBot.Workers.ResearchWorker do
           invocation,
           result.text,
           result.text_part2,
-          dependencies.settings.bot_did,
+          bot_did,
           created_at,
-          dependencies.tid_generator
+          dependencies.tid_generator,
+          intent_opts
         )
       else
         dependencies.intent_builder.(
           invocation,
           result.text,
-          dependencies.settings.bot_did,
+          bot_did,
           created_at,
-          dependencies.tid_generator
+          dependencies.tid_generator,
+          intent_opts
         )
       end
 
@@ -158,8 +170,11 @@ defmodule ContextBot.Workers.ResearchWorker do
         attrs = %{
           anthropic_messages: result.messages,
           anthropic_usage: result.usage,
+          full_response: Map.get(result, :full_response),
           selected_reply: result.text,
           reply_validation: result.validation,
+          standard_site_document_uri: document_uri(document_result),
+          standard_site_document_rkey: document_rkey(document_result),
           reply_repo: intent.reply_repo,
           reply_rkey: intent.reply_rkey,
           reply_record: intent.reply_record,
@@ -200,6 +215,44 @@ defmodule ContextBot.Workers.ResearchWorker do
         fail_research(invocation, reason, created_at, token)
     end
   end
+
+  defp create_standard_site_document(invocation, result, repo, created_at) do
+    full_response = Map.get(result, :full_response)
+
+    if full_response && byte_size(full_response) > 0 do
+      # Ensure publication exists
+      case Publication.ensure_exists(repo, created_at) do
+        {:ok, publication_uri} ->
+          content = %{
+            full_response: full_response,
+            selected_reply: result.text,
+            invocation_uri: invocation.invocation_uri
+          }
+
+          case Document.create(repo, publication_uri, content, created_at) do
+            {:ok, doc_result} ->
+              {doc_result, doc_result.reader_url}
+
+            {:error, _reason} ->
+              # Document creation failed but don't block the reply
+              {nil, nil}
+          end
+
+        {:error, _reason} ->
+          # Publication failed but don't block the reply
+          {nil, nil}
+      end
+    else
+      # No full response, skip document creation
+      {nil, nil}
+    end
+  end
+
+  defp document_uri(nil), do: nil
+  defp document_uri(%{uri: uri}), do: uri
+
+  defp document_rkey(nil), do: nil
+  defp document_rkey(%{rkey: rkey}), do: rkey
 
   defp defer_budget(invocation, defer_until, kind, token) do
     case Store.transition_research(
@@ -301,7 +354,7 @@ defmodule ContextBot.Workers.ResearchWorker do
 
     %{
       claim_lease_ms: Keyword.get(config, :claim_lease_ms, @default_claim_lease_ms),
-      intent_builder: Keyword.get(config, :intent_builder, &Intent.build/5),
+      intent_builder: Keyword.get(config, :intent_builder, &Intent.build/6),
       now: Keyword.get(config, :now, &DateTime.utc_now/0),
       reply_job_builder: Keyword.get(config, :reply_job_builder, &reply_job/1),
       runner: Keyword.get(config, :runner, Runner),

@@ -141,8 +141,11 @@ defmodule ContextBot.Workflow.Invocation do
     field :recovery_checked_at, :utc_datetime_usec
     field :research_claim_token, :string
     field :research_claimed_at, :utc_datetime_usec
+    field :full_response, :string
     field :selected_reply, :string
     field :reply_validation, :map
+    field :standard_site_document_uri, :string
+    field :standard_site_document_rkey, :string
     field :reply_repo, :string
     field :reply_rkey, :string
     field :reply_record, :map
