@@ -9,10 +9,13 @@ primary_region = "den"
   # while BOT_ENABLED remains false and deliberately fail startup when enabled.
   BOT_ENABLED = "false"
   BOT_DID = ""
-  BOT_HANDLE = ""
+  BOT_HANDLE = "getcontext.bot"
   BOT_PDS_URL = ""
   DATABASE_PATH = "/data/context_bot.db"
-  PHX_HOST = "context-bot-jwarden.fly.dev"
+  # The homepage is reachable via the fly.dev host below. Serving https://getcontext.bot
+  # (the bot's Bluesky handle and site.standard.publication domain) requires DNS configuration
+  # and is not included in this deployment.
+  PHX_HOST = "context-bot-social-protocols.fly.dev"
   PHX_SERVER = "true"
   PORT = "4000"
   POOL_SIZE = "5"
