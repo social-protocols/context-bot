@@ -21,6 +21,7 @@ defmodule ContextBot.Research.Runner do
     ResponseEnvelope
   }
 
+  alias ContextBot.Thread.Media
   alias ContextBot.Workflow.{Invocation, Store}
 
   @http_date_regex ~r/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (?<day>\d{2}) (?<month>Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (?<year>\d{4}) (?<hour>\d{2}):(?<minute>\d{2}):(?<second>\d{2}) GMT$/
@@ -293,9 +294,44 @@ defmodule ContextBot.Research.Runner do
 
   defp handle_repairable(invocation, decoded, config) do
     cond do
-      not repair_request?(invocation) -> start_repair(invocation, decoded, config)
-      repair_attempted?(invocation) -> {:error, :invalid_repair}
-      true -> start_attempt(invocation, :repair, config)
+      not repair_request?(invocation) ->
+        start_repair(invocation, decoded, config)
+
+      repair_attempted?(invocation) ->
+        attempt_split_or_fail(invocation, decoded, config)
+
+      true ->
+        start_attempt(invocation, :repair, config)
+    end
+  end
+
+  defp attempt_split_or_fail(invocation, %{"content" => content}, config) do
+    with {:ok, text, _reasons} <- extract_repairable_text(content, invocation),
+         {:ok, part1, part2} <- Reply.split_text(text) do
+      {:ok,
+       %{
+         messages: invocation.anthropic_messages,
+         text: part1,
+         text_part2: part2,
+         usage: usage_evidence(invocation, config),
+         validation: %{
+           "result" => "split",
+           "repair_used" => true,
+           "part1_graphemes" => String.length(part1),
+           "part2_graphemes" => String.length(part2)
+         }
+       }}
+    else
+      _failed -> {:error, :invalid_repair}
+    end
+  end
+
+  defp attempt_split_or_fail(_invocation, _decoded, _config), do: {:error, :invalid_repair}
+
+  defp extract_repairable_text(content, invocation) do
+    case select_reply(%{"content" => content, "stop_reason" => "end_turn"}, invocation) do
+      {:repairable, text, reasons} -> {:ok, text, reasons}
+      _other -> :error
     end
   end
 
@@ -374,10 +410,9 @@ defmodule ContextBot.Research.Runner do
        do: {:ok, invocation, request}
 
   defp ensure_request(%Invocation{} = invocation, config) do
-    request =
-      Request.initial(
-        %{"version" => 1, "text" => invocation.canonical_thread},
-        %{
+    with {:ok, canonical} <- canonical_snapshot(invocation) do
+      request =
+        Request.initial(canonical, %{
           model_id: config.settings.anthropic_model_id,
           effort: config.settings.anthropic_effort,
           max_tokens: config.settings.anthropic_research_max_tokens,
@@ -386,21 +421,43 @@ defmodule ContextBot.Research.Runner do
           max_web_fetch_content_tokens: config.settings.max_web_fetch_content_tokens,
           web_search_tool_type: config.settings.anthropic_web_search_tool_type,
           web_fetch_tool_type: config.settings.anthropic_web_fetch_tool_type
-        }
-      )
+        })
 
-    case config.store.transition_research(
-           invocation,
-           config.claim_token,
-           :researching,
-           %{anthropic_messages: request},
-           nil,
-           now(config)
-         ) do
-      {:ok, persisted} -> {:ok, persisted, persisted.anthropic_messages}
-      {:error, reason} -> {:error, reason}
+      case config.store.transition_research(
+             invocation,
+             config.claim_token,
+             :researching,
+             %{anthropic_messages: request},
+             nil,
+             now(config)
+           ) do
+        {:ok, persisted} -> {:ok, persisted, persisted.anthropic_messages}
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
+
+  defp canonical_snapshot(%Invocation{
+         canonical_thread_version: "1",
+         canonical_thread: text
+       })
+       when is_binary(text) and text != "",
+       do: {:ok, %{"version" => 1, "text" => text}}
+
+  defp canonical_snapshot(%Invocation{
+         canonical_thread_version: "2",
+         canonical_thread: text,
+         canonical_media: media
+       })
+       when is_binary(text) and text != "" and is_list(media) do
+    if Media.validate(media) == :ok do
+      {:ok, %{"version" => 2, "text" => text, "media" => media}}
+    else
+      {:error, :invalid_canonical_thread}
+    end
+  end
+
+  defp canonical_snapshot(_invocation), do: {:error, :invalid_canonical_thread}
 
   defp latest_attempt(invocation) do
     BudgetEntry

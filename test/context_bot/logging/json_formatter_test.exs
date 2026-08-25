@@ -116,6 +116,36 @@ defmodule ContextBot.Logging.JSONFormatterTest do
              |> Jason.decode!()
   end
 
+  test "Phoenix HTTP request logs are redacted as logger_event without Phoenix.Logger" do
+    phoenix_start_log = %{
+      level: :info,
+      msg: {:string, "GET /health"},
+      meta: %{time: 0, request_id: "test-request-id"}
+    }
+
+    phoenix_stop_log = %{
+      level: :info,
+      msg: {:string, "Sent 200 in 2ms"},
+      meta: %{time: 0, request_id: "test-request-id"}
+    }
+
+    for event <- [phoenix_start_log, phoenix_stop_log] do
+      line =
+        event
+        |> JSONFormatter.format(%{})
+        |> IO.iodata_to_binary()
+
+      decoded = Jason.decode!(line)
+      assert decoded["message"] == "logger_event"
+      assert decoded["request_id"] == "test-request-id"
+      refute line =~ "GET"
+      refute line =~ "health"
+      refute line =~ "Sent"
+      refute line =~ "200"
+      refute line =~ "2ms"
+    end
+  end
+
   defp normalize(value) when is_atom(value), do: Atom.to_string(value)
   defp normalize(value), do: value
 end

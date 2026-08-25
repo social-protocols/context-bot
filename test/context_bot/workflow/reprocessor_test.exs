@@ -29,6 +29,7 @@ defmodule ContextBot.Workflow.ReprocessorTest do
     assert reopened.recovery_checked_at == @now
     assert reopened.anthropic_messages == invocation.anthropic_messages
     assert reopened.anthropic_usage == invocation.anthropic_usage
+    assert reopened.canonical_media == invocation.canonical_media
 
     assert Repo.get!(BudgetEntry, entry.id).state == :settled
     assert Repo.get!(ResponseEnvelope, envelope.id).raw_body == envelope.raw_body
@@ -213,11 +214,39 @@ defmodule ContextBot.Workflow.ReprocessorTest do
       received_at: @now,
       status: :failed,
       stage: :failed,
-      canonical_thread: "ROOT\nClaim.\n\nINVOCATION\nQuestion?",
-      canonical_thread_version: "1",
+      canonical_thread: "CONTEXT_BOT_THREAD_V2\n\n[image 1] Alt text: Evidence",
+      canonical_thread_version: "2",
+      canonical_media: [
+        %{
+          "type" => "image",
+          "index" => 1,
+          "post_uri" => public_uri("target-#{suffix}"),
+          "url" =>
+            "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:actor/bafkrei#{suffix}@jpeg",
+          "alt" => "Evidence"
+        }
+      ],
       anthropic_messages: %{
         "model" => "claude-sonnet-5",
-        "messages" => [%{"role" => "user", "content" => "thread"}]
+        "messages" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{
+                "type" => "image",
+                "source" => %{
+                  "type" => "url",
+                  "url" =>
+                    "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:actor/bafkrei#{suffix}@jpeg"
+                }
+              },
+              %{
+                "type" => "text",
+                "text" => "CONTEXT_BOT_THREAD_V2\n\n[image 1] Alt text: Evidence"
+              }
+            ]
+          }
+        ]
       },
       anthropic_usage: %{"totals" => %{"input_tokens" => 14, "output_tokens" => 337}},
       failure_category: :provider_response,

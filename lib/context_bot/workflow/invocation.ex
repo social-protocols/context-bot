@@ -63,6 +63,7 @@ defmodule ContextBot.Workflow.Invocation do
     :raw_thread,
     :canonical_thread,
     :canonical_thread_version,
+    :canonical_media,
     :root_uri,
     :root_cid,
     :anthropic_messages,
@@ -77,10 +78,14 @@ defmodule ContextBot.Workflow.Invocation do
     :reply_repo,
     :reply_rkey,
     :reply_record,
+    :reply_part2_rkey,
+    :reply_part2_record,
     :publication_claim_token,
     :publication_claimed_at,
     :reply_uri,
     :reply_cid,
+    :reply_part2_uri,
+    :reply_part2_cid,
     :failure_category,
     :failure_detail,
     :completed_at
@@ -123,6 +128,7 @@ defmodule ContextBot.Workflow.Invocation do
     field :raw_thread, :map
     field :canonical_thread, :string
     field :canonical_thread_version, :string
+    field :canonical_media, {:array, :map}, default: []
     field :root_uri, :string
     field :root_cid, :string
     field :anthropic_messages, :map
@@ -138,10 +144,14 @@ defmodule ContextBot.Workflow.Invocation do
     field :reply_repo, :string
     field :reply_rkey, :string
     field :reply_record, :map
+    field :reply_part2_rkey, :string
+    field :reply_part2_record, :map
     field :publication_claim_token, :string
     field :publication_claimed_at, :utc_datetime_usec
     field :reply_uri, :string
     field :reply_cid, :string
+    field :reply_part2_uri, :string
+    field :reply_part2_cid, :string
     field :failure_category, Ecto.Enum, values: @failure_categories
     field :failure_detail, :map
     field :completed_at, :utc_datetime_usec

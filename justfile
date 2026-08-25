@@ -72,6 +72,9 @@ live-run invocation_url:
 reprocess invocation_id:
     mix context_bot.reprocess {{quote(invocation_id)}}
 
+fly-reprocess invocation_id:
+    fly ssh console -a context-bot-social-protocols -C "/app/bin/context_bot eval 'ContextBot.Release.reprocess({{invocation_id}})'"
+
 docker-build:
     docker build --progress=plain -t context-bot:local .
 

@@ -64,6 +64,95 @@ defmodule ContextBot.Research.RunnerTest do
     assert Repo.reload!(invocation).anthropic_messages == request
   end
 
+  test "checkpoints version 2 image blocks before the provider call" do
+    image_url =
+      "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:actor/bafkreiimage@jpeg"
+
+    invocation =
+      invocation("image-request", %{
+        canonical_thread: "CONTEXT_BOT_THREAD_V2\n\n[image 1] Alt text: Aurora",
+        canonical_thread_version: "2",
+        canonical_media: [
+          %{
+            "type" => "image",
+            "index" => 1,
+            "post_uri" => "at://did:plc:actor/app.bsky.feed.post/image-request",
+            "url" => image_url,
+            "alt" => "Aurora"
+          }
+        ]
+      })
+
+    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+
+    assert {:ok, _result} = Runner.run(invocation, options())
+    assert_received {:anthropic_call, request, _metadata, false}
+
+    assert get_in(request, ["messages", Access.at(0), "content"]) == [
+             %{
+               "type" => "image",
+               "source" => %{"type" => "url", "url" => image_url}
+             },
+             %{
+               "type" => "text",
+               "text" => "CONTEXT_BOT_THREAD_V2\n\n[image 1] Alt text: Aurora"
+             }
+           ]
+
+    assert Repo.reload!(invocation).anthropic_messages == request
+  end
+
+  test "rejects malformed persisted canonical media before budget or provider work" do
+    valid = %{
+      "type" => "image",
+      "index" => 1,
+      "post_uri" => "at://did:plc:actor/app.bsky.feed.post/media-validation",
+      "url" => "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:actor/bafkreivalid@jpeg",
+      "alt" => "Valid"
+    }
+
+    long_did = "did:plc:" <> String.duplicate("a", 1_950)
+
+    oversized =
+      Enum.map(1..4, fn index ->
+        %{
+          "type" => "image",
+          "index" => index,
+          "post_uri" =>
+            "at://#{long_did}/app.bsky.feed.post/#{String.duplicate("r", 500)}#{index}",
+          "url" =>
+            "https://cdn.bsky.app/img/feed_fullsize/plain/#{String.duplicate("u", 1_990)}#{index}",
+          "alt" => String.duplicate("a", 4_096)
+        }
+      end)
+
+    invalid_media = [
+      [Map.put(valid, "url", "https://example.com/img/feed_fullsize/plain/a/b@jpeg")],
+      Enum.map(1..5, &Map.put(valid, "index", &1)),
+      [Map.delete(valid, "alt")],
+      [Map.put(valid, "index", 2)],
+      [Map.put(valid, "alt", String.duplicate("a", 4_097))],
+      oversized
+    ]
+
+    Process.put(:runner_client_results, [])
+
+    Enum.with_index(invalid_media, 1)
+    |> Enum.each(fn {media, index} ->
+      invocation =
+        invocation("invalid-media-#{index}", %{
+          canonical_thread: "CONTEXT_BOT_THREAD_V2\n\nInvalid stored media",
+          canonical_thread_version: "2",
+          canonical_media: media
+        })
+
+      assert {:error, :invalid_canonical_thread} = Runner.run(invocation, options())
+    end)
+
+    assert Repo.aggregate(BudgetEntry, :count) == 0
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+  end
+
   test "commits a complete 200 envelope and sent marker before decoding" do
     invocation = invocation("persist-before-decode")
     raw_body = fixture("tool_success.json")
@@ -898,6 +987,77 @@ defmodule ContextBot.Research.RunnerTest do
     assert length(responses(invocation)) == 2
   end
 
+  test "a repair that still exceeds 300 graphemes splits into two valid parts" do
+    invocation = invocation("repair-split")
+    fixture = decoded_fixture("repair_success.json")
+
+    part1 = String.duplicate("a", 150)
+    part2 = String.duplicate("b", 160)
+    still_over_text = part1 <> "\n\n" <> part2
+
+    assert String.length(still_over_text) == 312
+
+    primary =
+      put_in(
+        fixture,
+        ["primary", "content"],
+        [%{"type" => "text", "text" => String.duplicate("x", 301)}]
+      )["primary"]
+
+    repair =
+      put_in(
+        fixture,
+        ["repair", "content"],
+        [%{"type" => "text", "text" => still_over_text}]
+      )["repair"]
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(primary))},
+      {:ok, envelope(200, Jason.encode!(repair))}
+    ])
+
+    assert {:ok, result} = Runner.run(invocation, options())
+    assert result.text == part1
+    assert result.text_part2 == part2
+    assert result.validation["result"] == "split"
+    assert result.validation["repair_used"] == true
+    assert result.validation["part1_graphemes"] == 150
+    assert result.validation["part2_graphemes"] == 160
+
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    assert_received {:anthropic_call, _request, %{kind: :repair}, false}
+  end
+
+  test "a repair that cannot be split into valid parts fails as invalid_repair" do
+    invocation = invocation("repair-unsplittable")
+    fixture = decoded_fixture("repair_success.json")
+
+    unsplittable = String.duplicate("a", 301)
+
+    primary =
+      put_in(
+        fixture,
+        ["primary", "content"],
+        [%{"type" => "text", "text" => String.duplicate("x", 301)}]
+      )["primary"]
+
+    repair =
+      put_in(
+        fixture,
+        ["repair", "content"],
+        [%{"type" => "text", "text" => unsplittable}]
+      )["repair"]
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(primary))},
+      {:ok, envelope(200, Jason.encode!(repair))}
+    ])
+
+    assert {:error, :invalid_repair} = Runner.run(invocation, options())
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    assert_received {:anthropic_call, _request, %{kind: :repair}, false}
+  end
+
   test "a repair tool use or second invalid result never triggers another repair" do
     for {suffix, repair_response, expected_reason} <- [
           {
@@ -1010,27 +1170,33 @@ defmodule ContextBot.Research.RunnerTest do
     }
   end
 
-  defp invocation(suffix) do
+  defp invocation(suffix, extra \\ %{}) do
     uri = "at://did:plc:actor/app.bsky.feed.post/#{suffix}"
     cid = "bafy-#{suffix}"
 
+    attrs =
+      Map.merge(
+        %{
+          invocation_uri: uri,
+          notification_cid: cid,
+          current_cid: cid,
+          actor_did: "did:plc:actor",
+          raw_notification: %{"uri" => uri, "cid" => cid},
+          received_at: @now,
+          status: :researching,
+          stage: :researching,
+          research_claim_token: @claim_token,
+          research_claimed_at: @now,
+          canonical_thread: "ROOT\nClaim needing context.\n\nINVOCATION\nPlease add context.",
+          canonical_thread_version: "1",
+          root_uri: uri,
+          root_cid: cid
+        },
+        extra
+      )
+
     %Invocation{}
-    |> Invocation.changeset(%{
-      invocation_uri: uri,
-      notification_cid: cid,
-      current_cid: cid,
-      actor_did: "did:plc:actor",
-      raw_notification: %{"uri" => uri, "cid" => cid},
-      received_at: @now,
-      status: :researching,
-      stage: :researching,
-      research_claim_token: @claim_token,
-      research_claimed_at: @now,
-      canonical_thread: "ROOT\nClaim needing context.\n\nINVOCATION\nPlease add context.",
-      canonical_thread_version: "1",
-      root_uri: uri,
-      root_cid: cid
-    })
+    |> Invocation.changeset(attrs)
     |> Repo.insert!()
   end
 

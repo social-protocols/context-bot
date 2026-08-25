@@ -10,13 +10,17 @@ defmodule ContextBot.Workers.ThreadWorker do
 
   import Ecto.Query
 
-  alias ContextBot.ATProto.{PublicClient, ReqClient}
+  alias ContextBot.ATProto.{PublicClient, ReqClient, TID}
   alias ContextBot.{Operations, Repo}
+  alias ContextBot.Reply.Intent
   alias ContextBot.Thread.Canonicalizer
   alias ContextBot.Workflow.{Invocation, Store}
 
   @research_worker "ContextBot.Workers.ResearchWorker"
+  @reply_worker "ContextBot.Workers.ReplyWorker"
   @maximum_backoff_seconds 300
+  @video_reply "I can't analyze videos yet, so I can't reliably answer a question that may depend on this clip."
+  @image_limit_reply "I can analyze up to four images at a time, but this thread contains more than that."
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"uri" => uri, "cid" => cid}} = job)
@@ -68,16 +72,25 @@ defmodule ContextBot.Workers.ThreadWorker do
   defp logged_capture(invocation, job, dependencies) do
     started_at = System.monotonic_time(:millisecond)
     result = capture(invocation, job, dependencies)
+    {oban_result, media_attributes} = capture_observation(result)
 
     Operations.log_attempt(invocation,
       attempt_kind: :thread,
       attempt_index: job.attempt,
       duration_ms: System.monotonic_time(:millisecond) - started_at,
-      failure_category: thread_failure(result)
+      failure_category: thread_failure(oban_result),
+      media_disposition: Keyword.get(media_attributes, :media_disposition),
+      image_count: Keyword.get(media_attributes, :image_count)
     )
 
-    result
+    oban_result
   end
+
+  defp capture_observation({:media_capture, disposition, image_count}) do
+    {:ok, [media_disposition: disposition, image_count: image_count]}
+  end
+
+  defp capture_observation(result), do: {result, []}
 
   defp thread_failure({:error, _reason}), do: :thread_unavailable
   defp thread_failure(_result), do: nil
@@ -103,14 +116,17 @@ defmodule ContextBot.Workers.ThreadWorker do
 
   defp handle_fetch({:ok, status, _headers, body}, invocation, dependencies)
        when status in 200..299 and is_map(body) do
-    with :ok <- within_response_limit(body, dependencies.settings.max_response_bytes),
-         {:ok, canonical} <- canonicalize(body, invocation, dependencies) do
-      persist_handoff(invocation, body, canonical, dependencies.research_job_builder)
-    else
-      {:error, :target_unavailable} -> fail_thread(invocation, "target_unavailable")
-      {:error, :invalid_thread} -> fail_thread(invocation, "invalid_thread")
-      {:error, :response_too_large} -> fail_thread(invocation, "response_too_large")
-      {:error, reason} -> {:error, reason}
+    case within_response_limit(body, dependencies.settings.max_response_bytes) do
+      :ok ->
+        body
+        |> canonicalize(invocation, dependencies)
+        |> handle_canonicalization(invocation, body, dependencies)
+
+      {:error, :response_too_large} ->
+        fail_thread(invocation, "response_too_large")
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -129,6 +145,44 @@ defmodule ContextBot.Workers.ThreadWorker do
 
   defp handle_fetch({:error, reason}, _invocation, _dependencies), do: {:error, reason}
   defp handle_fetch(_invalid_response, _invocation, _dependencies), do: {:error, :invalid_thread}
+
+  defp handle_canonicalization({:ok, canonical}, invocation, raw_thread, dependencies) do
+    with :ok <-
+           persist_handoff(invocation, raw_thread, canonical, dependencies.research_job_builder) do
+      {:media_capture, :supported, length(canonical.media)}
+    end
+  end
+
+  defp handle_canonicalization(
+         {:unsupported_media, %{reason: reason, image_count: image_count, canonical: canonical}},
+         invocation,
+         raw_thread,
+         dependencies
+       ) do
+    with :ok <-
+           persist_capability_handoff(invocation, raw_thread, canonical, reason, dependencies) do
+      {:media_capture, media_disposition(reason), image_count}
+    end
+  end
+
+  defp handle_canonicalization(
+         {:error, :target_unavailable},
+         invocation,
+         _raw_thread,
+         _dependencies
+       ),
+       do: fail_thread(invocation, "target_unavailable")
+
+  defp handle_canonicalization(
+         {:error, :invalid_thread},
+         invocation,
+         _raw_thread,
+         _dependencies
+       ),
+       do: fail_thread(invocation, "invalid_thread")
+
+  defp handle_canonicalization({:error, reason}, _invocation, _raw_thread, _dependencies),
+    do: {:error, reason}
 
   defp within_response_limit(body, limit) do
     case Jason.encode(body) do
@@ -168,6 +222,7 @@ defmodule ContextBot.Workers.ThreadWorker do
       raw_thread: raw_thread,
       canonical_thread: canonical.text,
       canonical_thread_version: Integer.to_string(canonical.version),
+      canonical_media: canonical.media,
       root_uri: canonical.root["uri"],
       root_cid: canonical.root["cid"],
       current_cid: canonical.current_cid
@@ -184,6 +239,134 @@ defmodule ContextBot.Workers.ThreadWorker do
         raise Ecto.InvalidChangesetError, action: :update, changeset: changeset
     end
   end
+
+  defp persist_capability_handoff(
+         %Invocation{dry_run: true} = invocation,
+         raw_thread,
+         canonical,
+         reason,
+         dependencies
+       ) do
+    completed_at = dependencies.now.()
+
+    attrs =
+      raw_thread
+      |> canonical_attrs(canonical)
+      |> Map.merge(%{
+        anthropic_messages: nil,
+        anthropic_usage: zero_usage(),
+        selected_reply: capability_reply(reason),
+        reply_validation: capability_validation(reason),
+        reply_repo: nil,
+        reply_rkey: nil,
+        reply_record: nil,
+        completed_at: completed_at,
+        failure_category: nil,
+        failure_detail: nil
+      })
+
+    transition_capability(invocation, :complete, attrs, nil)
+  end
+
+  defp persist_capability_handoff(invocation, raw_thread, canonical, reason, dependencies) do
+    created_at = dependencies.now.()
+
+    intent_invocation = %{
+      invocation
+      | current_cid: canonical.current_cid,
+        root_uri: canonical.root["uri"],
+        root_cid: canonical.root["cid"]
+    }
+
+    case dependencies.intent_builder.(
+           intent_invocation,
+           capability_reply(reason),
+           dependencies.settings.bot_did,
+           created_at,
+           dependencies.tid_generator
+         ) do
+      {:ok, intent} ->
+        attrs =
+          raw_thread
+          |> canonical_attrs(canonical)
+          |> Map.merge(%{
+            anthropic_messages: nil,
+            anthropic_usage: zero_usage(),
+            selected_reply: capability_reply(reason),
+            reply_validation: capability_validation(reason),
+            reply_repo: intent.reply_repo,
+            reply_rkey: intent.reply_rkey,
+            reply_record: intent.reply_record,
+            completed_at: nil,
+            failure_category: nil,
+            failure_detail: nil
+          })
+
+        next_job = dependencies.reply_job_builder.(intent_invocation)
+        transition_capability(invocation, :reply_ready, attrs, next_job)
+
+      {:error, intent_reason} ->
+        fail_thread(invocation, safe_reason(intent_reason))
+    end
+  end
+
+  defp transition_capability(invocation, next_stage, attrs, next_job) do
+    case Store.transition(
+           invocation,
+           :capturing_thread,
+           next_stage,
+           attrs,
+           next_job
+         ) do
+      {:ok, _transitioned} ->
+        :ok
+
+      {:error, :stale_stage} ->
+        :ok
+
+      {:error, changeset} ->
+        raise Ecto.InvalidChangesetError, action: :update, changeset: changeset
+    end
+  end
+
+  defp canonical_attrs(raw_thread, canonical) do
+    %{
+      raw_thread: raw_thread,
+      canonical_thread: canonical.text,
+      canonical_thread_version: Integer.to_string(canonical.version),
+      canonical_media: canonical.media,
+      root_uri: canonical.root["uri"],
+      root_cid: canonical.root["cid"],
+      current_cid: canonical.current_cid
+    }
+  end
+
+  defp capability_reply(:video), do: @video_reply
+  defp capability_reply(:image_limit_exceeded), do: @image_limit_reply
+
+  defp media_disposition(:video), do: :video_unsupported
+  defp media_disposition(:image_limit_exceeded), do: :image_limit_exceeded
+
+  defp capability_validation(reason) do
+    %{
+      "result" => "unsupported_media",
+      "reason" => Atom.to_string(reason),
+      "source" => "local"
+    }
+  end
+
+  defp zero_usage do
+    %{
+      "attempts" => [],
+      "continuations" => 0,
+      "response_count" => 0,
+      "tool_uses" => 0,
+      "totals" => %{"input_tokens" => 0, "output_tokens" => 0}
+    }
+  end
+
+  defp safe_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp safe_reason(_reason), do: "invalid_reply_intent"
 
   defp fail_thread(invocation, reason) do
     case Store.transition(
@@ -218,6 +401,14 @@ defmodule ContextBot.Workers.ThreadWorker do
     )
   end
 
+  defp reply_job(invocation) do
+    Oban.Job.new(
+      %{"uri" => invocation.invocation_uri, "cid" => invocation.notification_cid},
+      worker: @reply_worker,
+      queue: :reply
+    )
+  end
+
   defp dependencies do
     config = Application.get_env(:context_bot, __MODULE__, [])
     settings = Keyword.get(config, :settings, Application.fetch_env!(:context_bot, :settings))
@@ -227,8 +418,12 @@ defmodule ContextBot.Workers.ThreadWorker do
       client: Keyword.get(config, :client, ReqClient),
       public_client: Keyword.get(config, :public_client, PublicClient),
       fetch_timeout_ms: Keyword.get(config, :fetch_timeout_ms, settings.thread_fetch_timeout_ms),
+      intent_builder: Keyword.get(config, :intent_builder, &Intent.build/5),
+      now: Keyword.get(config, :now, &DateTime.utc_now/0),
+      reply_job_builder: Keyword.get(config, :reply_job_builder, &reply_job/1),
       research_job_builder: Keyword.get(config, :research_job_builder, &research_job/1),
-      settings: settings
+      settings: settings,
+      tid_generator: Keyword.get(config, :tid_generator, &TID.generate/1)
     }
   end
 end

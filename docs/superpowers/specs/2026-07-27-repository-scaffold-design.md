@@ -110,7 +110,7 @@ The deployment uses a conventional multi-stage Docker build:
 
 `fly.toml` defines:
 
-- App name `context-bot-jwarden`.
+- App name `context-bot-social-protocols`.
 - Primary region `den`.
 - Internal HTTP port `4000`, exposed on ports 80 and 443 with HTTPS enforced.
 - `PHX_SERVER=true` and `DATABASE_PATH=/data/context_bot.db` in runtime configuration.

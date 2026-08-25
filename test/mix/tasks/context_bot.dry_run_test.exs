@@ -316,6 +316,45 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     assert length(Regex.scan(~r/^dry_run_disposition=created$/m, output)) == 1
   end
 
+  test "prints explicit zero usage for a provider-free capability answer" do
+    invocation = %Invocation{
+      id: 43,
+      dry_run: true,
+      stage: :complete,
+      selected_reply:
+        "I can't analyze videos yet, so I can't reliably answer a question that may depend on this clip.",
+      anthropic_usage: %{
+        "totals" => %{"input_tokens" => 0, "output_tokens" => 0},
+        "response_count" => 0,
+        "tool_uses" => 0
+      }
+    }
+
+    Application.put_env(:context_bot, Mix.Tasks.ContextBot.DryRun,
+      service: Service,
+      runtime: Runtime,
+      progress: Progress,
+      interrupts: Interrupts,
+      settled_cost: fn _invocation -> 0 end
+    )
+
+    Application.put_env(:context_bot, Service,
+      test_pid: self(),
+      prepare_result: {:ok, %{invocation | stage: :capturing_thread}, :created},
+      await_result: {:ok, invocation}
+    )
+
+    assert :ok = run(["https://bsky.app/profile/example.test/post/video", "Is this AI?"])
+
+    output = shell_output()
+    assert output =~ "status=complete"
+    assert output =~ "input_tokens=0"
+    assert output =~ "output_tokens=0"
+    assert output =~ "tool_uses=0"
+    assert output =~ "cost_microdollars=0"
+    refute output =~ "researching"
+  end
+
   test "attaches to pending work and prints only safe identity metadata" do
     invocation = %Invocation{id: 42, dry_run: true, stage: :capturing_thread}
 

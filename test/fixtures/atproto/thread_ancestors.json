@@ -36,9 +36,9 @@
         "$type": "app.bsky.embed.images#view",
         "images": [
           {
-            "alt": "MEDIA ALT MUST NEVER APPEAR",
-            "thumb": "https://cdn.example/thumb.jpg",
-            "fullsize": "https://cdn.example/full.jpg"
+            "alt": "A pale aurora over dark mountains",
+            "thumb": "https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:alice/bafkreiaurora@jpeg",
+            "fullsize": "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:alice/bafkreiaurora@jpeg"
           }
         ]
       }

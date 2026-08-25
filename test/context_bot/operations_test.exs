@@ -153,6 +153,8 @@ defmodule ContextBot.OperationsTest do
                      status_code: 429,
                      duration_ms: 37,
                      failure_category: :rate_limited,
+                     media_disposition: :video_unsupported,
+                     image_count: 4,
                      request: %{authorization: "Bearer request-secret"},
                      client: %{token: "client-secret"},
                      session: %{did: "did:plc:session-secret"},
@@ -171,6 +173,8 @@ defmodule ContextBot.OperationsTest do
     assert decoded["status_code"] == 429
     assert decoded["duration_ms"] == 37
     assert decoded["failure_category"] == "rate_limited"
+    assert decoded["media_disposition"] == "video_unsupported"
+    assert decoded["image_count"] == 4
 
     for forbidden <- [
           "notification-secret",

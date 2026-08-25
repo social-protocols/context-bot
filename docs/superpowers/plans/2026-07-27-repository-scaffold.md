@@ -15,7 +15,7 @@
 - Do not create bot-specific domain modules, schemas, migrations, workers, or boundaries.
 - SQLite is operational outbox/cache state, not the intended canonical audit trail.
 - Development uses `data/context_bot_dev.db`; tests use partition-aware databases under `data/`; production requires `/data/context_bot.db`.
-- The Fly app is `context-bot-jwarden` in `den`, with one shared-CPU, 1 GB Machine and one `context_bot_data` volume.
+- The Fly app is `context-bot-social-protocols` in `den`, with one shared-CPU, 1 GB Machine and one `context_bot_data` volume.
 - Declare `bitwarden-cli@latest`; do not add a requested Bitwarden CLI version pin.
 - Never commit credentials or print secret values.
 - Use generated-code/configuration verification for Phoenix/Devbox boilerplate; use strict red-green TDD for custom health and secrets behavior.
@@ -727,7 +727,7 @@ Make both files executable. The entrypoint runs as root only long enough to prep
 Create `fly.toml`:
 
 ```toml
-app = "context-bot-jwarden"
+app = "context-bot-social-protocols"
 primary_region = "den"
 
 [build]
@@ -735,7 +735,7 @@ primary_region = "den"
 
 [env]
   DATABASE_PATH = "/data/context_bot.db"
-  PHX_HOST = "context-bot-jwarden.fly.dev"
+  PHX_HOST = "context-bot-social-protocols.fly.dev"
   PHX_SERVER = "true"
   PORT = "4000"
 
@@ -908,7 +908,7 @@ SQLite is operational state and a future outbox/cache. It is not the intended ca
 Create the Fly app and one volume before the first deploy:
 
 ```bash
-fly apps create context-bot-jwarden
+fly apps create context-bot-social-protocols
 fly volumes create context_bot_data --region den --size 1 --snapshot-retention 14
 ```
 

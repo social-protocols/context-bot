@@ -25,6 +25,7 @@ defmodule ContextBot.Operations do
     :publication,
     :maintenance
   ]
+  @media_dispositions [:supported, :video_unsupported, :image_limit_exceeded]
   @default_session_timeout_ms 250
 
   @spec health(keyword()) :: map()
@@ -65,7 +66,9 @@ defmodule ContextBot.Operations do
       attempt_index: safe_non_negative(Keyword.get(attributes, :attempt_index)),
       status_code: safe_status_code(Keyword.get(attributes, :status_code)),
       duration_ms: safe_non_negative(Keyword.get(attributes, :duration_ms)),
-      failure_category: safe_failure_category(Keyword.get(attributes, :failure_category))
+      failure_category: safe_failure_category(Keyword.get(attributes, :failure_category)),
+      media_disposition: safe_media_disposition(Keyword.get(attributes, :media_disposition)),
+      image_count: safe_non_negative(Keyword.get(attributes, :image_count))
     }
 
     Logger.info("context_bot_attempt", Map.to_list(payload))
@@ -215,6 +218,11 @@ defmodule ContextBot.Operations do
 
   defp safe_status_code(value) when is_integer(value) and value in 100..599, do: value
   defp safe_status_code(_invalid), do: nil
+
+  defp safe_media_disposition(disposition) when disposition in @media_dispositions,
+    do: Atom.to_string(disposition)
+
+  defp safe_media_disposition(_unknown), do: nil
 
   defp safe_failure_category(nil), do: nil
 

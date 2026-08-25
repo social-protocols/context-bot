@@ -2,7 +2,7 @@
 
 An experimental, on-demand Bluesky / ATProto context bot. The proof of concept acts only when directly mentioned in a public thread; it is not a proactive moderation system.
 
-The POC durably receives mentions, checks a narrow eligibility policy, captures the invocation and ancestor chain, asks Claude for a concise researched answer, and publishes exactly one correctly rooted Bluesky reply. SQLite holds workflow, budget, provider-response, and frozen reply state. Audit-record publication, audit pages, IPFS, descendants, and a UI are intentionally out of scope.
+The POC durably receives mentions, checks a narrow eligibility policy, captures the invocation and ancestor chain, sends bounded images to Claude for a concise researched answer, and publishes exactly one correctly rooted Bluesky reply. Video-containing threads fail closed with a deterministic capability reply instead of a text-only model answer. SQLite holds workflow, budget, provider-response, and frozen reply state. Audit-record publication, audit pages, IPFS, descendants, and a UI are intentionally out of scope.
 
 ## Prerequisites
 
@@ -56,6 +56,15 @@ just dry-run "https://bsky.app/profile/alice.example/post/3abc" "What's missing?
 ```
 
 The post may also be a canonical `at://.../app.bsky.feed.post/...` URI. The command loads only `ANTHROPIC_API_KEY` from the Bitwarden item, resolves and fetches the post from the configured public AppView without authentication, stores the selected post plus ancestors and local question in SQLite, runs the normal budgeted Claude research worker, and prints a concise result and integer usage/cost summary. Bluesky access is read-only; Anthropic access is paid. `ANTHROPIC_DAILY_BUDGET_USD` must be present and nonzero.
+
+Context Bot sends at most four image or gallery items across the captured ancestor chain to Claude,
+ordered root-to-target and represented by validated `https://cdn.bsky.app` URL blocks. If any captured post
+contains video, it skips Anthropic and answers: “I can't analyze videos yet, so I can't reliably
+answer a question that may depend on this clip.” A chain with more than four images receives a
+similar local capability answer instead of partial research. These paths report zero provider usage
+and cost; dry runs still never publish. Malformed or untrusted image metadata fails without an
+answer. The command currently requires the configured Anthropic key and daily budget at startup even
+when the fetched thread ultimately takes a provider-free capability path.
 
 Human progress is written to stdout. Application logs are structured JSON Lines on stderr by
 default; set `CONTEXT_BOT_LOG_PATH` to an absolute path to append those logs to a file instead. Log
@@ -117,6 +126,10 @@ configured bot. This command **publishes a real reply** as the configured `BOT_D
 Running it is the operator authorization that bypasses actor eligibility; all Anthropic reservation,
 daily-budget, response, validation, and publication safeguards remain active.
 
+The same media rules apply to a live run. A supported image enters the bounded Claude request. A
+video or excessive image count bypasses Claude but still freezes and publishes exactly one
+deterministic reply through the normal reconciliation-safe reply worker.
+
 The command forces `BOT_ENABLED=false`, starts no notification poller, and processes only the
 selected invocation on serial `thread`, `research`, and `reply` queues. Durable state defaults to the
 isolated `data/live-demo.db`; `CONTEXT_BOT_LIVE_DATABASE_PATH` can select another dedicated path but
@@ -137,7 +150,7 @@ it reports the existing reply URL without another Claude request or Bluesky post
 | `just typecheck` | Run Dialyzer. |
 | `just check` | Run the complete local quality gate. |
 | `just db-create` / `db-migrate` / `db-reset` | Manage the local SQLite database. |
-| `just dry-run <post> <question>` | Run a durable local-only context check; reads Bluesky and spends Anthropic budget. |
+| `just dry-run <post> <question>` | Run a durable local-only context check; reads Bluesky and may spend Anthropic budget. |
 | `just live-run <invocation-url>` | Process one real direct mention locally and publish its Bluesky reply. Explicit authorization required. |
 | `just reprocess <invocation-id>` | With the bot disabled and workers stopped, reopen a guarded provider-processing failure from its retained response; performs no external I/O. |
 | `just docker-build` | Build `context-bot:local`. |
@@ -213,7 +226,7 @@ Before any live deployment, replace the empty `BOT_DID`, `BOT_HANDLE`, and `BOT_
 Creating the Fly app or volume is also an external effect and requires explicit authorization. Create them once if they do not already exist:
 
 ```bash
-fly apps create context-bot-jwarden
+fly apps create context-bot-social-protocols
 fly volumes create context_bot_data --region den --size 1 --snapshot-retention 14
 ```
 
@@ -225,7 +238,7 @@ export BW_SESSION="$(bw unlock --raw)"
 export BITWARDEN_ITEM_ID="<Bitwarden item UUID>"
 just secrets
 just deploy
-curl --fail --silent --show-error https://context-bot-jwarden.fly.dev/health | jq
+curl --fail --silent --show-error https://context-bot-social-protocols.fly.dev/health | jq
 ```
 
 The release entrypoint migrates `/data/context_bot.db` before starting Phoenix. Confirm health reports `bot.enabled` as `false`. Activation is a separate, explicit change: set `BOT_ENABLED = "true"` in `fly.toml`, review the identity, limits, budget, and allowlist again, then run `just deploy` only with renewed authorization. Startup fails closed if an enabled deployment lacks identity, budget, or runtime secrets.

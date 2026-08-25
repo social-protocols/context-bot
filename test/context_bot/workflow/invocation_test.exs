@@ -1,7 +1,6 @@
 defmodule ContextBot.Workflow.InvocationTest do
-  use ExUnit.Case, async: true
+  use ContextBot.DataCase, async: false
 
-  import ContextBot.DataCase, only: [errors_on: 1]
   import Ecto.Changeset, only: [get_field: 2]
 
   alias ContextBot.Workflow.Invocation
@@ -25,6 +24,31 @@ defmodule ContextBot.Workflow.InvocationTest do
     refute changeset.valid?
     assert errors_on(changeset).target_uri == ["can't be blank"]
     assert errors_on(changeset).invocation_text == ["can't be blank"]
+  end
+
+  test "persists canonical media descriptors without changing legacy rows" do
+    invocation =
+      %Invocation{}
+      |> Invocation.changeset(public_attrs())
+      |> Repo.insert!()
+
+    assert Repo.reload!(invocation).canonical_media == []
+
+    media = [
+      %{
+        "type" => "image",
+        "index" => 1,
+        "post_uri" => "at://did:plc:actor/app.bsky.feed.post/public",
+        "url" => "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:actor/cid@jpeg",
+        "alt" => "A bounded description"
+      }
+    ]
+
+    invocation
+    |> Invocation.transition_changeset(%{canonical_media: media})
+    |> Repo.update!()
+
+    assert Repo.reload!(invocation).canonical_media == media
   end
 
   defp public_attrs do

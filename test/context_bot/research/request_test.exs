@@ -8,6 +8,21 @@ defmodule ContextBot.Research.RequestTest do
     text: "CONTEXT_BOT_THREAD_V1\n\n[invocation]\nText:\nPlease add context."
   }
 
+  @canonical_thread_v2 %{
+    version: 2,
+    text:
+      "CONTEXT_BOT_THREAD_V2\n\n[target]\nText:\nAurora\nImages:\n- [image 1] Alt text: Pale lights",
+    media: [
+      %{
+        "type" => "image",
+        "index" => 1,
+        "post_uri" => "at://did:plc:author/app.bsky.feed.post/aurora",
+        "url" => "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:author/bafkreiaurora@jpeg",
+        "alt" => "Pale lights"
+      }
+    ]
+  }
+
   test "builds the pinned non-streaming Sonnet request with dynamically filtered web tools" do
     request =
       Request.initial(@canonical_thread, %{
@@ -63,7 +78,7 @@ defmodule ContextBot.Research.RequestTest do
   test "sends one versioned prompt with the complete research and reply safety contract" do
     prompt = Request.initial(@canonical_thread, config())["system"]
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V1")
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V2")
     assert prompt =~ "ancestor"
     assert prompt =~ "unstable"
     assert prompt =~ "primary sources"
@@ -75,8 +90,51 @@ defmodule ContextBot.Research.RequestTest do
     assert prompt =~ "untrusted"
     assert prompt =~ "prompt injection"
     assert prompt =~ "Return only"
-    assert prompt =~ "300 Unicode grapheme clusters"
+    assert prompt =~ "275 Unicode grapheme clusters"
     assert prompt =~ "audit suffix"
+    assert prompt =~ "images and their alt text"
+    assert prompt =~ "directly"
+    assert prompt =~ "observe in an image"
+    assert prompt =~ "provenance"
+    assert prompt =~ "AI-generated"
+    assert prompt =~ "visual"
+    assert prompt =~ "appearance alone"
+  end
+
+  test "places ordered version 2 URL images before the canonical transcript" do
+    request = Request.initial(@canonical_thread_v2, config())
+
+    assert request["messages"] == [
+             %{
+               "role" => "user",
+               "content" => [
+                 %{
+                   "type" => "image",
+                   "source" => %{
+                     "type" => "url",
+                     "url" =>
+                       "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:author/bafkreiaurora@jpeg"
+                   }
+                 },
+                 %{"type" => "text", "text" => @canonical_thread_v2.text}
+               ]
+             }
+           ]
+  end
+
+  test "uses a content list for text-only version 2 while preserving version 1 strings" do
+    text_only = %{version: 2, text: "CONTEXT_BOT_THREAD_V2\n\nText only", media: []}
+
+    assert Request.initial(text_only, config())["messages"] == [
+             %{
+               "role" => "user",
+               "content" => [%{"type" => "text", "text" => text_only.text}]
+             }
+           ]
+
+    assert Request.initial(@canonical_thread, config())["messages"] == [
+             %{"role" => "user", "content" => @canonical_thread.text}
+           ]
   end
 
   test "accepts the string-keyed canonical thread representation reloaded from persistence" do
@@ -183,7 +241,7 @@ defmodule ContextBot.Research.RequestTest do
     assert repair_message["role"] == "user"
     assert String.starts_with?(repair_message["content"], "LENGTH_REPAIR\n")
     assert repair_message["content"] =~ "only the reply text"
-    assert repair_message["content"] =~ "at most 300 Unicode grapheme clusters"
+    assert repair_message["content"] =~ "at most 275 Unicode grapheme clusters"
     assert repair_message["content"] =~ "Do not perform additional research"
   end
 

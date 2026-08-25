@@ -1,5 +1,5 @@
-app = "context-bot-jwarden"
-primary_region = "den"
+app = "context-bot-social-protocols"
+primary_region = "ewr"
 
 [build]
   dockerfile = "Dockerfile"
@@ -7,10 +7,10 @@ primary_region = "den"
 [env]
   # Supply the real public identity before activation. Empty values are safe
   # while BOT_ENABLED remains false and deliberately fail startup when enabled.
-  BOT_ENABLED = "false"
-  BOT_DID = ""
+  BOT_ENABLED = "true"
+  BOT_DID = "did:plc:anbhmngzs3exwbq47xxzogk4"
   BOT_HANDLE = "getcontext.bot"
-  BOT_PDS_URL = ""
+  BOT_PDS_URL = "https://rhizopogon.us-west.host.bsky.network"
   DATABASE_PATH = "/data/context_bot.db"
   # The homepage is reachable via the fly.dev host below. Serving https://getcontext.bot
   # (the bot's Bluesky handle and site.standard.publication domain) requires DNS configuration
@@ -30,7 +30,7 @@ primary_region = "den"
   THREAD_FETCH_TIMEOUT_MS = "20000"
 
   # Eligibility, admission, and queue settings.
-  OPERATOR_ALLOWED_DIDS = ""
+  OPERATOR_ALLOWED_DIDS = "did:plc:33avz2l7y5scw3abq3lmylns"
   THREAD_PARENT_HEIGHT = "80"
   ACTOR_HOURLY_LIMIT = "2"
   ACTOR_DAILY_LIMIT = "5"
