@@ -1,5 +1,5 @@
 app = "context-bot-social-protocols"
-primary_region = "den"
+primary_region = "ewr"
 
 [build]
   dockerfile = "Dockerfile"
