@@ -546,7 +546,7 @@ defmodule ContextBot.Research.ReplyTest do
     part2 = String.duplicate("b", 160)
     text = part1 <> "\n\n" <> part2
 
-    assert String.length(text) == 313
+    assert String.length(text) == 312
     assert {:ok, split1, split2} = Reply.split_text(text)
     assert String.length(split1) == 150
     assert String.length(split2) == 160
