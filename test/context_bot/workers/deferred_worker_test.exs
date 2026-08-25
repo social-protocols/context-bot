@@ -765,7 +765,8 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
           eligibility_method: "bluesky_elder",
           eligibility_evidence: %{"label" => "bluesky-elder"},
           canonical_thread: "ancestor context",
-          canonical_thread_version: "1",
+          canonical_thread_version: "2",
+          canonical_media: [],
           root_uri: "at://did:plc:root/app.bsky.feed.post/root",
           root_cid: "bafyroot"
         ],
@@ -785,7 +786,8 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
           invocation_text: "What context is needed?",
           defer_until: @rollover,
           canonical_thread: "ancestor context",
-          canonical_thread_version: "1",
+          canonical_thread_version: "2",
+          canonical_media: [],
           root_uri: "at://did:plc:root/app.bsky.feed.post/root",
           root_cid: "bafyroot"
         ],

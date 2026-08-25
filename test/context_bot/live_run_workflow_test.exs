@@ -48,6 +48,8 @@ defmodule ContextBot.LiveRunWorkflowTest do
 
     perform_and_delete!(:thread)
     thread_ready = Repo.reload!(invocation)
+    assert thread_ready.canonical_thread_version == "2"
+    assert length(thread_ready.canonical_media) == 1
     assert thread_ready.canonical_thread =~ "The root claim."
     assert thread_ready.canonical_thread =~ "The immediate parent claim."
     refute thread_ready.canonical_thread =~ "DESCENDANT"
@@ -98,6 +100,48 @@ defmodule ContextBot.LiveRunWorkflowTest do
     assert Repo.aggregate(Oban.Job, :count) == 0
     assert POCFixture.call_count(fixture, :anthropic_post) == 0
     assert POCFixture.call_count(fixture, :pds_put) == 0
+  end
+
+  test "an operator-selected video bypasses research and publishes the deterministic reply once" do
+    fixture = POCFixture.start!()
+    invocation_uri = POCFixture.notification()["uri"]
+
+    video_thread =
+      live_invocation_thread()
+      |> put_in(["thread", "post", "embed"], %{
+        "$type" => "app.bsky.embed.video#view",
+        "cid" => "bafkreivideo",
+        "playlist" => "https://video.bsky.app/watch/example/playlist.m3u8"
+      })
+
+    POCFixture.set_thread_result(fixture, {:json, 200, video_thread})
+    Req.Test.stub(PublicClient, fn conn -> Req.Test.json(conn, video_thread) end)
+
+    assert {:ok, invocation, :created} =
+             LiveRun.prepare(invocation_uri, settings: fixture.settings, client: PublicClient)
+
+    perform_and_delete!(:thread)
+
+    reply_ready = Repo.reload!(invocation)
+    assert reply_ready.stage == :reply_ready
+
+    assert reply_ready.selected_reply ==
+             "I can't analyze videos yet, so I can't reliably answer a question that may depend on this clip."
+
+    assert reply_ready.reply_validation["reason"] == "video"
+    assert reply_ready.anthropic_messages == nil
+    assert Repo.aggregate(BudgetEntry, :count) == 0
+    assert POCFixture.call_count(fixture, :anthropic_post) == 0
+
+    assert [%Oban.Job{queue: "reply", worker: "ContextBot.Workers.ReplyWorker"}] =
+             Repo.all(Oban.Job)
+
+    perform_and_delete!(:reply)
+
+    assert {:ok, complete} = LiveRun.await(invocation, timeout_ms: 0)
+    assert complete.stage == :complete
+    assert POCFixture.created_reply_count(fixture) == 1
+    assert POCFixture.call_count(fixture, :anthropic_post) == 0
   end
 
   defp perform_and_delete!(queue) do

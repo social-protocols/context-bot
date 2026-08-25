@@ -13,8 +13,18 @@ defmodule ContextBot.Thread.CanonicalizerTest do
     assert {:ok, result} = Canonicalizer.build(thread, context())
 
     assert result == %{
-             version: 1,
+             version: 2,
              current_cid: "bafy-invocation-v1",
+             media: [
+               %{
+                 "type" => "image",
+                 "index" => 1,
+                 "post_uri" => @invocation_uri,
+                 "url" =>
+                   "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:alice/bafkreiaurora@jpeg",
+                 "alt" => "A pale aurora over dark mountains"
+               }
+             ],
              parent: %{
                "uri" => @invocation_uri,
                "cid" => "bafy-invocation-v1"
@@ -25,7 +35,7 @@ defmodule ContextBot.Thread.CanonicalizerTest do
              },
              text:
                """
-               CONTEXT_BOT_THREAD_V1
+               CONTEXT_BOT_THREAD_V2
 
                [ancestor]
                Author: root.test (did:plc:root)
@@ -47,15 +57,17 @@ defmodule ContextBot.Thread.CanonicalizerTest do
                URI: at://did:plc:alice/app.bsky.feed.post/invocation
                Text:
                @contextbot.test please add context.
+               Images:
+               - [image 1] Alt text: A pale aurora over dark mountains
                """
                |> String.trim()
            }
 
     refute result.text =~ "DESCENDANT"
     refute result.text =~ "QUOTED POST BODY"
-    refute result.text =~ "MEDIA ALT"
+    assert result.text =~ "[image 1] Alt text: A pale aurora over dark mountains"
     refute result.text =~ "EXTERNAL DESCRIPTION"
-    refute result.text =~ "cdn.example"
+    refute result.text =~ "feed_fullsize"
   end
 
   test "renders a dry-run question beneath the selected post without requiring a mention" do
@@ -69,7 +81,9 @@ defmodule ContextBot.Thread.CanonicalizerTest do
              })
 
     assert result.current_cid == @notification_cid
+    assert result.version == 2
     assert result.parent == %{"uri" => @invocation_uri, "cid" => @notification_cid}
+    assert [%{"index" => 1, "post_uri" => @invocation_uri}] = result.media
 
     assert result.root == %{
              "uri" => "at://did:plc:root/app.bsky.feed.post/root",
@@ -93,7 +107,126 @@ defmodule ContextBot.Thread.CanonicalizerTest do
 
     refute result.text =~ "DESCENDANT"
     refute result.text =~ "QUOTED POST BODY"
-    refute result.text =~ "MEDIA ALT"
+    assert result.text =~ "A pale aurora over dark mountains"
+  end
+
+  test "numbers images root-to-invocation and recognizes record-with-media images" do
+    thread = fixture("thread_ancestors.json")
+
+    root_image = image_view("did:plc:root", "bafkreiroot", "Root image")
+    target_image = get_in(thread, ["thread", "post", "embed"])
+    quoted_record = get_in(thread, ["thread", "parent", "post", "embed"])
+
+    thread =
+      thread
+      |> put_in(["thread", "parent", "parent", "post", "embed"], root_image)
+      |> put_in(["thread", "post", "embed"], %{
+        "$type" => "app.bsky.embed.recordWithMedia#view",
+        "record" => quoted_record,
+        "media" => target_image
+      })
+
+    assert {:ok, result} = Canonicalizer.build(thread, context())
+
+    assert Enum.map(result.media, &{&1["index"], &1["post_uri"], &1["alt"]}) == [
+             {1, "at://did:plc:root/app.bsky.feed.post/root", "Root image"},
+             {2, @invocation_uri, "A pale aurora over dark mountains"}
+           ]
+
+    assert :binary.match(result.text, "[image 1]") < :binary.match(result.text, "[image 2]")
+    assert result.text =~ "Quoted post URI: at://did:plc:quoted/app.bsky.feed.post/quoted"
+    refute result.text =~ "QUOTED POST BODY"
+  end
+
+  test "rejects malformed or untrusted image descriptors" do
+    base = fixture("thread_ancestors.json")
+
+    invalid_images = [
+      %{"alt" => "HTTP", "fullsize" => "http://cdn.bsky.app/img/feed_fullsize/plain/a/b@jpeg"},
+      %{"alt" => "host", "fullsize" => "https://example.com/img/feed_fullsize/plain/a/b@jpeg"},
+      %{
+        "alt" => "userinfo",
+        "fullsize" => "https://user@cdn.bsky.app/img/feed_fullsize/plain/a/b@jpeg"
+      },
+      %{
+        "alt" => "fragment",
+        "fullsize" => "https://cdn.bsky.app/img/feed_fullsize/plain/a/b@jpeg#fragment"
+      },
+      %{
+        "alt" => "port",
+        "fullsize" => "https://cdn.bsky.app:444/img/feed_fullsize/plain/a/b@jpeg"
+      },
+      %{"alt" => "missing"},
+      %{
+        "alt" => "long URL",
+        "fullsize" =>
+          "https://cdn.bsky.app/img/feed_fullsize/plain/a/#{String.duplicate("x", 2_048)}@jpeg"
+      },
+      %{
+        "alt" => String.duplicate("x", 4_097),
+        "fullsize" => "https://cdn.bsky.app/img/feed_fullsize/plain/a/b@jpeg"
+      }
+    ]
+
+    Enum.each(invalid_images, fn image ->
+      thread = put_in(base, ["thread", "post", "embed", "images"], [image])
+      assert {:error, :invalid_thread} = Canonicalizer.build(thread, context())
+    end)
+  end
+
+  test "detects video directly and through record-with-media" do
+    direct = fixture("thread_video.json")
+
+    assert {:unsupported_media, %{reason: :video, canonical: direct_result}} =
+             Canonicalizer.build(direct, context())
+
+    assert direct_result.version == 2
+    assert direct_result.media == []
+
+    nested =
+      put_in(direct, ["thread", "post", "embed"], %{
+        "$type" => "app.bsky.embed.recordWithMedia#view",
+        "record" => %{
+          "$type" => "app.bsky.embed.record#view",
+          "record" => %{
+            "uri" => "at://did:plc:quoted/app.bsky.feed.post/quoted"
+          }
+        },
+        "media" => get_in(direct, ["thread", "post", "embed"])
+      })
+
+    assert {:unsupported_media, %{reason: :video}} =
+             Canonicalizer.build_dry_run(nested, dry_run_context())
+  end
+
+  test "fails closed above four images and gives video precedence" do
+    base = fixture("thread_ancestors.json")
+
+    five_images =
+      Enum.map(1..5, fn index ->
+        %{
+          "alt" => "Image #{index}",
+          "fullsize" =>
+            "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:alice/bafkrei#{index}@jpeg"
+        }
+      end)
+
+    over_limit = put_in(base, ["thread", "post", "embed", "images"], five_images)
+
+    assert {:unsupported_media, %{reason: :image_limit_exceeded, canonical: %{media: media}}} =
+             Canonicalizer.build(over_limit, context())
+
+    assert length(media) == 4
+
+    with_video =
+      put_in(
+        over_limit,
+        ["thread", "parent", "parent", "post", "embed"],
+        get_in(fixture("thread_video.json"), ["thread", "post", "embed"])
+      )
+
+    assert {:unsupported_media, %{reason: :video}} =
+             Canonicalizer.build(with_video, context())
   end
 
   test "dry-run canonicalization preserves ancestor placeholders and truncation" do
@@ -311,6 +444,18 @@ defmodule ContextBot.Thread.CanonicalizerTest do
     "test/fixtures/atproto/#{name}"
     |> File.read!()
     |> Jason.decode!()
+  end
+
+  defp image_view(did, cid, alt) do
+    %{
+      "$type" => "app.bsky.embed.images#view",
+      "images" => [
+        %{
+          "alt" => alt,
+          "fullsize" => "https://cdn.bsky.app/img/feed_fullsize/plain/#{did}/#{cid}@jpeg"
+        }
+      ]
+    }
   end
 
   defp safely_build(response) do

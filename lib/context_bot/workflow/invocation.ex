@@ -63,6 +63,7 @@ defmodule ContextBot.Workflow.Invocation do
     :raw_thread,
     :canonical_thread,
     :canonical_thread_version,
+    :canonical_media,
     :root_uri,
     :root_cid,
     :anthropic_messages,
@@ -123,6 +124,7 @@ defmodule ContextBot.Workflow.Invocation do
     field :raw_thread, :map
     field :canonical_thread, :string
     field :canonical_thread_version, :string
+    field :canonical_media, {:array, :map}, default: []
     field :root_uri, :string
     field :root_cid, :string
     field :anthropic_messages, :map

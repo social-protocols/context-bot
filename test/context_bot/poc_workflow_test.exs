@@ -60,8 +60,10 @@ defmodule ContextBot.POCWorkflowTest do
 
     [request] = POCFixture.anthropic_requests(fixture)
     [message] = request["messages"]
-    assert message["content"] == invocation.canonical_thread
-    refute message["content"] =~ "DESCENDANT"
+    assert [image, text] = message["content"]
+    assert image["source"] == %{"type" => "url", "url" => hd(invocation.canonical_media)["url"]}
+    assert text == %{"type" => "text", "text" => invocation.canonical_thread}
+    refute text["text"] =~ "DESCENDANT"
 
     assert [response] = Store.anthropic_responses(invocation)
     assert response.raw_body == POCFixture.anthropic_fixture("tool_success.json")

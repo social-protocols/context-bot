@@ -64,6 +64,44 @@ defmodule ContextBot.Research.RunnerTest do
     assert Repo.reload!(invocation).anthropic_messages == request
   end
 
+  test "checkpoints version 2 image blocks before the provider call" do
+    image_url =
+      "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:actor/bafkreiimage@jpeg"
+
+    invocation =
+      invocation("image-request", %{
+        canonical_thread: "CONTEXT_BOT_THREAD_V2\n\n[image 1] Alt text: Aurora",
+        canonical_thread_version: "2",
+        canonical_media: [
+          %{
+            "type" => "image",
+            "index" => 1,
+            "post_uri" => "at://did:plc:actor/app.bsky.feed.post/image-request",
+            "url" => image_url,
+            "alt" => "Aurora"
+          }
+        ]
+      })
+
+    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+
+    assert {:ok, _result} = Runner.run(invocation, options())
+    assert_received {:anthropic_call, request, _metadata, false}
+
+    assert get_in(request, ["messages", Access.at(0), "content"]) == [
+             %{
+               "type" => "image",
+               "source" => %{"type" => "url", "url" => image_url}
+             },
+             %{
+               "type" => "text",
+               "text" => "CONTEXT_BOT_THREAD_V2\n\n[image 1] Alt text: Aurora"
+             }
+           ]
+
+    assert Repo.reload!(invocation).anthropic_messages == request
+  end
+
   test "commits a complete 200 envelope and sent marker before decoding" do
     invocation = invocation("persist-before-decode")
     raw_body = fixture("tool_success.json")
@@ -1010,27 +1048,33 @@ defmodule ContextBot.Research.RunnerTest do
     }
   end
 
-  defp invocation(suffix) do
+  defp invocation(suffix, extra \\ %{}) do
     uri = "at://did:plc:actor/app.bsky.feed.post/#{suffix}"
     cid = "bafy-#{suffix}"
 
+    attrs =
+      Map.merge(
+        %{
+          invocation_uri: uri,
+          notification_cid: cid,
+          current_cid: cid,
+          actor_did: "did:plc:actor",
+          raw_notification: %{"uri" => uri, "cid" => cid},
+          received_at: @now,
+          status: :researching,
+          stage: :researching,
+          research_claim_token: @claim_token,
+          research_claimed_at: @now,
+          canonical_thread: "ROOT\nClaim needing context.\n\nINVOCATION\nPlease add context.",
+          canonical_thread_version: "1",
+          root_uri: uri,
+          root_cid: cid
+        },
+        extra
+      )
+
     %Invocation{}
-    |> Invocation.changeset(%{
-      invocation_uri: uri,
-      notification_cid: cid,
-      current_cid: cid,
-      actor_did: "did:plc:actor",
-      raw_notification: %{"uri" => uri, "cid" => cid},
-      received_at: @now,
-      status: :researching,
-      stage: :researching,
-      research_claim_token: @claim_token,
-      research_claimed_at: @now,
-      canonical_thread: "ROOT\nClaim needing context.\n\nINVOCATION\nPlease add context.",
-      canonical_thread_version: "1",
-      root_uri: uri,
-      root_cid: cid
-    })
+    |> Invocation.changeset(attrs)
     |> Repo.insert!()
   end
 

@@ -65,12 +65,15 @@ defmodule ContextBot.DryRunWorkflowTest do
       refute Map.has_key?(fetch, "use_cache")
 
       assert [message] = conn.body_params["messages"]
-      assert message["content"] == invocation.canonical_thread
-      assert message["content"] =~ "The root claim."
-      assert message["content"] =~ "The immediate parent claim."
-      assert message["content"] =~ "[target]\n"
-      assert message["content"] =~ "[invocation]\nText:\nWhat's missing?"
-      refute message["content"] =~ "DESCENDANT"
+      assert [image, text] = message["content"]
+      assert image["type"] == "image"
+      assert image["source"] == %{"type" => "url", "url" => hd(invocation.canonical_media)["url"]}
+      assert text == %{"type" => "text", "text" => invocation.canonical_thread}
+      assert text["text"] =~ "The root claim."
+      assert text["text"] =~ "The immediate parent claim."
+      assert text["text"] =~ "[target]\n"
+      assert text["text"] =~ "[invocation]\nText:\nWhat's missing?"
+      refute text["text"] =~ "DESCENDANT"
 
       conn
       |> Plug.Conn.put_resp_header("content-type", "application/json")
@@ -92,6 +95,8 @@ defmodule ContextBot.DryRunWorkflowTest do
     assert thread_ready.stage == :thread_ready
     assert thread_ready.target_uri == @target_uri
     assert thread_ready.raw_thread == fixture("atproto/thread_ancestors.json")
+    assert thread_ready.canonical_thread_version == "2"
+    assert length(thread_ready.canonical_media) == 1
 
     assert queued_jobs() == [
              {"thread", "ContextBot.Workers.ThreadWorker"},
@@ -146,7 +151,32 @@ defmodule ContextBot.DryRunWorkflowTest do
     assert queued_jobs() == []
   end
 
-  defp expect_public_thread do
+  test "a video dry run completes locally without Anthropic or publication work" do
+    settings = Settings.load(anthropic_daily_budget_usd: "20.000000")
+    Application.put_env(:context_bot, :settings, settings)
+    expect_public_thread("atproto/thread_video.json")
+
+    Req.Test.stub(AnthropicClient, fn _conn ->
+      flunk("Anthropic was called for an unsupported video")
+    end)
+
+    assert {:ok, invocation, :created} = DryRun.prepare(@post_url, "Is this AI?")
+    perform_and_delete!(:dry_thread)
+
+    assert {:ok, complete} = DryRun.await(invocation, timeout_ms: 0)
+    assert complete.stage == :complete
+
+    assert complete.selected_reply ==
+             "I can't analyze videos yet, so I can't reliably answer a question that may depend on this clip."
+
+    assert complete.reply_validation["reason"] == "video"
+    assert complete.anthropic_usage["totals"] == %{"input_tokens" => 0, "output_tokens" => 0}
+    assert complete.reply_record == nil
+    assert Repo.aggregate(BudgetEntry, :count) == 0
+    assert queued_jobs() == []
+  end
+
+  defp expect_public_thread(thread_fixture \\ "atproto/thread_ancestors.json") do
     Req.Test.expect(PublicClient, fn conn ->
       assert conn.method == "GET"
       assert conn.request_path == "/xrpc/com.atproto.identity.resolveHandle"
@@ -168,7 +198,7 @@ defmodule ContextBot.DryRunWorkflowTest do
 
       assert Plug.Conn.get_req_header(conn, "authorization") == []
       assert Plug.Conn.get_req_header(conn, "atproto-proxy") == []
-      Req.Test.json(conn, fixture("atproto/thread_ancestors.json"))
+      Req.Test.json(conn, fixture(thread_fixture))
     end)
   end
 

@@ -374,10 +374,9 @@ defmodule ContextBot.Research.Runner do
        do: {:ok, invocation, request}
 
   defp ensure_request(%Invocation{} = invocation, config) do
-    request =
-      Request.initial(
-        %{"version" => 1, "text" => invocation.canonical_thread},
-        %{
+    with {:ok, canonical} <- canonical_snapshot(invocation) do
+      request =
+        Request.initial(canonical, %{
           model_id: config.settings.anthropic_model_id,
           effort: config.settings.anthropic_effort,
           max_tokens: config.settings.anthropic_research_max_tokens,
@@ -386,21 +385,49 @@ defmodule ContextBot.Research.Runner do
           max_web_fetch_content_tokens: config.settings.max_web_fetch_content_tokens,
           web_search_tool_type: config.settings.anthropic_web_search_tool_type,
           web_fetch_tool_type: config.settings.anthropic_web_fetch_tool_type
-        }
-      )
+        })
 
-    case config.store.transition_research(
-           invocation,
-           config.claim_token,
-           :researching,
-           %{anthropic_messages: request},
-           nil,
-           now(config)
-         ) do
-      {:ok, persisted} -> {:ok, persisted, persisted.anthropic_messages}
-      {:error, reason} -> {:error, reason}
+      case config.store.transition_research(
+             invocation,
+             config.claim_token,
+             :researching,
+             %{anthropic_messages: request},
+             nil,
+             now(config)
+           ) do
+        {:ok, persisted} -> {:ok, persisted, persisted.anthropic_messages}
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
+
+  defp canonical_snapshot(%Invocation{
+         canonical_thread_version: "1",
+         canonical_thread: text
+       })
+       when is_binary(text) and text != "",
+       do: {:ok, %{"version" => 1, "text" => text}}
+
+  defp canonical_snapshot(%Invocation{
+         canonical_thread_version: "2",
+         canonical_thread: text,
+         canonical_media: media
+       })
+       when is_binary(text) and text != "" and is_list(media) do
+    if Enum.all?(media, &valid_canonical_image?/1) do
+      {:ok, %{"version" => 2, "text" => text, "media" => media}}
+    else
+      {:error, :invalid_canonical_thread}
+    end
+  end
+
+  defp canonical_snapshot(_invocation), do: {:error, :invalid_canonical_thread}
+
+  defp valid_canonical_image?(%{"type" => "image", "url" => url})
+       when is_binary(url) and url != "",
+       do: true
+
+  defp valid_canonical_image?(_media), do: false
 
   defp latest_attempt(invocation) do
     BudgetEntry

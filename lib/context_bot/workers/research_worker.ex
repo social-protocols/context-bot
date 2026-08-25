@@ -10,14 +10,14 @@ defmodule ContextBot.Workers.ResearchWorker do
 
   import Ecto.Query
 
-  alias ContextBot.ATProto.{Post, TID}
+  alias ContextBot.ATProto.TID
   alias ContextBot.{Operations, Repo}
+  alias ContextBot.Reply.Intent
   alias ContextBot.Research.Runner
   alias ContextBot.Workflow.{Invocation, Store}
 
   @reply_worker "ContextBot.Workers.ReplyWorker"
   @default_claim_lease_ms 21_600_000
-  @did_regex ~r/\Adid:[a-z0-9]+:[A-Za-z0-9._:%-]+\z/
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"uri" => uri, "cid" => cid}} = job)
@@ -132,68 +132,58 @@ defmodule ContextBot.Workers.ResearchWorker do
 
   defp freeze_handoff(invocation, result, token, dependencies) do
     created_at = dependencies.now.()
-    rkey = dependencies.tid_generator.(DateTime.to_unix(created_at, :microsecond))
 
-    parent = %{"uri" => invocation.invocation_uri, "cid" => invocation.current_cid}
-    root = root_ref(invocation)
+    case dependencies.intent_builder.(
+           invocation,
+           result.text,
+           dependencies.settings.bot_did,
+           created_at,
+           dependencies.tid_generator
+         ) do
+      {:ok, intent} ->
+        attrs = %{
+          anthropic_messages: result.messages,
+          anthropic_usage: result.usage,
+          selected_reply: result.text,
+          reply_validation: result.validation,
+          reply_repo: intent.reply_repo,
+          reply_rkey: intent.reply_rkey,
+          reply_record: intent.reply_record,
+          publication_claim_token: nil,
+          publication_claimed_at: nil,
+          defer_until: nil,
+          failure_category: nil,
+          failure_detail: nil,
+          research_claim_token: nil,
+          research_claimed_at: nil,
+          completed_at: nil,
+          deferred_attempt_kind: nil
+        }
 
-    with {:ok, reply_repo} <- publication_repo(dependencies.settings.bot_did),
-         {:ok, record} <- Post.build(result.text, parent, root, created_at) do
-      attrs = %{
-        anthropic_messages: result.messages,
-        anthropic_usage: result.usage,
-        selected_reply: result.text,
-        reply_validation: result.validation,
-        reply_repo: reply_repo,
-        reply_rkey: rkey,
-        reply_record: record,
-        publication_claim_token: nil,
-        publication_claimed_at: nil,
-        defer_until: nil,
-        failure_category: nil,
-        failure_detail: nil,
-        research_claim_token: nil,
-        research_claimed_at: nil,
-        completed_at: nil,
-        deferred_attempt_kind: nil
-      }
+        next_job = dependencies.reply_job_builder.(invocation)
 
-      next_job = dependencies.reply_job_builder.(invocation)
+        case Store.transition_research(
+               invocation,
+               token,
+               :reply_ready,
+               attrs,
+               next_job,
+               created_at
+             ) do
+          {:ok, _reply_ready} ->
+            :ok
 
-      case Store.transition_research(
-             invocation,
-             token,
-             :reply_ready,
-             attrs,
-             next_job,
-             created_at
-           ) do
-        {:ok, _reply_ready} ->
-          :ok
+          {:error, :stale_claim} ->
+            :ok
 
-        {:error, :stale_claim} ->
-          :ok
+          {:error, changeset} ->
+            raise Ecto.InvalidChangesetError, action: :update, changeset: changeset
+        end
 
-        {:error, changeset} ->
-          raise Ecto.InvalidChangesetError, action: :update, changeset: changeset
-      end
-    else
       {:error, reason} ->
         fail_research(invocation, reason, created_at, token)
     end
   end
-
-  defp publication_repo(repo) when is_binary(repo) and repo != "" do
-    if Regex.match?(@did_regex, repo), do: {:ok, repo}, else: {:error, :invalid_publication_repo}
-  end
-
-  defp publication_repo(_repo), do: {:error, :invalid_publication_repo}
-
-  defp root_ref(%Invocation{root_uri: root_uri, root_cid: root_cid})
-       when is_binary(root_uri) and is_binary(root_cid),
-       do: %{"uri" => root_uri, "cid" => root_cid}
-
-  defp root_ref(_invocation), do: nil
 
   defp defer_budget(invocation, defer_until, kind, token) do
     case Store.transition_research(
@@ -295,6 +285,7 @@ defmodule ContextBot.Workers.ResearchWorker do
 
     %{
       claim_lease_ms: Keyword.get(config, :claim_lease_ms, @default_claim_lease_ms),
+      intent_builder: Keyword.get(config, :intent_builder, &Intent.build/5),
       now: Keyword.get(config, :now, &DateTime.utc_now/0),
       reply_job_builder: Keyword.get(config, :reply_job_builder, &reply_job/1),
       runner: Keyword.get(config, :runner, Runner),

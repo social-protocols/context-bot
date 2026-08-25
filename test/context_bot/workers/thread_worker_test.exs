@@ -72,6 +72,8 @@ defmodule ContextBot.Workers.ThreadWorkerTest do
   @invocation_uri "at://did:plc:alice/app.bsky.feed.post/invocation"
   @notification_cid "bafy-invocation-v1"
   @now ~U[2026-07-29 12:00:00.123456Z]
+  @video_reply "I can't analyze videos yet, so I can't reliably answer a question that may depend on this clip."
+  @image_limit_reply "I can analyze up to four images at a time, but this thread contains more than that."
 
   setup {Req.Test, :verify_on_exit!}
 
@@ -129,7 +131,11 @@ defmodule ContextBot.Workers.ThreadWorkerTest do
     assert persisted.status == :thread_ready
     assert persisted.stage == :thread_ready
     assert persisted.raw_thread == response
-    assert persisted.canonical_thread_version == "1"
+    assert persisted.canonical_thread_version == "2"
+    assert [image] = persisted.canonical_media
+    assert image["index"] == 1
+    assert image["post_uri"] == @invocation_uri
+    assert image["url"] =~ "https://cdn.bsky.app/img/feed_fullsize/"
     assert persisted.canonical_thread =~ "The root claim."
     assert persisted.canonical_thread =~ "@contextbot.test please add context."
     refute persisted.canonical_thread =~ "DESCENDANT"
@@ -186,6 +192,135 @@ defmodule ContextBot.Workers.ThreadWorkerTest do
              "uri" => invocation.invocation_uri,
              "cid" => invocation.notification_cid
            }
+  end
+
+  test "completes a dry run with a deterministic video answer and no downstream job" do
+    invocation = dry_run_invocation()
+    response = fixture("thread_video.json")
+    Application.put_env(:context_bot, Client, test_pid: self(), result: {:ok, 200, %{}, response})
+
+    configure(settings(),
+      client: AuthenticatedClient,
+      public_client: PublicClient,
+      research_job_builder: fn _ -> flunk("video dry run built a research job") end,
+      reply_job_builder: fn _ -> flunk("video dry run built a reply job") end,
+      now: fn -> @now end
+    )
+
+    assert :ok = perform(invocation)
+    assert_received {:public_thread_fetch, @invocation_uri, 80, false}
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert persisted.status == :complete
+    assert persisted.selected_reply == @video_reply
+
+    assert persisted.reply_validation == %{
+             "result" => "unsupported_media",
+             "reason" => "video",
+             "source" => "local"
+           }
+
+    assert persisted.anthropic_usage == zero_usage()
+    assert persisted.anthropic_messages == nil
+    assert persisted.reply_repo == nil
+    assert persisted.reply_rkey == nil
+    assert persisted.reply_record == nil
+    assert persisted.completed_at == @now
+    assert persisted.raw_thread == response
+    assert persisted.canonical_thread_version == "2"
+    assert Repo.aggregate(Oban.Job, :count) == 0
+    assert Repo.aggregate(ContextBot.Research.BudgetEntry, :count) == 0
+
+    assert :ok = perform(persisted)
+    refute_receive {:public_thread_fetch, _, _, _}
+  end
+
+  test "completes an excessive-image dry run without partial research" do
+    invocation = dry_run_invocation()
+    response = five_image_thread()
+    Application.put_env(:context_bot, Client, test_pid: self(), result: {:ok, 200, %{}, response})
+
+    configure(settings(), public_client: PublicClient, now: fn -> @now end)
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert persisted.selected_reply == @image_limit_reply
+    assert persisted.reply_validation["reason"] == "image_limit_exceeded"
+    assert length(persisted.canonical_media) == 4
+    assert persisted.anthropic_usage == zero_usage()
+    assert Repo.aggregate(Oban.Job, :count) == 0
+    assert Repo.aggregate(ContextBot.Research.BudgetEntry, :count) == 0
+  end
+
+  test "atomically freezes a public video capability reply for publication without research" do
+    invocation = invocation()
+    response = fixture("thread_video.json")
+
+    configure_fake({:ok, 200, %{}, response},
+      now: fn -> @now end,
+      tid_generator: fn _timestamp -> "3mvideoanswer" end
+    )
+
+    assert :ok = perform(invocation)
+    assert_received {:thread_fetch, @invocation_uri, 80, false}
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :reply_ready
+    assert persisted.status == :reply_ready
+    assert persisted.selected_reply == @video_reply
+    assert persisted.reply_rkey == "3mvideoanswer"
+    assert persisted.reply_repo == @bot_did
+    assert persisted.reply_record["text"] == @video_reply
+    assert persisted.reply_record["createdAt"] == DateTime.to_iso8601(@now)
+
+    assert persisted.reply_record["reply"]["parent"] == %{
+             "uri" => @invocation_uri,
+             "cid" => @notification_cid
+           }
+
+    assert persisted.anthropic_messages == nil
+    assert persisted.anthropic_usage == zero_usage()
+    assert Repo.aggregate(ContextBot.Research.BudgetEntry, :count) == 0
+
+    assert [%Oban.Job{worker: "ContextBot.Workers.ReplyWorker", queue: "reply"}] =
+             Repo.all(Oban.Job)
+
+    assert :ok = perform(persisted)
+    refute_receive {:thread_fetch, _, _, _}
+    assert Repo.aggregate(Oban.Job, :count) == 1
+  end
+
+  test "rolls back a public capability snapshot when reply enqueue fails" do
+    invocation = invocation()
+    response = fixture("thread_video.json")
+
+    invalid_job_builder = fn transitioned_invocation ->
+      %{
+        "uri" => transitioned_invocation.invocation_uri,
+        "cid" => transitioned_invocation.notification_cid
+      }
+      |> Oban.Job.new(worker: "ContextBot.Workers.ReplyWorker", queue: :reply)
+      |> Ecto.Changeset.add_error(:args, "forced capability handoff failure")
+    end
+
+    configure_fake({:ok, 200, %{}, response},
+      now: fn -> @now end,
+      tid_generator: fn _timestamp -> "3mvideoanswer" end,
+      reply_job_builder: invalid_job_builder
+    )
+
+    assert_raise Ecto.InvalidChangesetError, fn -> perform(invocation) end
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :capturing_thread
+    assert persisted.raw_thread == nil
+    assert persisted.canonical_thread == nil
+    assert persisted.selected_reply == nil
+    assert persisted.reply_record == nil
+    assert Repo.aggregate(Oban.Job, :count) == 0
   end
 
   test "fetches outside transactions, freezes an edited current CID, and ignores a completed handoff" do
@@ -250,6 +385,7 @@ defmodule ContextBot.Workers.ThreadWorkerTest do
     assert persisted.raw_thread == nil
     assert persisted.canonical_thread == nil
     assert persisted.canonical_thread_version == nil
+    assert persisted.canonical_media == []
     assert persisted.root_uri == nil
     assert persisted.root_cid == nil
     assert persisted.current_cid == @notification_cid
@@ -506,6 +642,29 @@ defmodule ContextBot.Workers.ThreadWorkerTest do
     "test/fixtures/atproto/#{name}"
     |> File.read!()
     |> Jason.decode!()
+  end
+
+  defp five_image_thread do
+    images =
+      Enum.map(1..5, fn index ->
+        %{
+          "alt" => "Image #{index}",
+          "fullsize" =>
+            "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:alice/bafkrei#{index}@jpeg"
+        }
+      end)
+
+    put_in(fixture("thread_ancestors.json"), ["thread", "post", "embed", "images"], images)
+  end
+
+  defp zero_usage do
+    %{
+      "attempts" => [],
+      "continuations" => 0,
+      "response_count" => 0,
+      "tool_uses" => 0,
+      "totals" => %{"input_tokens" => 0, "output_tokens" => 0}
+    }
   end
 
   defp restore_env(module, :missing), do: Application.delete_env(:context_bot, module)
