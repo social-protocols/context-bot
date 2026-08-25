@@ -302,27 +302,36 @@ defmodule ContextBot.Workers.ReplyWorker do
   end
 
   defp publish_part2_record(invocation, dependencies, part1_uri, part1_cid) do
-    case get_part2_record(invocation, dependencies.client) do
-      {:match, uri, cid} ->
-        {:ok, uri, cid}
+    case rebuild_part2_record(invocation, part1_uri, part1_cid) do
+      {:ok, corrected_record} ->
+        case get_part2_record(invocation, dependencies.client, corrected_record) do
+          {:match, uri, cid} ->
+            {:ok, uri, cid}
 
-      :missing ->
-        put_part2_record(invocation, dependencies, part1_uri, part1_cid)
+          :missing ->
+            put_part2_record(invocation, dependencies, corrected_record)
 
-      :conflict ->
-        {:error, :part2_conflict}
+          :conflict ->
+            {:error, :part2_conflict}
+
+          _other ->
+            {:error, :part2_failed}
+        end
+
+      {:error, _reason} ->
+        {:error, :part2_record_invalid}
     end
   end
 
-  defp put_part2_record(invocation, dependencies, _part1_uri, _part1_cid) do
+  defp put_part2_record(invocation, dependencies, corrected_record) do
     case dependencies.client.put_record(
            invocation.reply_repo,
            @collection,
            invocation.reply_part2_rkey,
-           invocation.reply_part2_record
+           corrected_record
          ) do
       {:ok, status, _headers, _body} when status in 200..299 ->
-        reconcile_part2_after_put(invocation, dependencies.client)
+        reconcile_part2_after_put(invocation, dependencies.client, corrected_record)
 
       {:error, _reason} ->
         {:error, :part2_put_failed}
@@ -332,8 +341,8 @@ defmodule ContextBot.Workers.ReplyWorker do
     end
   end
 
-  defp reconcile_part2_after_put(invocation, client) do
-    case get_part2_record(invocation, client) do
+  defp reconcile_part2_after_put(invocation, client, corrected_record) do
+    case get_part2_record(invocation, client, corrected_record) do
       {:match, uri, cid} ->
         {:ok, uri, cid}
 
@@ -342,14 +351,14 @@ defmodule ContextBot.Workers.ReplyWorker do
     end
   end
 
-  defp get_part2_record(invocation, client) do
+  defp get_part2_record(invocation, client, corrected_record) do
     case client.get_record(invocation.reply_repo, @collection, invocation.reply_part2_rkey) do
       {:ok, status, _headers, body} when status in 200..299 ->
         compare_part2_record(
           body,
           invocation.reply_repo,
           invocation.reply_part2_rkey,
-          invocation.reply_part2_record
+          corrected_record
         )
 
       {:error, :record_not_found} ->
@@ -381,6 +390,33 @@ defmodule ContextBot.Workers.ReplyWorker do
 
   defp has_part2?(%Invocation{reply_part2_record: record}) when is_map(record), do: true
   defp has_part2?(_invocation), do: false
+
+  defp rebuild_part2_record(%Invocation{reply_part2_record: frozen_record}, part1_uri, part1_cid)
+       when is_map(frozen_record) and is_binary(part1_uri) and is_binary(part1_cid) do
+    alias ContextBot.ATProto.Post
+
+    with {:ok, text} <- extract_text(frozen_record),
+         {:ok, created_at} <- extract_created_at(frozen_record),
+         parent = %{"uri" => part1_uri, "cid" => part1_cid},
+         {:ok, rebuilt_record} <- Post.build(text, parent, nil, created_at) do
+      {:ok, rebuilt_record}
+    end
+  end
+
+  defp rebuild_part2_record(_invocation, _part1_uri, _part1_cid),
+    do: {:error, :invalid_part2_data}
+
+  defp extract_text(%{"text" => text}) when is_binary(text), do: {:ok, text}
+  defp extract_text(_record), do: {:error, :missing_text}
+
+  defp extract_created_at(%{"createdAt" => iso_string}) when is_binary(iso_string) do
+    case DateTime.from_iso8601(iso_string) do
+      {:ok, datetime, _offset} -> {:ok, datetime}
+      _error -> {:error, :invalid_created_at}
+    end
+  end
+
+  defp extract_created_at(_record), do: {:error, :missing_created_at}
 
   defp fail_auth(invocation, token, completed_at) do
     transition_terminal(
