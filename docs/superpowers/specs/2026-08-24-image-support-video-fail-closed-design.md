@@ -19,8 +19,9 @@ as though it had inspected the clip.
 - Images in the invocation and its captured ancestors are first-class research input.
 - Image order is deterministic, from the root post toward the invocation and then in each embed's
   declared order.
-- At most four images are accepted across the captured chain. This matches the maximum number of
-  images in one Bluesky post while keeping the provider request and failure surface bounded.
+- At most four images are accepted across the captured chain. This is an explicit Context Bot
+  provider boundary: Bluesky's gallery embed can contain more, so a valid larger gallery receives
+  the deterministic capability reply.
 - A chain containing more than four images receives a deterministic capability reply rather than a
   partially informed Claude answer.
 - Any captured video causes an unconditional deterministic capability reply. Context Bot does not
@@ -93,9 +94,14 @@ CID, and raw AppView response remain unchanged in purpose.
 The canonicalizer recognizes these AppView embed forms:
 
 - `app.bsky.embed.images#view`;
+- `app.bsky.embed.gallery#view`;
 - `app.bsky.embed.video#view`;
-- `app.bsky.embed.recordWithMedia#view`, recursively inspecting its `media`; and
+- `app.bsky.embed.recordWithMedia#view`, inspecting its image, gallery, video, or external `media`;
+  and
 - existing external and quoted-record embeds, whose text behavior remains unchanged.
+
+An unknown or malformed post embed union fails closed. It must not silently become text-only model
+context, because a future union could contain evidence that the bot does not yet understand.
 
 Quoted records are not recursively fetched or interpreted as ancestors. Media already present in a
 quoted-record view remains outside the capture contract, just as quoted post text does today.
@@ -121,6 +127,11 @@ The existing AppView response-size, ancestor-count, and canonical-text limits st
 serialized bytes before it is persisted. These are code-level protocol limits rather than runtime
 settings: accepting more media changes the product and provider-request contract and should be an
 explicit reviewed release.
+
+One pure media validator owns the URL, enclosing-post, field, ordering, count, and serialized-size
+rules. Capture uses it before persistence, and research recovery applies it again before budget
+reservation or request construction. A manually corrupted or legacy checkpoint therefore cannot
+bypass capture-time trust boundaries.
 
 ## Anthropic Request
 
@@ -189,9 +200,9 @@ stage or queue.
 
 ## Observability and Operator Output
 
-Logs and progress output identify the capability decision without including media URLs, alt text,
-post text, or provider payloads. Suggested structured fields are `media_disposition=video_unsupported`
-or `media_disposition=image_limit_exceeded` and `image_count`.
+Logs and progress output identify the media decision without including media URLs, alt text, post
+text, or provider payloads. The allowlisted structured fields are
+`media_disposition=supported|video_unsupported|image_limit_exceeded` and `image_count`.
 
 The dry-run CLI already prints the stored answer. It must also handle the absence of an Anthropic
 usage envelope and print explicit zero values:
@@ -208,8 +219,11 @@ Implementation follows behavior-first tests. Tests first demonstrate the current
 handoff, then cover:
 
 - deterministic image extraction and numbering across ancestors and the invocation;
-- images nested in `recordWithMedia`;
+- images in direct image and gallery views, including gallery/external media nested in
+  `recordWithMedia`;
 - exact CDN URL validation, bounded alt text, malformed image rejection, and the four-image limit;
+- recovery-time rejection of malformed, excessive, out-of-order, or oversized persisted media
+  before any Anthropic budget or provider work;
 - video detection in direct and `recordWithMedia` embeds;
 - canonical v2 persistence and legacy v1 replay;
 - Anthropic image blocks appearing before the text block with the expected transcript markers;

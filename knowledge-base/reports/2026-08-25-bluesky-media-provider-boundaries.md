@@ -21,6 +21,13 @@ future direction for video understanding.
 
 - `lib/context_bot/thread/canonicalizer.ex` retained the AppView `embed` value on each available post
   but rendered only external links and quoted-post URIs. All other embed unions became an empty list.
+- The current `app.bsky.feed.defs#postView` union includes `app.bsky.embed.gallery#view`, and
+  `recordWithMedia#view.media` includes images, video, gallery, and external cards. A media parser
+  must recognize those published shapes or fail closed instead of treating unknown unions as
+  text-only posts:
+  <https://github.com/bluesky-social/atproto/blob/main/lexicons/app/bsky/feed/defs.json>,
+  <https://github.com/bluesky-social/atproto/blob/main/lexicons/app/bsky/embed/gallery.json>, and
+  <https://github.com/bluesky-social/atproto/blob/main/lexicons/app/bsky/embed/recordWithMedia.json>.
 - `test/fixtures/atproto/thread_ancestors.json` already contained an image view whose alt text and CDN
   URL were intentionally asserted absent, confirming that media omission was part of canonical v1.
 - `lib/context_bot/research/request.ex` sent the entire canonical transcript as one string user
@@ -54,11 +61,16 @@ future direction for video understanding.
    compare a video-capable provider with a bounded local pipeline for origin-validated download,
    deterministic frame sampling, optional audio transcription, immutable request inputs, and strict
    byte/duration/time/storage/spend caps.
+7. Durable checkpoints are a second trust boundary. Research recovery must apply the same exact
+   descriptor, CDN URL, order, count, and aggregate-size validation as capture before it reserves
+   budget or constructs a provider request.
 
 ## Implications
 
 - Keep canonical media structured and versioned instead of encoding URLs into prose and reparsing
   the prompt later.
+- Treat direct galleries and `recordWithMedia` gallery/external variants as known AppView shapes;
+  unknown or malformed embed unions fail closed rather than losing evidence.
 - Persist the exact Anthropic content list before a request can escape, just as for text-only
   research, so retries never silently change image input.
 - Do not store image bytes merely to add vision support; URL blocks preserve current storage bounds.

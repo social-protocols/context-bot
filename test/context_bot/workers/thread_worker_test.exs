@@ -207,8 +207,20 @@ defmodule ContextBot.Workers.ThreadWorkerTest do
       now: fn -> @now end
     )
 
-    assert :ok = perform(invocation)
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    log =
+      capture_log(
+        [level: :info, formatter: {ContextBot.Logging.JSONFormatter, %{}}],
+        fn -> assert :ok = perform(invocation) end
+      )
+
     assert_received {:public_thread_fetch, @invocation_uri, 80, false}
+    assert log =~ "\"media_disposition\":\"video_unsupported\""
+    assert log =~ "\"image_count\":0"
+    refute log =~ @video_reply
 
     persisted = Repo.reload!(invocation)
     assert persisted.stage == :complete
@@ -357,6 +369,8 @@ defmodule ContextBot.Workers.ThreadWorkerTest do
     assert log =~ "\"invocation_id\":#{invocation.id}"
     assert log =~ "\"stage\":\"capturing_thread\""
     assert log =~ "\"attempt_kind\":\"thread\""
+    assert log =~ "\"media_disposition\":\"supported\""
+    assert log =~ "\"image_count\":1"
     refute log =~ invocation.invocation_uri
     refute log =~ "The root claim"
   end
@@ -645,16 +659,23 @@ defmodule ContextBot.Workers.ThreadWorkerTest do
   end
 
   defp five_image_thread do
-    images =
+    items =
       Enum.map(1..5, fn index ->
         %{
+          "$type" => "app.bsky.embed.gallery#viewImage",
           "alt" => "Image #{index}",
+          "aspectRatio" => %{"height" => 1, "width" => 1},
           "fullsize" =>
-            "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:alice/bafkrei#{index}@jpeg"
+            "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:alice/bafkrei#{index}@jpeg",
+          "thumbnail" =>
+            "https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:alice/bafkrei#{index}@jpeg"
         }
       end)
 
-    put_in(fixture("thread_ancestors.json"), ["thread", "post", "embed", "images"], images)
+    put_in(fixture("thread_ancestors.json"), ["thread", "post", "embed"], %{
+      "$type" => "app.bsky.embed.gallery#view",
+      "items" => items
+    })
   end
 
   defp zero_usage do

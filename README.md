@@ -49,8 +49,8 @@ just dry-run "https://bsky.app/profile/alice.example/post/3abc" "What's missing?
 
 The post may also be a canonical `at://.../app.bsky.feed.post/...` URI. The command loads only `ANTHROPIC_API_KEY` from the Bitwarden item, resolves and fetches the post from the configured public AppView without authentication, stores the selected post plus ancestors and local question in SQLite, runs the normal budgeted Claude research worker, and prints a concise result and integer usage/cost summary. Bluesky access is read-only; Anthropic access is paid. `ANTHROPIC_DAILY_BUDGET_USD` must be present and nonzero.
 
-Context Bot sends at most four image embeds across the captured ancestor chain to Claude, ordered
-root-to-target and represented by validated `https://cdn.bsky.app` URL blocks. If any captured post
+Context Bot sends at most four image or gallery items across the captured ancestor chain to Claude,
+ordered root-to-target and represented by validated `https://cdn.bsky.app` URL blocks. If any captured post
 contains video, it skips Anthropic and answers: “I can't analyze videos yet, so I can't reliably
 answer a question that may depend on this clip.” A chain with more than four images receives a
 similar local capability answer instead of partial research. These paths report zero provider usage

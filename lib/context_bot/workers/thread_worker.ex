@@ -72,16 +72,25 @@ defmodule ContextBot.Workers.ThreadWorker do
   defp logged_capture(invocation, job, dependencies) do
     started_at = System.monotonic_time(:millisecond)
     result = capture(invocation, job, dependencies)
+    {oban_result, media_attributes} = capture_observation(result)
 
     Operations.log_attempt(invocation,
       attempt_kind: :thread,
       attempt_index: job.attempt,
       duration_ms: System.monotonic_time(:millisecond) - started_at,
-      failure_category: thread_failure(result)
+      failure_category: thread_failure(oban_result),
+      media_disposition: Keyword.get(media_attributes, :media_disposition),
+      image_count: Keyword.get(media_attributes, :image_count)
     )
 
-    result
+    oban_result
   end
+
+  defp capture_observation({:media_capture, disposition, image_count}) do
+    {:ok, [media_disposition: disposition, image_count: image_count]}
+  end
+
+  defp capture_observation(result), do: {result, []}
 
   defp thread_failure({:error, _reason}), do: :thread_unavailable
   defp thread_failure(_result), do: nil
@@ -137,16 +146,24 @@ defmodule ContextBot.Workers.ThreadWorker do
   defp handle_fetch({:error, reason}, _invocation, _dependencies), do: {:error, reason}
   defp handle_fetch(_invalid_response, _invocation, _dependencies), do: {:error, :invalid_thread}
 
-  defp handle_canonicalization({:ok, canonical}, invocation, raw_thread, dependencies),
-    do: persist_handoff(invocation, raw_thread, canonical, dependencies.research_job_builder)
+  defp handle_canonicalization({:ok, canonical}, invocation, raw_thread, dependencies) do
+    with :ok <-
+           persist_handoff(invocation, raw_thread, canonical, dependencies.research_job_builder) do
+      {:media_capture, :supported, length(canonical.media)}
+    end
+  end
 
   defp handle_canonicalization(
-         {:unsupported_media, %{reason: reason, canonical: canonical}},
+         {:unsupported_media, %{reason: reason, image_count: image_count, canonical: canonical}},
          invocation,
          raw_thread,
          dependencies
-       ),
-       do: persist_capability_handoff(invocation, raw_thread, canonical, reason, dependencies)
+       ) do
+    with :ok <-
+           persist_capability_handoff(invocation, raw_thread, canonical, reason, dependencies) do
+      {:media_capture, media_disposition(reason), image_count}
+    end
+  end
 
   defp handle_canonicalization(
          {:error, :target_unavailable},
@@ -326,6 +343,9 @@ defmodule ContextBot.Workers.ThreadWorker do
 
   defp capability_reply(:video), do: @video_reply
   defp capability_reply(:image_limit_exceeded), do: @image_limit_reply
+
+  defp media_disposition(:video), do: :video_unsupported
+  defp media_disposition(:image_limit_exceeded), do: :image_limit_exceeded
 
   defp capability_validation(reason) do
     %{

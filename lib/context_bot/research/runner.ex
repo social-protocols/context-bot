@@ -21,6 +21,7 @@ defmodule ContextBot.Research.Runner do
     ResponseEnvelope
   }
 
+  alias ContextBot.Thread.Media
   alias ContextBot.Workflow.{Invocation, Store}
 
   @http_date_regex ~r/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (?<day>\d{2}) (?<month>Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (?<year>\d{4}) (?<hour>\d{2}):(?<minute>\d{2}):(?<second>\d{2}) GMT$/
@@ -414,7 +415,7 @@ defmodule ContextBot.Research.Runner do
          canonical_media: media
        })
        when is_binary(text) and text != "" and is_list(media) do
-    if Enum.all?(media, &valid_canonical_image?/1) do
+    if Media.validate(media) == :ok do
       {:ok, %{"version" => 2, "text" => text, "media" => media}}
     else
       {:error, :invalid_canonical_thread}
@@ -422,12 +423,6 @@ defmodule ContextBot.Research.Runner do
   end
 
   defp canonical_snapshot(_invocation), do: {:error, :invalid_canonical_thread}
-
-  defp valid_canonical_image?(%{"type" => "image", "url" => url})
-       when is_binary(url) and url != "",
-       do: true
-
-  defp valid_canonical_image?(_media), do: false
 
   defp latest_attempt(invocation) do
     BudgetEntry

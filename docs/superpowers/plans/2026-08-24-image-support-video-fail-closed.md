@@ -93,11 +93,14 @@ Add tests that direct and `recordWithMedia` video embeds return a typed
 `{:unsupported_media, result}` with `:video`, and that five images return the corresponding
 `:image_limit_exceeded` result. Assert video takes precedence when both are present.
 
+Cover the current `app.bsky.embed.gallery#view` lexicon with a valid five-item gallery, external and
+gallery media nested in `recordWithMedia`, and fail-closed behavior for unknown embed unions.
+
 ### Step 4: Implement one deterministic media scan
 
 Refactor rendering so each available post is scanned once in root-to-invocation order. Keep external
-and quoted-post text behavior, number accepted images globally, validate exact CDN URLs, cap counts
-and serialized fields, and return one of:
+and quoted-post text behavior, inspect gallery/image/video/external media unions, number accepted
+images globally, validate exact CDN URLs, cap counts and serialized fields, and return one of:
 
 - `{:ok, canonical_v2}`;
 - `{:unsupported_media, canonical_v2_with_disposition}`; or
@@ -169,6 +172,8 @@ Expected before implementation: the runner hard-codes version 1 and omits media.
 
 Parse only supported canonical version strings, pass the stored media list, and fail safely for an
 unknown or malformed canonical snapshot. Never rebuild a non-nil `anthropic_messages` request.
+Use the same pure media validator as capture so recovery rechecks exact fields, sequence, post URI,
+CDN URL, count, per-field size, and aggregate size before budget reservation.
 
 ### Step 6: Update workflow expectations and run the research suite
 

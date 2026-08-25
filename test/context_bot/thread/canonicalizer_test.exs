@@ -138,6 +138,82 @@ defmodule ContextBot.Thread.CanonicalizerTest do
     refute result.text =~ "QUOTED POST BODY"
   end
 
+  test "recognizes gallery images directly and through record-with-media" do
+    base = fixture("thread_ancestors.json")
+
+    direct =
+      put_in(base, ["thread", "post", "embed"], %{
+        "$type" => "app.bsky.embed.gallery#view",
+        "items" => [
+          gallery_image("did:plc:alice", "bafkreigallery1", "Gallery one"),
+          gallery_image("did:plc:alice", "bafkreigallery2", "Gallery two")
+        ]
+      })
+
+    assert {:ok, direct_result} = Canonicalizer.build(direct, context())
+
+    assert Enum.map(direct_result.media, &{&1["index"], &1["alt"]}) == [
+             {1, "Gallery one"},
+             {2, "Gallery two"}
+           ]
+
+    nested =
+      put_in(direct, ["thread", "post", "embed"], %{
+        "$type" => "app.bsky.embed.recordWithMedia#view",
+        "record" => get_in(base, ["thread", "parent", "post", "embed"]),
+        "media" => get_in(direct, ["thread", "post", "embed"])
+      })
+
+    assert {:ok, nested_result} = Canonicalizer.build(nested, context())
+    assert Enum.map(nested_result.media, & &1["alt"]) == ["Gallery one", "Gallery two"]
+    assert nested_result.text =~ "Quoted post URI: at://did:plc:quoted/app.bsky.feed.post/quoted"
+  end
+
+  test "accepts an external card inside record-with-media and fails closed on unknown embed unions" do
+    base = fixture("thread_ancestors.json")
+    quoted_record = get_in(base, ["thread", "parent", "post", "embed"])
+
+    nested_external =
+      put_in(base, ["thread", "post", "embed"], %{
+        "$type" => "app.bsky.embed.recordWithMedia#view",
+        "record" => quoted_record,
+        "media" => %{
+          "$type" => "app.bsky.embed.external#view",
+          "external" => %{"title" => "Source card", "uri" => "https://example.com/source"}
+        }
+      })
+
+    assert {:ok, result} = Canonicalizer.build(nested_external, context())
+    assert result.media == []
+    assert result.text =~ "External link: Source card"
+
+    unknown_direct =
+      put_in(base, ["thread", "post", "embed"], %{
+        "$type" => "app.bsky.embed.futureMedia#view",
+        "opaque" => %{"url" => "https://untrusted.example/media"}
+      })
+
+    assert {:error, :invalid_thread} = Canonicalizer.build(unknown_direct, context())
+
+    unknown_nested =
+      put_in(nested_external, ["thread", "post", "embed", "media"], %{
+        "$type" => "app.bsky.embed.futureMedia#view"
+      })
+
+    assert {:error, :invalid_thread} = Canonicalizer.build(unknown_nested, context())
+
+    unknown_gallery_item =
+      put_in(base, ["thread", "post", "embed"], %{
+        "$type" => "app.bsky.embed.gallery#view",
+        "items" => [
+          gallery_image("did:plc:alice", "bafkreifuture", "Future item")
+          |> Map.put("$type", "app.bsky.embed.gallery#futureViewItem")
+        ]
+      })
+
+    assert {:error, :invalid_thread} = Canonicalizer.build(unknown_gallery_item, context())
+  end
+
   test "rejects malformed or untrusted image descriptors" do
     base = fixture("thread_ancestors.json")
 
@@ -204,14 +280,14 @@ defmodule ContextBot.Thread.CanonicalizerTest do
 
     five_images =
       Enum.map(1..5, fn index ->
-        %{
-          "alt" => "Image #{index}",
-          "fullsize" =>
-            "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:alice/bafkrei#{index}@jpeg"
-        }
+        gallery_image("did:plc:alice", "bafkrei#{index}", "Image #{index}")
       end)
 
-    over_limit = put_in(base, ["thread", "post", "embed", "images"], five_images)
+    over_limit =
+      put_in(base, ["thread", "post", "embed"], %{
+        "$type" => "app.bsky.embed.gallery#view",
+        "items" => five_images
+      })
 
     assert {:unsupported_media, %{reason: :image_limit_exceeded, canonical: %{media: media}}} =
              Canonicalizer.build(over_limit, context())
@@ -455,6 +531,16 @@ defmodule ContextBot.Thread.CanonicalizerTest do
           "fullsize" => "https://cdn.bsky.app/img/feed_fullsize/plain/#{did}/#{cid}@jpeg"
         }
       ]
+    }
+  end
+
+  defp gallery_image(did, cid, alt) do
+    %{
+      "$type" => "app.bsky.embed.gallery#viewImage",
+      "alt" => alt,
+      "aspectRatio" => %{"height" => 1, "width" => 1},
+      "fullsize" => "https://cdn.bsky.app/img/feed_fullsize/plain/#{did}/#{cid}@jpeg",
+      "thumbnail" => "https://cdn.bsky.app/img/feed_thumbnail/plain/#{did}/#{cid}@jpeg"
     }
   end
 

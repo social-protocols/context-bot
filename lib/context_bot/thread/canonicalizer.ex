@@ -7,6 +7,7 @@ defmodule ContextBot.Thread.Canonicalizer do
   """
 
   alias ContextBot.ATProto.{ATURI, StrongRef}
+  alias ContextBot.Thread.Media
 
   @thread_view_post "app.bsky.feed.defs#threadViewPost"
   @blocked_post "app.bsky.feed.defs#blockedPost"
@@ -14,16 +15,12 @@ defmodule ContextBot.Thread.Canonicalizer do
   @post_record "app.bsky.feed.post"
   @mention_feature "app.bsky.richtext.facet#mention"
   @external_view "app.bsky.embed.external#view"
+  @gallery_view "app.bsky.embed.gallery#view"
+  @gallery_image_view "app.bsky.embed.gallery#viewImage"
   @images_view "app.bsky.embed.images#view"
   @record_view "app.bsky.embed.record#view"
   @record_with_media_view "app.bsky.embed.recordWithMedia#view"
   @video_view "app.bsky.embed.video#view"
-  @max_images 4
-  @max_image_url_bytes 2_048
-  @max_image_alt_bytes 4_096
-  @max_canonical_media_bytes 32_768
-  @image_cdn_host "cdn.bsky.app"
-  @image_path_prefix "/img/feed_fullsize/plain/"
 
   @type strong_ref :: %{required(String.t()) => String.t()}
 
@@ -51,6 +48,7 @@ defmodule ContextBot.Thread.Canonicalizer do
 
   @type unsupported_result :: %{
           reason: :video | :image_limit_exceeded,
+          image_count: non_neg_integer(),
           canonical: result()
         }
 
@@ -245,8 +243,8 @@ defmodule ContextBot.Thread.Canonicalizer do
       end) ++ [{:post, target_post, target_kind}]
 
     with {:ok, scan} <- scan_entries(entries),
-         media = Enum.take(scan.media, @max_images),
-         :ok <- within_media_limit(media) do
+         media = Enum.take(scan.media, Media.max_images()),
+         :ok <- Media.validate(media) do
       sections =
         if is_binary(invocation_text),
           do: scan.sections ++ [render_dry_run_invocation(invocation_text)],
@@ -263,10 +261,16 @@ defmodule ContextBot.Thread.Canonicalizer do
 
       cond do
         scan.video? ->
-          {:unsupported_media, %{reason: :video, canonical: canonical}}
+          {:unsupported_media,
+           %{reason: :video, image_count: length(scan.media), canonical: canonical}}
 
-        length(scan.media) > @max_images ->
-          {:unsupported_media, %{reason: :image_limit_exceeded, canonical: canonical}}
+        length(scan.media) > Media.max_images() ->
+          {:unsupported_media,
+           %{
+             reason: :image_limit_exceeded,
+             image_count: length(scan.media),
+             canonical: canonical
+           }}
 
         true ->
           {:ok, canonical}
@@ -371,6 +375,16 @@ defmodule ContextBot.Thread.Canonicalizer do
   defp inspect_embed(%{"$type" => @images_view}, _post_uri),
     do: {:error, :invalid_image_embed}
 
+  defp inspect_embed(%{"$type" => @gallery_view, "items" => items}, post_uri)
+       when is_list(items) do
+    with {:ok, descriptors} <- validate_gallery_images(items, post_uri) do
+      {:ok, %{lines: [], images: descriptors, video?: false}}
+    end
+  end
+
+  defp inspect_embed(%{"$type" => @gallery_view}, _post_uri),
+    do: {:error, :invalid_gallery_embed}
+
   defp inspect_embed(%{"$type" => @video_view}, _post_uri) do
     {:ok, %{lines: ["Video: present"], images: [], video?: true}}
   end
@@ -388,15 +402,15 @@ defmodule ContextBot.Thread.Canonicalizer do
   defp inspect_embed(%{"$type" => @record_with_media_view}, _post_uri),
     do: {:error, :invalid_media_embed}
 
-  defp inspect_embed(_media_or_unknown, _post_uri), do: empty_embed()
+  defp inspect_embed(_media_or_unknown, _post_uri), do: {:error, :invalid_media_embed}
 
   defp inspect_record(%{"$type" => @record_view} = record, post_uri),
     do: inspect_embed(record, post_uri)
 
-  defp inspect_record(_unknown_record, _post_uri), do: empty_embed()
+  defp inspect_record(_unknown_record, _post_uri), do: {:error, :invalid_media_embed}
 
   defp inspect_media(%{"$type" => type} = media, post_uri)
-       when type in [@images_view, @video_view],
+       when type in [@external_view, @gallery_view, @images_view, @video_view],
        do: inspect_embed(media, post_uri)
 
   defp inspect_media(_unknown_media, _post_uri), do: {:error, :invalid_media_embed}
@@ -420,49 +434,20 @@ defmodule ContextBot.Thread.Canonicalizer do
     end)
   end
 
-  defp validate_image(%{"fullsize" => url, "alt" => alt}, post_uri)
-       when is_binary(url) and is_binary(alt) and is_binary(post_uri) do
-    with :ok <- valid_alt(alt),
-         :ok <- valid_image_url(url) do
-      {:ok,
-       %{
-         "type" => "image",
-         "post_uri" => post_uri,
-         "url" => url,
-         "alt" => alt
-       }}
-    end
+  defp validate_gallery_images(images, post_uri) do
+    Enum.reduce_while(images, {:ok, []}, fn
+      %{"$type" => @gallery_image_view} = image, {:ok, descriptors} ->
+        case validate_image(image, post_uri) do
+          {:ok, descriptor} -> {:cont, {:ok, descriptors ++ [descriptor]}}
+          {:error, _reason} = error -> {:halt, error}
+        end
+
+      _unknown_item, {:ok, _descriptors} ->
+        {:halt, {:error, :invalid_gallery_item}}
+    end)
   end
 
-  defp validate_image(_image, _post_uri), do: {:error, :invalid_image}
-
-  defp valid_alt(alt) do
-    if String.valid?(alt) and byte_size(alt) <= @max_image_alt_bytes,
-      do: :ok,
-      else: {:error, :invalid_image_alt}
-  end
-
-  defp valid_image_url(url) when byte_size(url) <= @max_image_url_bytes do
-    with {:ok,
-          %URI{
-            scheme: "https",
-            host: @image_cdn_host,
-            userinfo: nil,
-            fragment: nil,
-            port: 443,
-            query: nil,
-            path: path
-          }}
-         when is_binary(path) <- URI.new(url),
-         true <- String.starts_with?(path, @image_path_prefix),
-         true <- byte_size(path) > byte_size(@image_path_prefix) do
-      :ok
-    else
-      _invalid_url -> {:error, :invalid_image_url}
-    end
-  end
-
-  defp valid_image_url(_url), do: {:error, :invalid_image_url}
+  defp validate_image(image, post_uri), do: Media.descriptor(image, post_uri)
 
   defp render_image_lines([]), do: []
 
@@ -476,13 +461,6 @@ defmodule ContextBot.Thread.Canonicalizer do
   defp render_image_line(%{"index" => index, "alt" => alt}) do
     normalized_alt = String.replace(alt, ~r/\R/u, " ")
     "- [image #{index}] Alt text: #{normalized_alt}"
-  end
-
-  defp within_media_limit(media) do
-    case Jason.encode(media) do
-      {:ok, encoded} when byte_size(encoded) <= @max_canonical_media_bytes -> :ok
-      _invalid_or_oversized -> {:error, :invalid_media}
-    end
   end
 
   defp optional_nonempty(map, key) do

@@ -102,6 +102,57 @@ defmodule ContextBot.Research.RunnerTest do
     assert Repo.reload!(invocation).anthropic_messages == request
   end
 
+  test "rejects malformed persisted canonical media before budget or provider work" do
+    valid = %{
+      "type" => "image",
+      "index" => 1,
+      "post_uri" => "at://did:plc:actor/app.bsky.feed.post/media-validation",
+      "url" => "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:actor/bafkreivalid@jpeg",
+      "alt" => "Valid"
+    }
+
+    long_did = "did:plc:" <> String.duplicate("a", 1_950)
+
+    oversized =
+      Enum.map(1..4, fn index ->
+        %{
+          "type" => "image",
+          "index" => index,
+          "post_uri" =>
+            "at://#{long_did}/app.bsky.feed.post/#{String.duplicate("r", 500)}#{index}",
+          "url" =>
+            "https://cdn.bsky.app/img/feed_fullsize/plain/#{String.duplicate("u", 1_990)}#{index}",
+          "alt" => String.duplicate("a", 4_096)
+        }
+      end)
+
+    invalid_media = [
+      [Map.put(valid, "url", "https://example.com/img/feed_fullsize/plain/a/b@jpeg")],
+      Enum.map(1..5, &Map.put(valid, "index", &1)),
+      [Map.delete(valid, "alt")],
+      [Map.put(valid, "index", 2)],
+      [Map.put(valid, "alt", String.duplicate("a", 4_097))],
+      oversized
+    ]
+
+    Process.put(:runner_client_results, [])
+
+    Enum.with_index(invalid_media, 1)
+    |> Enum.each(fn {media, index} ->
+      invocation =
+        invocation("invalid-media-#{index}", %{
+          canonical_thread: "CONTEXT_BOT_THREAD_V2\n\nInvalid stored media",
+          canonical_thread_version: "2",
+          canonical_media: media
+        })
+
+      assert {:error, :invalid_canonical_thread} = Runner.run(invocation, options())
+    end)
+
+    assert Repo.aggregate(BudgetEntry, :count) == 0
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+  end
+
   test "commits a complete 200 envelope and sent marker before decoding" do
     invocation = invocation("persist-before-decode")
     raw_body = fixture("tool_success.json")
