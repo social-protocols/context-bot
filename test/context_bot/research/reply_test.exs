@@ -250,6 +250,20 @@ defmodule ContextBot.Research.ReplyTest do
     end)
   end
 
+  test "accepts replies between prompt target and hard cap without repair" do
+    at_251 = String.duplicate("a", 251)
+    at_280 = String.duplicate("a", 280)
+    at_300 = String.duplicate("a", 300)
+
+    assert String.length(at_251) == 251
+    assert String.length(at_280) == 280
+    assert String.length(at_300) == 300
+
+    assert Reply.select([text(at_251)], "end_turn") == {:ok, at_251}
+    assert Reply.select([text(at_280)], "end_turn") == {:ok, at_280}
+    assert Reply.select([text(at_300)], "end_turn") == {:ok, at_300}
+  end
+
   test "classifies over-limit normal completions as repairable without truncating" do
     over_graphemes = String.duplicate("a", 301)
     over_bytes = String.duplicate("👩‍💻", 272) <> String.duplicate("a", 9)

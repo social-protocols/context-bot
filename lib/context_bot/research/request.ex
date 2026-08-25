@@ -3,6 +3,10 @@ defmodule ContextBot.Research.Request do
   Pure construction of cache-compatible Anthropic Messages conversations.
   """
 
+  alias ContextBot.Research.ReplyLimits
+
+  @prompt_target_graphemes ReplyLimits.prompt_target_graphemes()
+
   @system_prompt """
   CONTEXT_BOT_SYSTEM_V2
 
@@ -21,17 +25,17 @@ defmodule ContextBot.Research.Request do
   provenance and corroborating sources. Do not claim that an image is AI-generated from visual
   appearance alone; state when the available evidence cannot establish synthetic origin.
 
-  Use the smallest amount of web research sufficient for a defensible reply of at most 300
+  Use the smallest amount of web research sufficient for a defensible reply of at most #{@prompt_target_graphemes}
   characters. Stop researching once the material claim is adequately supported or qualified.
 
   Return only the exact text intended for the Bluesky reply, with no preamble, analysis, research
   notes, labels, markers, or audit suffix. The complete reply must be nonempty, plain text, and at
-  most 300 Unicode grapheme clusters. Do not shorten a factual claim by truncating it.
+  most #{@prompt_target_graphemes} Unicode grapheme clusters. Do not shorten a factual claim by truncating it.
   """
   @length_repair """
   LENGTH_REPAIR
   Return only the reply text, with no preamble, labels, markers, or audit suffix. It must be
-  nonempty plain text of at most 300 Unicode grapheme clusters and at most 3,000 UTF-8 bytes.
+  nonempty plain text of at most #{@prompt_target_graphemes} Unicode grapheme clusters and at most 3,000 UTF-8 bytes.
   Do not perform additional research and do not use any tool. Rewrite the completed answer to fit;
   never truncate it.
   """

@@ -7,8 +7,10 @@ defmodule ContextBot.Research.Reply do
   `stop_sequence`; unknown values fail closed.
   """
 
-  @max_graphemes 300
-  @max_bytes 3_000
+  alias ContextBot.Research.ReplyLimits
+
+  @hard_max_graphemes ReplyLimits.hard_max_graphemes()
+  @max_bytes ReplyLimits.max_bytes()
 
   @type reason :: atom() | {atom(), term()}
   @type server_tool_name :: String.t()
@@ -513,7 +515,7 @@ defmodule ContextBot.Research.Reply do
 
   defp limit_reasons(text) do
     []
-    |> maybe_add_reason(String.length(text) > @max_graphemes, :too_many_graphemes)
+    |> maybe_add_reason(String.length(text) > @hard_max_graphemes, :too_many_graphemes)
     |> maybe_add_reason(byte_size(text) > @max_bytes, :too_many_bytes)
   end
 
