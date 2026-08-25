@@ -289,7 +289,7 @@ defmodule ContextBot.Workers.ReplyWorker do
     end
   end
 
-  defp reconcile_part2(invocation, token, part1_uri, part1_cid, completed_at) do
+  defp reconcile_part2(invocation, token, part1_uri, part1_cid, _completed_at) do
     dependencies = dependencies(%Oban.Job{attempt: 1, max_attempts: 10})
 
     case Store.renew_publication_claim(invocation, token, dependencies.now.()) do
@@ -311,13 +311,10 @@ defmodule ContextBot.Workers.ReplyWorker do
 
       :conflict ->
         {:error, :part2_conflict}
-
-      _other ->
-        {:error, :part2_failed}
     end
   end
 
-  defp put_part2_record(invocation, dependencies, part1_uri, part1_cid) do
+  defp put_part2_record(invocation, dependencies, _part1_uri, _part1_cid) do
     case dependencies.client.put_record(
            invocation.reply_repo,
            @collection,
