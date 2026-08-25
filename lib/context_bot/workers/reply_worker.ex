@@ -248,6 +248,14 @@ defmodule ContextBot.Workers.ReplyWorker do
   end
 
   defp complete(invocation, token, uri, cid, completed_at) do
+    if has_part2?(invocation) do
+      publish_part2(invocation, token, uri, cid, completed_at)
+    else
+      complete_single_part(invocation, token, uri, cid, completed_at)
+    end
+  end
+
+  defp complete_single_part(invocation, token, uri, cid, completed_at) do
     transition_terminal(
       invocation,
       token,
@@ -256,6 +264,126 @@ defmodule ContextBot.Workers.ReplyWorker do
       completed_at
     )
   end
+
+  defp publish_part2(invocation, token, part1_uri, part1_cid, part1_completed_at) do
+    case reconcile_part2(invocation, token, part1_uri, part1_cid, part1_completed_at) do
+      {:ok, part2_uri, part2_cid} ->
+        transition_terminal(
+          invocation,
+          token,
+          :complete,
+          %{
+            reply_uri: part1_uri,
+            reply_cid: part1_cid,
+            reply_part2_uri: part2_uri,
+            reply_part2_cid: part2_cid
+          },
+          part1_completed_at
+        )
+
+      :stale_claim ->
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp reconcile_part2(invocation, token, part1_uri, part1_cid, completed_at) do
+    dependencies = dependencies(%Oban.Job{attempt: 1, max_attempts: 10})
+
+    case Store.renew_publication_claim(invocation, token, dependencies.now.()) do
+      {:ok, current} ->
+        publish_part2_record(current, dependencies, part1_uri, part1_cid)
+
+      {:error, :stale_claim} ->
+        :stale_claim
+    end
+  end
+
+  defp publish_part2_record(invocation, dependencies, part1_uri, part1_cid) do
+    case get_part2_record(invocation, dependencies.client) do
+      {:match, uri, cid} ->
+        {:ok, uri, cid}
+
+      :missing ->
+        put_part2_record(invocation, dependencies, part1_uri, part1_cid)
+
+      :conflict ->
+        {:error, :part2_conflict}
+
+      _other ->
+        {:error, :part2_failed}
+    end
+  end
+
+  defp put_part2_record(invocation, dependencies, part1_uri, part1_cid) do
+    case dependencies.client.put_record(
+           invocation.reply_repo,
+           @collection,
+           invocation.reply_part2_rkey,
+           invocation.reply_part2_record
+         ) do
+      {:ok, status, _headers, _body} when status in 200..299 ->
+        reconcile_part2_after_put(invocation, dependencies.client)
+
+      {:error, _reason} ->
+        {:error, :part2_put_failed}
+
+      _invalid ->
+        {:error, :part2_invalid_response}
+    end
+  end
+
+  defp reconcile_part2_after_put(invocation, client) do
+    case get_part2_record(invocation, client) do
+      {:match, uri, cid} ->
+        {:ok, uri, cid}
+
+      _other ->
+        {:error, :part2_reconciliation_failed}
+    end
+  end
+
+  defp get_part2_record(invocation, client) do
+    case client.get_record(invocation.reply_repo, @collection, invocation.reply_part2_rkey) do
+      {:ok, status, _headers, body} when status in 200..299 ->
+        compare_part2_record(
+          body,
+          invocation.reply_repo,
+          invocation.reply_part2_rkey,
+          invocation.reply_part2_record
+        )
+
+      {:error, :record_not_found} ->
+        :missing
+
+      {:error, _reason} ->
+        :conflict
+
+      _invalid ->
+        :conflict
+    end
+  end
+
+  defp compare_part2_record(body, repo, rkey, intended_record) do
+    expected_uri = "at://#{repo}/#{@collection}/#{rkey}"
+
+    case body do
+      %{"uri" => ^expected_uri, "cid" => cid, "value" => ^intended_record}
+      when is_binary(cid) and cid != "" ->
+        {:match, expected_uri, cid}
+
+      %{} ->
+        :conflict
+
+      _invalid ->
+        :conflict
+    end
+  end
+
+  defp has_part2?(%Invocation{reply_part2_record: record}) when is_map(record), do: true
+  defp has_part2?(_invocation), do: false
 
   defp fail_auth(invocation, token, completed_at) do
     transition_terminal(

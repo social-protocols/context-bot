@@ -7,7 +7,7 @@ defmodule ContextBot.Research.ReplyLimits do
   graphemes. A byte ceiling provides additional safety against unexpectedly large posts.
   """
 
-  @prompt_target_graphemes 250
+  @prompt_target_graphemes 275
   @hard_max_graphemes 300
   @max_bytes 3_000
 

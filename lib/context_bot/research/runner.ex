@@ -294,9 +294,44 @@ defmodule ContextBot.Research.Runner do
 
   defp handle_repairable(invocation, decoded, config) do
     cond do
-      not repair_request?(invocation) -> start_repair(invocation, decoded, config)
-      repair_attempted?(invocation) -> {:error, :invalid_repair}
-      true -> start_attempt(invocation, :repair, config)
+      not repair_request?(invocation) ->
+        start_repair(invocation, decoded, config)
+
+      repair_attempted?(invocation) ->
+        attempt_split_or_fail(invocation, decoded, config)
+
+      true ->
+        start_attempt(invocation, :repair, config)
+    end
+  end
+
+  defp attempt_split_or_fail(invocation, %{"content" => content}, config) do
+    with {:ok, text, _reasons} <- extract_repairable_text(content, invocation),
+         {:ok, part1, part2} <- Reply.split_text(text) do
+      {:ok,
+       %{
+         messages: invocation.anthropic_messages,
+         text: part1,
+         text_part2: part2,
+         usage: usage_evidence(invocation, config),
+         validation: %{
+           "result" => "split",
+           "repair_used" => true,
+           "part1_graphemes" => String.length(part1),
+           "part2_graphemes" => String.length(part2)
+         }
+       }}
+    else
+      _failed -> {:error, :invalid_repair}
+    end
+  end
+
+  defp attempt_split_or_fail(_invocation, _decoded, _config), do: {:error, :invalid_repair}
+
+  defp extract_repairable_text(content, invocation) do
+    case select_reply(%{"content" => content, "stop_reason" => "end_turn"}, invocation) do
+      {:repairable, text, reasons} -> {:ok, text, reasons}
+      _other -> :error
     end
   end
 
