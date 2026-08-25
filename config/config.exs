@@ -37,6 +37,9 @@ config :logger, :default_handler,
   config: [type: :standard_error],
   formatter: {ContextBot.Logging.JSONFormatter, %{}}
 
+# Disable Phoenix.Logger to prevent empty logger_event noise from HTTP requests
+config :phoenix, :logger, false
+
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 

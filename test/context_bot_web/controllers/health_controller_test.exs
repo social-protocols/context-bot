@@ -1,6 +1,8 @@
 defmodule ContextBotWeb.HealthControllerTest do
   use ContextBotWeb.ConnCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias ContextBot.Operations
   alias ContextBot.Settings
 
@@ -53,5 +55,28 @@ defmodule ContextBotWeb.HealthControllerTest do
     assert body["status"] == "ok"
     assert body["bot"] == %{"enabled" => true, "session" => "unavailable"}
     refute Jason.encode!(body) =~ "secret provider failure"
+  end
+
+  test "GET /health does not emit Phoenix HTTP request logger_event noise", %{conn: conn} do
+    Application.put_env(:context_bot, Operations,
+      now: ~U[2026-07-31 12:00:00Z],
+      settings: Settings.load(bot_enabled: false)
+    )
+
+    logs =
+      capture_log(fn ->
+        conn = get(conn, ~p"/health")
+        assert json_response(conn, 200)["status"] == "ok"
+      end)
+
+    parsed_logs =
+      logs
+      |> String.split("\n", trim: true)
+      |> Enum.map(&Jason.decode!/1)
+
+    logger_events = Enum.filter(parsed_logs, &(&1["message"] == "logger_event"))
+
+    assert logger_events == [],
+           "Expected no logger_event entries for /health requests, but got: #{inspect(logger_events)}"
   end
 end
