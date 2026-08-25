@@ -158,7 +158,7 @@ defmodule ContextBot.DryRunWorkflowTest do
 
     Req.Test.stub(AnthropicClient, fn conn ->
       assert conn.method == "POST"
-      
+
       Req.Test.json(conn, %{
         "id" => "msg_video",
         "type" => "message",
