@@ -67,6 +67,40 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     :ok
   end
 
+  test "skips Anthropic and returns deterministic reply when video is detected" do
+    invocation = invocation("video_detected", :thread_ready, contains_video: true)
+
+    settings =
+      Settings.load(bot_did: @bot_did, anthropic_daily_budget_usd: "20.000000")
+
+    configure_worker(
+      runner: Runner,
+      runner_options: [],
+      settings: settings
+    )
+
+    configure_runner(test_pid: self(), result: {:error, :should_not_be_called})
+
+    assert :ok = perform(invocation)
+    refute_received {:runner_called, _, _, _}
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :reply_ready
+
+    assert persisted.selected_reply ==
+             "I can't analyze videos yet, so I can't reliably answer a question that may depend on this clip."
+
+    assert persisted.reply_validation == %{
+             "valid" => true,
+             "reason" => "video_unavailable_deterministic"
+           }
+
+    assert persisted.anthropic_messages == %{"messages" => []}
+    assert persisted.anthropic_usage == %{}
+    assert persisted.reply_record["text"] == persisted.selected_reply
+    assert [%Oban.Job{worker: "ContextBot.Workers.ReplyWorker"}] = Repo.all(Oban.Job)
+  end
+
   test "integrates the real durable runner and remains idempotent under a duplicate job" do
     invocation = invocation("integrated", :thread_ready)
     body = fixture("tool_success.json")

@@ -15,6 +15,7 @@ defmodule ContextBot.Thread.CanonicalizerTest do
     assert result == %{
              version: 1,
              current_cid: "bafy-invocation-v1",
+             contains_video: false,
              parent: %{
                "uri" => @invocation_uri,
                "cid" => "bafy-invocation-v1"
@@ -286,6 +287,83 @@ defmodule ContextBot.Thread.CanonicalizerTest do
     Enum.each(invalid_targets, fn response ->
       assert safely_build(response) == {:error, :invalid_thread}
     end)
+  end
+
+  test "detects video embed in invocation post" do
+    thread = fixture("thread_ancestors.json")
+
+    video_thread =
+      put_in(
+        thread,
+        ["thread", "post", "embed"],
+        %{"$type" => "app.bsky.embed.video#view", "cid" => "bafy-video"}
+      )
+
+    assert {:ok, result} = Canonicalizer.build(video_thread, context())
+    assert result.contains_video == true
+  end
+
+  test "detects video embed in ancestor post" do
+    thread = fixture("thread_ancestors.json")
+
+    video_thread =
+      put_in(
+        thread,
+        ["thread", "parent", "post", "embed"],
+        %{"$type" => "app.bsky.embed.video#view", "cid" => "bafy-video"}
+      )
+
+    assert {:ok, result} = Canonicalizer.build(video_thread, context())
+    assert result.contains_video == true
+  end
+
+  test "detects video embed in recordWithMedia" do
+    thread = fixture("thread_ancestors.json")
+
+    video_thread =
+      put_in(
+        thread,
+        ["thread", "post", "embed"],
+        %{
+          "$type" => "app.bsky.embed.recordWithMedia#view",
+          "record" => %{
+            "$type" => "app.bsky.embed.record#view",
+            "record" => %{"uri" => "at://quoted/post/1"}
+          },
+          "media" => %{"$type" => "app.bsky.embed.video#view", "cid" => "bafy-video"}
+        }
+      )
+
+    assert {:ok, result} = Canonicalizer.build(video_thread, context())
+    assert result.contains_video == true
+  end
+
+  test "reports no video when thread contains only images and links" do
+    thread = fixture("thread_ancestors.json")
+
+    assert {:ok, result} = Canonicalizer.build(thread, context())
+    assert result.contains_video == false
+  end
+
+  test "dry-run detects video in target post" do
+    thread = fixture("thread_ancestors.json")
+
+    video_thread =
+      put_in(
+        thread,
+        ["thread", "post", "embed"],
+        %{"$type" => "app.bsky.embed.video#view", "cid" => "bafy-video"}
+      )
+
+    assert {:ok, result} = Canonicalizer.build_dry_run(video_thread, dry_run_context())
+    assert result.contains_video == true
+  end
+
+  test "dry-run reports no video when thread contains no video embeds" do
+    thread = fixture("thread_ancestors.json")
+
+    assert {:ok, result} = Canonicalizer.build_dry_run(thread, dry_run_context())
+    assert result.contains_video == false
   end
 
   defp context(overrides \\ []) do

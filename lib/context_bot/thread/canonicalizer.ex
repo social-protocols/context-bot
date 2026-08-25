@@ -15,6 +15,7 @@ defmodule ContextBot.Thread.Canonicalizer do
   @external_view "app.bsky.embed.external#view"
   @record_view "app.bsky.embed.record#view"
   @record_with_media_view "app.bsky.embed.recordWithMedia#view"
+  @video_view "app.bsky.embed.video#view"
 
   @type strong_ref :: %{required(String.t()) => String.t()}
 
@@ -36,7 +37,8 @@ defmodule ContextBot.Thread.Canonicalizer do
           text: String.t(),
           parent: strong_ref(),
           root: strong_ref(),
-          current_cid: String.t()
+          current_cid: String.t(),
+          contains_video: boolean()
         }
 
   @spec build(map(), context()) ::
@@ -62,13 +64,16 @@ defmodule ContextBot.Thread.Canonicalizer do
       sections =
         Enum.map(ancestors, &render_ancestor/1) ++ [render_post(target_post, "invocation")]
 
+      contains_video = video_in_thread?(target_post, ancestors)
+
       {:ok,
        %{
          version: 1,
          text: Enum.join(["CONTEXT_BOT_THREAD_V1" | sections], "\n\n"),
          parent: parent,
          root: root,
-         current_cid: target_post.cid
+         current_cid: target_post.cid,
+         contains_video: contains_video
        }}
     else
       {:error, :edited_away} -> {:error, :target_unavailable}
@@ -105,13 +110,16 @@ defmodule ContextBot.Thread.Canonicalizer do
         Enum.map(ancestors, &render_ancestor/1) ++
           [render_post(target_post, "target"), render_dry_run_invocation(invocation_text)]
 
+      contains_video = video_in_thread?(target_post, ancestors)
+
       {:ok,
        %{
          version: 1,
          text: Enum.join(["CONTEXT_BOT_THREAD_V1" | sections], "\n\n"),
          parent: parent,
          root: root,
-         current_cid: target_post.cid
+         current_cid: target_post.cid,
+         contains_video: contains_video
        }}
     else
       {:error, _reason} -> {:error, :invalid_thread}
@@ -272,6 +280,21 @@ defmodule ContextBot.Thread.Canonicalizer do
   end
 
   defp embed_lines(_media_or_unknown), do: []
+
+  defp video_in_thread?(target_post, ancestors) do
+    has_video_embed?(target_post.embed) or
+      Enum.any?(ancestors, fn
+        {:post, post} -> has_video_embed?(post.embed)
+        _non_post -> false
+      end)
+  end
+
+  defp has_video_embed?(%{"$type" => @video_view}), do: true
+
+  defp has_video_embed?(%{"$type" => @record_with_media_view, "media" => media}),
+    do: has_video_embed?(media)
+
+  defp has_video_embed?(_other), do: false
 
   defp optional_nonempty(map, key) do
     case Map.get(map, key) do

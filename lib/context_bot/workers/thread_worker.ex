@@ -168,6 +168,7 @@ defmodule ContextBot.Workers.ThreadWorker do
       raw_thread: raw_thread,
       canonical_thread: canonical.text,
       canonical_thread_version: Integer.to_string(canonical.version),
+      contains_video: canonical.contains_video,
       root_uri: canonical.root["uri"],
       root_cid: canonical.root["cid"],
       current_cid: canonical.current_cid

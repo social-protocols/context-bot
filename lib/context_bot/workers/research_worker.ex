@@ -73,26 +73,33 @@ defmodule ContextBot.Workers.ResearchWorker do
   end
 
   defp run(invocation, token, dependencies) do
-    options =
-      dependencies.runner_options
-      |> put_runner_setting(dependencies.settings)
-      |> put_runner_claim(token)
-
-    case dependencies.runner.run(invocation, options) do
-      {:ok, result} ->
+    case invocation.contains_video do
+      true ->
+        result = video_unavailable_result()
         freeze_handoff(Repo.reload!(invocation), result, token, dependencies)
 
-      {:deferred, %DateTime{} = defer_until, kind} ->
-        defer_budget(invocation, defer_until, kind, token)
+      _no_video ->
+        options =
+          dependencies.runner_options
+          |> put_runner_setting(dependencies.settings)
+          |> put_runner_claim(token)
 
-      {:deferred, %DateTime{} = defer_until} ->
-        defer_budget(invocation, defer_until, :research, token)
+        case dependencies.runner.run(invocation, options) do
+          {:ok, result} ->
+            freeze_handoff(Repo.reload!(invocation), result, token, dependencies)
 
-      {:error, :stale_claim} ->
-        :ok
+          {:deferred, %DateTime{} = defer_until, kind} ->
+            defer_budget(invocation, defer_until, kind, token)
 
-      {:error, reason} ->
-        fail_research(invocation, reason, dependencies.now.(), token)
+          {:deferred, %DateTime{} = defer_until} ->
+            defer_budget(invocation, defer_until, :research, token)
+
+          {:error, :stale_claim} ->
+            :ok
+
+          {:error, reason} ->
+            fail_research(invocation, reason, dependencies.now.(), token)
+        end
     end
   end
 
@@ -262,6 +269,16 @@ defmodule ContextBot.Workers.ResearchWorker do
   defp safe_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp safe_reason({reason, _detail}) when is_atom(reason), do: Atom.to_string(reason)
   defp safe_reason(_reason), do: "provider_failure"
+
+  defp video_unavailable_result do
+    %{
+      messages: %{"messages" => []},
+      text:
+        "I can't analyze videos yet, so I can't reliably answer a question that may depend on this clip.",
+      usage: %{},
+      validation: %{"valid" => true, "reason" => "video_unavailable_deterministic"}
+    }
+  end
 
   defp claim_token(%Oban.Job{id: id}) when is_integer(id), do: "research-job-#{id}"
 
