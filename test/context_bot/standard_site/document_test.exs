@@ -16,7 +16,9 @@ defmodule ContextBot.StandardSite.DocumentTest do
     test "creates a document record successfully" do
       client = fake_client_success()
 
-      assert {:ok, result} = Document.create(client, @repo, @publication_uri, @content, @created_at)
+      assert {:ok, result} =
+               Document.create(client, @repo, @publication_uri, @content, @created_at)
+
       assert is_binary(result.uri)
       assert is_binary(result.rkey)
       assert is_binary(result.reader_url)

@@ -21,7 +21,9 @@ defmodule ContextBot.StandardSite.PublicationTest do
 
     test "returns error when publication exists with different content" do
       client = fake_client_with_mismatched_record()
-      assert {:error, :publication_conflict} = Publication.ensure_exists(client, @repo, @created_at)
+
+      assert {:error, :publication_conflict} =
+               Publication.ensure_exists(client, @repo, @created_at)
     end
   end
 
