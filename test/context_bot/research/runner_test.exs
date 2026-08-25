@@ -995,7 +995,7 @@ defmodule ContextBot.Research.RunnerTest do
     part2 = String.duplicate("b", 160)
     still_over_text = part1 <> "\n\n" <> part2
 
-    assert String.length(still_over_text) == 313
+    assert String.length(still_over_text) == 312
 
     primary =
       put_in(

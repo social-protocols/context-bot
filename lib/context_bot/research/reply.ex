@@ -113,9 +113,8 @@ defmodule ContextBot.Research.Reply do
 
   defp try_split(text) do
     with :error <- try_split_at_paragraph(text),
-         :error <- try_split_at_sentence(text),
-         :error <- try_split_at_whitespace(text) do
-      :error
+         :error <- try_split_at_sentence(text) do
+      try_split_at_whitespace(text)
     end
   end
 
