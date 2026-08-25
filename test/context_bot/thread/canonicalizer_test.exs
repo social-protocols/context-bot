@@ -179,7 +179,11 @@ defmodule ContextBot.Thread.CanonicalizerTest do
         "record" => quoted_record,
         "media" => %{
           "$type" => "app.bsky.embed.external#view",
-          "external" => %{"title" => "Source card", "uri" => "https://example.com/source"}
+          "external" => %{
+            "title" => "Source card",
+            "uri" => "https://example.com/source",
+            "description" => "A source"
+          }
         }
       })
 
@@ -212,6 +216,35 @@ defmodule ContextBot.Thread.CanonicalizerTest do
       })
 
     assert {:error, :invalid_thread} = Canonicalizer.build(unknown_gallery_item, context())
+  end
+
+  test "preserves direct and nested external cards whose valid title is empty" do
+    base = fixture("thread_ancestors.json")
+
+    empty_title_external = %{
+      "$type" => "app.bsky.embed.external#view",
+      "external" => %{
+        "title" => "",
+        "uri" => "https://example.com/untitled",
+        "description" => "A valid card without a title"
+      }
+    }
+
+    direct = put_in(base, ["thread", "post", "embed"], empty_title_external)
+    assert {:ok, direct_result} = Canonicalizer.build(direct, context())
+    assert direct_result.text =~ "External URI: https://example.com/untitled"
+    refute direct_result.text =~ "External link: \nExternal URI: https://example.com/untitled"
+
+    nested =
+      put_in(base, ["thread", "post", "embed"], %{
+        "$type" => "app.bsky.embed.recordWithMedia#view",
+        "record" => get_in(base, ["thread", "parent", "post", "embed"]),
+        "media" => empty_title_external
+      })
+
+    assert {:ok, nested_result} = Canonicalizer.build(nested, context())
+    assert nested_result.text =~ "External URI: https://example.com/untitled"
+    assert nested_result.text =~ "Quoted post URI: at://did:plc:quoted/app.bsky.feed.post/quoted"
   end
 
   test "rejects malformed or untrusted image descriptors" do

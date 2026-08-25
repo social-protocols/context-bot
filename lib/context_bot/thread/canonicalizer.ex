@@ -347,14 +347,19 @@ defmodule ContextBot.Thread.Canonicalizer do
   defp inspect_embed(
          %{
            "$type" => @external_view,
-           "external" => %{"title" => title, "uri" => uri}
+           "external" => %{"title" => title, "uri" => uri, "description" => description}
          },
          _post_uri
        )
-       when is_binary(title) and title != "" and is_binary(uri) and uri != "" do
+       when is_binary(title) and is_binary(uri) and uri != "" and is_binary(description) do
+    lines =
+      if title == "",
+        do: ["External URI: #{uri}"],
+        else: ["External link: #{title}", "External URI: #{uri}"]
+
     {:ok,
      %{
-       lines: ["External link: #{title}", "External URI: #{uri}"],
+       lines: lines,
        images: [],
        video?: false
      }}
