@@ -563,7 +563,7 @@ defmodule ContextBot.Research.ReplyTest do
     assert {:ok, split1, split2} = Reply.split_text(text)
     assert String.length(split1) == 150
     assert String.length(split2) == 151
-    assert split1 == part1 <> " "
+    assert split1 == part1
     assert split2 == part2
   end
 
@@ -587,7 +587,7 @@ defmodule ContextBot.Research.ReplyTest do
   end
 
   test "validates both parts are within grapheme and byte limits" do
-    part1 = String.duplicate("👩‍💻", 272)
+    part1 = String.duplicate("👩‍💻", 273)
     part2 = String.duplicate("b", 50)
     text = part1 <> "\n\n" <> part2
 
