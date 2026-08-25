@@ -21,8 +21,8 @@ defmodule ContextBot.ATProto.PostWithLinkTest do
       assert record["reply"]["root"] == @root
 
       assert [facet] = record["facets"]
-      assert facet["index"]["byteStart"] == byte_size(text) + 1
-      assert facet["index"]["byteEnd"] == byte_size(text <> " (full response") - 1
+      assert facet["index"]["byteStart"] == byte_size(text) + byte_size(" (")
+      assert facet["index"]["byteEnd"] == byte_size(text <> " (full response")
 
       assert [feature] = facet["features"]
       assert feature["$type"] == "app.bsky.richtext.facet#link"
@@ -50,7 +50,7 @@ defmodule ContextBot.ATProto.PostWithLinkTest do
       # Verify byte positions are correct for unicode
       assert [facet] = record["facets"]
       base_bytes = byte_size(text)
-      assert facet["index"]["byteStart"] == base_bytes + 1
+      assert facet["index"]["byteStart"] == base_bytes + byte_size(" (")
     end
   end
 end
