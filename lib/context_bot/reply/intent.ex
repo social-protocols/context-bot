@@ -9,9 +9,9 @@ defmodule ContextBot.Reply.Intent do
   @did_regex ~r/\Adid:[a-z0-9]+:[A-Za-z0-9._:%-]+\z/
 
   @type t :: %{
-          reply_repo: String.t(),
-          reply_rkey: String.t(),
-          reply_record: map(),
+          required(:reply_repo) => String.t(),
+          required(:reply_rkey) => String.t(),
+          required(:reply_record) => map(),
           optional(:reply_part2_rkey) => String.t(),
           optional(:reply_part2_record) => map()
         }
