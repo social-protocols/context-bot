@@ -313,9 +313,6 @@ defmodule ContextBot.Workers.ReplyWorker do
 
           :conflict ->
             {:error, :part2_conflict}
-
-          _other ->
-            {:error, :part2_failed}
         end
 
       {:error, _reason} ->
