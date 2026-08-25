@@ -218,7 +218,7 @@ Before any live deployment, replace the empty `BOT_DID`, `BOT_HANDLE`, and `BOT_
 Creating the Fly app or volume is also an external effect and requires explicit authorization. Create them once if they do not already exist:
 
 ```bash
-fly apps create context-bot-jwarden
+fly apps create context-bot-social-protocols
 fly volumes create context_bot_data --region den --size 1 --snapshot-retention 14
 ```
 
@@ -230,7 +230,7 @@ export BW_SESSION="$(bw unlock --raw)"
 export BITWARDEN_ITEM_ID="<Bitwarden item UUID>"
 just secrets
 just deploy
-curl --fail --silent --show-error https://context-bot-jwarden.fly.dev/health | jq
+curl --fail --silent --show-error https://context-bot-social-protocols.fly.dev/health | jq
 ```
 
 The release entrypoint migrates `/data/context_bot.db` before starting Phoenix. Confirm health reports `bot.enabled` as `false`. Activation is a separate, explicit change: set `BOT_ENABLED = "true"` in `fly.toml`, review the identity, limits, budget, and allowlist again, then run `just deploy` only with renewed authorization. Startup fails closed if an enabled deployment lacks identity, budget, or runtime secrets.

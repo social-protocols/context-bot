@@ -1,4 +1,4 @@
-app = "context-bot-jwarden"
+app = "context-bot-social-protocols"
 primary_region = "den"
 
 [build]
@@ -12,7 +12,7 @@ primary_region = "den"
   BOT_HANDLE = "getcontext.bot"
   BOT_PDS_URL = "https://rhizopogon.us-west.host.bsky.network"
   DATABASE_PATH = "/data/context_bot.db"
-  PHX_HOST = "context-bot-jwarden.fly.dev"
+  PHX_HOST = "context-bot-social-protocols.fly.dev"
   PHX_SERVER = "true"
   PORT = "4000"
   POOL_SIZE = "5"
