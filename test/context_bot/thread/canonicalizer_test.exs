@@ -15,6 +15,7 @@ defmodule ContextBot.Thread.CanonicalizerTest do
     assert result == %{
              version: 2,
              current_cid: "bafy-invocation-v1",
+             contains_video: false,
              media: [
                %{
                  "type" => "image",
