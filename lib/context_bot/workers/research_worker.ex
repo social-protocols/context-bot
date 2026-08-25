@@ -133,13 +133,27 @@ defmodule ContextBot.Workers.ResearchWorker do
   defp freeze_handoff(invocation, result, token, dependencies) do
     created_at = dependencies.now.()
 
-    case dependencies.intent_builder.(
-           invocation,
-           result.text,
-           dependencies.settings.bot_did,
-           created_at,
-           dependencies.tid_generator
-         ) do
+    intent_result =
+      if Map.has_key?(result, :text_part2) do
+        Intent.build_with_part2(
+          invocation,
+          result.text,
+          result.text_part2,
+          dependencies.settings.bot_did,
+          created_at,
+          dependencies.tid_generator
+        )
+      else
+        dependencies.intent_builder.(
+          invocation,
+          result.text,
+          dependencies.settings.bot_did,
+          created_at,
+          dependencies.tid_generator
+        )
+      end
+
+    case intent_result do
       {:ok, intent} ->
         attrs = %{
           anthropic_messages: result.messages,
@@ -149,6 +163,8 @@ defmodule ContextBot.Workers.ResearchWorker do
           reply_repo: intent.reply_repo,
           reply_rkey: intent.reply_rkey,
           reply_record: intent.reply_record,
+          reply_part2_rkey: Map.get(intent, :reply_part2_rkey),
+          reply_part2_record: Map.get(intent, :reply_part2_record),
           publication_claim_token: nil,
           publication_claimed_at: nil,
           defer_until: nil,
@@ -184,7 +200,6 @@ defmodule ContextBot.Workers.ResearchWorker do
         fail_research(invocation, reason, created_at, token)
     end
   end
-
   defp defer_budget(invocation, defer_until, kind, token) do
     case Store.transition_research(
            Repo.reload!(invocation),

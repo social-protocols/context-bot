@@ -7,8 +7,10 @@ defmodule ContextBot.Research.Reply do
   `stop_sequence`; unknown values fail closed.
   """
 
-  @max_graphemes 300
-  @max_bytes 3_000
+  alias ContextBot.Research.ReplyLimits
+
+  @hard_max_graphemes ReplyLimits.hard_max_graphemes()
+  @max_bytes ReplyLimits.max_bytes()
 
   @type reason :: atom() | {atom(), term()}
   @type server_tool_name :: String.t()
@@ -20,6 +22,7 @@ defmodule ContextBot.Research.Reply do
   @type result ::
           {:ok, String.t()}
           | {:repairable, String.t(), [reason()]}
+          | {:split, String.t(), String.t()}
           | {:error, reason()}
 
   @doc """
@@ -89,6 +92,124 @@ defmodule ContextBot.Research.Reply do
   end
 
   def server_tool_context(_request, _additional_content), do: {:error, :invalid_content}
+
+  @doc """
+  Attempts to split text into two parts, each ≤300 graphemes and ≤3,000 bytes.
+
+  Prefers paragraph breaks (double newline), then sentence breaks (period + space/newline),
+  then any whitespace boundary. Returns `{:ok, part1, part2}` on success or `:error` if
+  no valid split exists (e.g., single unbreakable chunk over 300 graphemes).
+  """
+  @spec split_text(String.t()) :: {:ok, String.t(), String.t()} | :error
+  def split_text(text) when is_binary(text) do
+    graphemes = String.length(text)
+
+    if graphemes <= @hard_max_graphemes do
+      :error
+    else
+      try_split(text)
+    end
+  end
+
+  defp try_split(text) do
+    with :error <- try_split_at_paragraph(text),
+         :error <- try_split_at_sentence(text),
+         :error <- try_split_at_whitespace(text) do
+      :error
+    end
+  end
+
+  defp try_split_at_paragraph(text) do
+    case String.split(text, "\n\n", parts: 2) do
+      [_single] ->
+        :error
+
+      [left, right] ->
+        validate_split_parts(left, right)
+    end
+  end
+
+  defp try_split_at_sentence(text) do
+    case :binary.matches(text, [". ", ".\n"]) do
+      [] ->
+        :error
+
+      matches ->
+        find_best_sentence_split(text, matches)
+    end
+  end
+
+  defp find_best_sentence_split(text, matches) do
+    byte_length = byte_size(text)
+    target_byte = div(byte_length, 2)
+
+    best_match =
+      Enum.min_by(matches, fn {pos, _len} ->
+        abs(pos - target_byte)
+      end)
+
+    {pos, len} = best_match
+    split_pos = pos + len
+
+    left = binary_part(text, 0, split_pos)
+    right = binary_part(text, split_pos, byte_length - split_pos)
+
+    validate_split_parts(left, right)
+  end
+
+  defp try_split_at_whitespace(text) do
+    grapheme_length = String.length(text)
+    target_grapheme = div(grapheme_length, 2)
+
+    text
+    |> String.graphemes()
+    |> find_whitespace_near_midpoint(target_grapheme)
+    |> case do
+      nil ->
+        :error
+
+      split_index ->
+        {left_graphemes, right_graphemes} = Enum.split(String.graphemes(text), split_index)
+        left = Enum.join(left_graphemes)
+        right = Enum.join(right_graphemes) |> String.trim_leading()
+        validate_split_parts(left, right)
+    end
+  end
+
+  defp find_whitespace_near_midpoint(graphemes, target) do
+    indexed = Enum.with_index(graphemes)
+
+    whitespace_indices =
+      Enum.filter(indexed, fn {char, _idx} -> char in [" ", "\n", "\t"] end)
+      |> Enum.map(fn {_char, idx} -> idx + 1 end)
+
+    case whitespace_indices do
+      [] ->
+        nil
+
+      indices ->
+        Enum.min_by(indices, fn idx -> abs(idx - target) end)
+    end
+  end
+
+  defp validate_split_parts(left, right) do
+    left = String.trim(left)
+    right = String.trim(right)
+
+    left_graphemes = String.length(left)
+    right_graphemes = String.length(right)
+    left_bytes = byte_size(left)
+    right_bytes = byte_size(right)
+
+    if left_graphemes > 0 and left_graphemes <= @hard_max_graphemes and
+         left_bytes <= @max_bytes and
+         right_graphemes > 0 and right_graphemes <= @hard_max_graphemes and
+         right_bytes <= @max_bytes do
+      {:ok, left, right}
+    else
+      :error
+    end
+  end
 
   defp select_response(content_blocks, stop_reason, pending_server_tools, seen_tool_ids)
        when is_list(content_blocks) and stop_reason in ["end_turn", :end_turn] do
@@ -513,7 +634,7 @@ defmodule ContextBot.Research.Reply do
 
   defp limit_reasons(text) do
     []
-    |> maybe_add_reason(String.length(text) > @max_graphemes, :too_many_graphemes)
+    |> maybe_add_reason(String.length(text) > @hard_max_graphemes, :too_many_graphemes)
     |> maybe_add_reason(byte_size(text) > @max_bytes, :too_many_bytes)
   end
 

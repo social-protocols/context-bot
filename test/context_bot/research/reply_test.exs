@@ -250,6 +250,20 @@ defmodule ContextBot.Research.ReplyTest do
     end)
   end
 
+  test "accepts replies between prompt target and hard cap without repair" do
+    at_276 = String.duplicate("a", 276)
+    at_280 = String.duplicate("a", 280)
+    at_300 = String.duplicate("a", 300)
+
+    assert String.length(at_276) == 276
+    assert String.length(at_280) == 280
+    assert String.length(at_300) == 300
+
+    assert Reply.select([text(at_276)], "end_turn") == {:ok, at_276}
+    assert Reply.select([text(at_280)], "end_turn") == {:ok, at_280}
+    assert Reply.select([text(at_300)], "end_turn") == {:ok, at_300}
+  end
+
   test "classifies over-limit normal completions as repairable without truncating" do
     over_graphemes = String.duplicate("a", 301)
     over_bytes = String.duplicate("👩‍💻", 272) <> String.duplicate("a", 9)
@@ -525,6 +539,62 @@ defmodule ContextBot.Research.ReplyTest do
 
       assert Reply.select(content, :end_turn) == {:error, :invalid_content}
     end)
+  end
+
+  test "splits over-300-grapheme text at paragraph boundary" do
+    part1 = String.duplicate("a", 150)
+    part2 = String.duplicate("b", 160)
+    text = part1 <> "\n\n" <> part2
+
+    assert String.length(text) == 313
+    assert {:ok, split1, split2} = Reply.split_text(text)
+    assert String.length(split1) == 150
+    assert String.length(split2) == 160
+    assert split1 == part1
+    assert split2 == part2
+  end
+
+  test "splits over-300-grapheme text at sentence boundary when no paragraph break" do
+    part1 = String.duplicate("a", 149) <> "."
+    part2 = String.duplicate("b", 151)
+    text = part1 <> " " <> part2
+
+    assert String.length(text) == 302
+    assert {:ok, split1, split2} = Reply.split_text(text)
+    assert String.length(split1) == 150
+    assert String.length(split2) == 151
+    assert split1 == part1 <> " "
+    assert split2 == part2
+  end
+
+  test "splits over-300-grapheme text at whitespace when no sentence break near middle" do
+    text = String.duplicate("a", 150) <> " " <> String.duplicate("b", 151)
+
+    assert String.length(text) == 302
+    assert {:ok, split1, split2} = Reply.split_text(text)
+    assert String.length(split1) == 150
+    assert String.length(split2) == 151
+  end
+
+  test "refuses to split text that cannot be split into two valid parts" do
+    single_chunk = String.duplicate("a", 301)
+    assert Reply.split_text(single_chunk) == :error
+  end
+
+  test "refuses to split text already within limits" do
+    within_limits = String.duplicate("a", 300)
+    assert Reply.split_text(within_limits) == :error
+  end
+
+  test "validates both parts are within grapheme and byte limits" do
+    part1 = String.duplicate("👩‍💻", 272)
+    part2 = String.duplicate("b", 50)
+    text = part1 <> "\n\n" <> part2
+
+    assert String.length(text) > 300
+    assert byte_size(part1) > 3_000
+
+    assert Reply.split_text(text) == :error
   end
 
   defp text(value), do: %{"type" => "text", "text" => value}

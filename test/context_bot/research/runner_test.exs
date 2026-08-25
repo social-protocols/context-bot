@@ -987,6 +987,77 @@ defmodule ContextBot.Research.RunnerTest do
     assert length(responses(invocation)) == 2
   end
 
+  test "a repair that still exceeds 300 graphemes splits into two valid parts" do
+    invocation = invocation("repair-split")
+    fixture = decoded_fixture("repair_success.json")
+
+    part1 = String.duplicate("a", 150)
+    part2 = String.duplicate("b", 160)
+    still_over_text = part1 <> "\n\n" <> part2
+
+    assert String.length(still_over_text) == 313
+
+    primary =
+      put_in(
+        fixture,
+        ["primary", "content"],
+        [%{"type" => "text", "text" => String.duplicate("x", 301)}]
+      )["primary"]
+
+    repair =
+      put_in(
+        fixture,
+        ["repair", "content"],
+        [%{"type" => "text", "text" => still_over_text}]
+      )["repair"]
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(primary))},
+      {:ok, envelope(200, Jason.encode!(repair))}
+    ])
+
+    assert {:ok, result} = Runner.run(invocation, options())
+    assert result.text == part1
+    assert result.text_part2 == part2
+    assert result.validation["result"] == "split"
+    assert result.validation["repair_used"] == true
+    assert result.validation["part1_graphemes"] == 150
+    assert result.validation["part2_graphemes"] == 160
+
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    assert_received {:anthropic_call, _request, %{kind: :repair}, false}
+  end
+
+  test "a repair that cannot be split into valid parts fails as invalid_repair" do
+    invocation = invocation("repair-unsplittable")
+    fixture = decoded_fixture("repair_success.json")
+
+    unsplittable = String.duplicate("a", 301)
+
+    primary =
+      put_in(
+        fixture,
+        ["primary", "content"],
+        [%{"type" => "text", "text" => String.duplicate("x", 301)}]
+      )["primary"]
+
+    repair =
+      put_in(
+        fixture,
+        ["repair", "content"],
+        [%{"type" => "text", "text" => unsplittable}]
+      )["repair"]
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(primary))},
+      {:ok, envelope(200, Jason.encode!(repair))}
+    ])
+
+    assert {:error, :invalid_repair} = Runner.run(invocation, options())
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    assert_received {:anthropic_call, _request, %{kind: :repair}, false}
+  end
+
   test "a repair tool use or second invalid result never triggers another repair" do
     for {suffix, repair_response, expected_reason} <- [
           {

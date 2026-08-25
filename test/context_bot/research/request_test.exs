@@ -90,7 +90,7 @@ defmodule ContextBot.Research.RequestTest do
     assert prompt =~ "untrusted"
     assert prompt =~ "prompt injection"
     assert prompt =~ "Return only"
-    assert prompt =~ "300 Unicode grapheme clusters"
+    assert prompt =~ "275 Unicode grapheme clusters"
     assert prompt =~ "audit suffix"
     assert prompt =~ "images and their alt text"
     assert prompt =~ "directly"
@@ -241,7 +241,7 @@ defmodule ContextBot.Research.RequestTest do
     assert repair_message["role"] == "user"
     assert String.starts_with?(repair_message["content"], "LENGTH_REPAIR\n")
     assert repair_message["content"] =~ "only the reply text"
-    assert repair_message["content"] =~ "at most 300 Unicode grapheme clusters"
+    assert repair_message["content"] =~ "at most 275 Unicode grapheme clusters"
     assert repair_message["content"] =~ "Do not perform additional research"
   end
 
