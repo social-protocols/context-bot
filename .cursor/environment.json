@@ -5,14 +5,7 @@
       "repoUrl": "https://github.com/social-protocols/context-bot"
     }
   ],
-  "install": [
-    "# Install dependencies and setup database",
-    "direnv allow",
-    "just setup"
-  ],
-  "start": [
-    "# No background services needed for development",
-    "# Use 'just dev' to start the Phoenix server when ready"
-  ],
+  "install": "# Install dependencies and setup database\ndirenv allow\njust setup",
+  "start": "# No background services needed for development\n# Use 'just dev' to start the Phoenix server when ready",
   "setupExplanation": "This environment installs Elixir, Erlang, SQLite, and all development tools via Devbox. The `just setup` command installs Hex, Rebar, Mix dependencies, and prepares the SQLite database. No background services are started automatically - use `just dev` to start the Phoenix server when you're ready to test."
 }
