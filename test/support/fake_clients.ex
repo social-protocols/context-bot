@@ -1,4 +1,6 @@
 defmodule FakeClientNotFound do
+  @moduledoc false
+
   def get_record(_repo, _collection, _rkey) do
     {:error, :record_not_found}
   end
@@ -9,6 +11,8 @@ defmodule FakeClientNotFound do
 end
 
 defmodule FakeClientExisting do
+  @moduledoc false
+
   def get_record(_repo, _collection, _rkey) do
     created_at = ~U[2026-08-25 12:00:00Z]
 
@@ -24,6 +28,8 @@ defmodule FakeClientExisting do
 end
 
 defmodule FakeClientMismatch do
+  @moduledoc false
+
   def get_record(_repo, _collection, _rkey) do
     created_at = ~U[2026-08-25 12:00:00Z]
 
@@ -39,18 +45,24 @@ defmodule FakeClientMismatch do
 end
 
 defmodule FakeDocClientSuccess do
+  @moduledoc false
+
   def put_record(_repo, _collection, _rkey, _record) do
     {:ok, 200, %{}, %{}}
   end
 end
 
 defmodule FakeDocClientFailure do
+  @moduledoc false
+
   def put_record(_repo, _collection, _rkey, _record) do
     {:error, :timeout}
   end
 end
 
 defmodule FakeDocClientWithDocument do
+  @moduledoc false
+
   def get_record(_repo, _collection, _rkey) do
     created_at = ~U[2026-08-25 12:00:00Z]
     publication_uri = "at://did:plc:test123abc/site.standard.publication/context-bot"
@@ -72,6 +84,8 @@ defmodule FakeDocClientWithDocument do
 end
 
 defmodule FakeDocClientNotFound do
+  @moduledoc false
+
   def get_record(_repo, _collection, _rkey) do
     {:error, :record_not_found}
   end
