@@ -788,9 +788,19 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
     snapshot = Remote.snapshot(remote)
 
     assert Enum.member?(snapshot.calls, {:get, @bot_did, @collection, @rkey_part1})
-    assert Enum.member?(snapshot.calls, {:put, @bot_did, @collection, @rkey_part1, invocation.reply_record})
+
+    assert Enum.member?(
+             snapshot.calls,
+             {:put, @bot_did, @collection, @rkey_part1, invocation.reply_record}
+           )
+
     assert Enum.member?(snapshot.calls, {:get, @bot_did, @collection, @rkey_part2})
-    assert Enum.member?(snapshot.calls, {:put, @bot_did, @collection, @rkey_part2, rebuilt_part2_record})
+
+    assert Enum.member?(
+             snapshot.calls,
+             {:put, @bot_did, @collection, @rkey_part2, rebuilt_part2_record}
+           )
+
     assert length(snapshot.calls) == 6
   end
 
