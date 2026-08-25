@@ -223,20 +223,7 @@ defmodule ContextBot.Workers.ResearchWorker do
       # Ensure publication exists
       case Publication.ensure_exists(repo, created_at) do
         {:ok, publication_uri} ->
-          content = %{
-            full_response: full_response,
-            selected_reply: result.text,
-            invocation_uri: invocation.invocation_uri
-          }
-
-          case Document.create(repo, publication_uri, content, created_at) do
-            {:ok, doc_result} ->
-              {doc_result, doc_result.reader_url}
-
-            {:error, _reason} ->
-              # Document creation failed but don't block the reply
-              {nil, nil}
-          end
+          create_document_with_publication(invocation, result, repo, publication_uri, created_at)
 
         {:error, _reason} ->
           # Publication failed but don't block the reply
@@ -245,6 +232,23 @@ defmodule ContextBot.Workers.ResearchWorker do
     else
       # No full response, skip document creation
       {nil, nil}
+    end
+  end
+
+  defp create_document_with_publication(invocation, result, repo, publication_uri, created_at) do
+    content = %{
+      full_response: result.full_response,
+      selected_reply: result.text,
+      invocation_uri: invocation.invocation_uri
+    }
+
+    case Document.create(repo, publication_uri, content, created_at) do
+      {:ok, doc_result} ->
+        {doc_result, doc_result.reader_url}
+
+      {:error, _reason} ->
+        # Document creation failed but don't block the reply
+        {nil, nil}
     end
   end
 
