@@ -200,6 +200,7 @@ defmodule ContextBot.Workers.ResearchWorker do
         fail_research(invocation, reason, created_at, token)
     end
   end
+
   defp defer_budget(invocation, defer_until, kind, token) do
     case Store.transition_research(
            Repo.reload!(invocation),
