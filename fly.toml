@@ -12,6 +12,9 @@ primary_region = "ewr"
   BOT_HANDLE = "getcontext.bot"
   BOT_PDS_URL = "https://rhizopogon.us-west.host.bsky.network"
   DATABASE_PATH = "/data/context_bot.db"
+  # The homepage is reachable via the fly.dev host below. Serving https://getcontext.bot
+  # (the bot's Bluesky handle and site.standard.publication domain) requires DNS configuration
+  # and is not included in this deployment.
   PHX_HOST = "context-bot-social-protocols.fly.dev"
   PHX_SERVER = "true"
   PORT = "4000"
