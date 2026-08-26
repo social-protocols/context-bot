@@ -8,8 +8,17 @@ defmodule ContextBotWeb.InternalController do
   import Ecto.Query
   alias ContextBot.Repo
   alias ContextBot.Workflow.Invocation
+  alias ContextBot.Research.BudgetEntry
 
   def index(conn, _params) do
+    now = DateTime.utc_now()
+
+    stats = %{
+      day: calculate_period_stats(now, days: -1),
+      week: calculate_period_stats(now, days: -7),
+      month: calculate_period_stats(now, days: -30)
+    }
+
     invocations =
       Invocation
       |> order_by([i], desc: i.id)
@@ -30,14 +39,67 @@ defmodule ContextBotWeb.InternalController do
       })
       |> Repo.all()
 
-    html_content = render_dashboard(invocations)
+    html_content = render_dashboard(stats, invocations)
 
     conn
     |> put_resp_content_type("text/html")
     |> send_resp(200, html_content)
   end
 
-  defp render_dashboard(invocations) do
+  defp calculate_period_stats(now, days: days_ago) do
+    cutoff = DateTime.add(now, days_ago, :day)
+
+    invocation_count =
+      Invocation
+      |> where([i], i.inserted_at >= ^cutoff)
+      |> select([i], count(i.id))
+      |> Repo.one()
+
+    error_count =
+      Invocation
+      |> where(
+        [i],
+        i.inserted_at >= ^cutoff and
+          (i.status == :failed or not is_nil(i.failure_category))
+      )
+      |> select([i], count(i.id))
+      |> Repo.one()
+
+    budget_stats =
+      BudgetEntry
+      |> where([e], e.inserted_at >= ^cutoff)
+      |> select([e], %{
+        total_microdollars:
+          fragment(
+            "COALESCE(SUM(CASE WHEN ? = 'settled' THEN COALESCE(?, ?) ELSE ? END), 0)",
+            e.state,
+            e.settled_microdollars,
+            e.reserved_microdollars,
+            e.reserved_microdollars
+          ),
+        total_input_tokens:
+          fragment(
+            "COALESCE(SUM(CAST(json_extract(?, '$.input_tokens') AS INTEGER)), 0)",
+            e.usage
+          ),
+        total_output_tokens:
+          fragment(
+            "COALESCE(SUM(CAST(json_extract(?, '$.output_tokens') AS INTEGER)), 0)",
+            e.usage
+          )
+      })
+      |> Repo.one()
+
+    %{
+      invocation_count: invocation_count,
+      error_count: error_count,
+      total_microdollars: budget_stats.total_microdollars,
+      total_input_tokens: budget_stats.total_input_tokens,
+      total_output_tokens: budget_stats.total_output_tokens
+    }
+  end
+
+  defp render_dashboard(stats, invocations) do
     """
     <!DOCTYPE html>
     <html lang="en">
@@ -53,6 +115,47 @@ defmodule ContextBotWeb.InternalController do
         }
         h1 {
           color: #333;
+          margin-bottom: 20px;
+        }
+        .summary {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 15px;
+          margin-bottom: 20px;
+        }
+        .summary-card {
+          background: white;
+          padding: 15px;
+          border-radius: 4px;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .summary-card h2 {
+          font-size: 14px;
+          font-weight: 600;
+          color: #666;
+          margin: 0 0 10px 0;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
+        .summary-stats {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+        .summary-stat {
+          display: flex;
+          justify-content: space-between;
+          font-size: 13px;
+        }
+        .summary-stat-label {
+          color: #666;
+        }
+        .summary-stat-value {
+          font-weight: 600;
+          color: #333;
+        }
+        .stat-error {
+          color: #c00;
         }
         table {
           width: 100%;
@@ -96,6 +199,7 @@ defmodule ContextBotWeb.InternalController do
     </head>
     <body>
       <h1>Context Bot Invocations</h1>
+      #{render_summary(stats)}
       <table>
         <thead>
           <tr>
@@ -224,4 +328,61 @@ defmodule ContextBotWeb.InternalController do
   end
 
   defp escape_html(_), do: ""
+
+  defp render_summary(stats) do
+    """
+    <div class="summary">
+      #{render_period_card("Last 24 Hours", stats.day)}
+      #{render_period_card("Last 7 Days", stats.week)}
+      #{render_period_card("Last 30 Days", stats.month)}
+    </div>
+    """
+  end
+
+  defp render_period_card(title, period_stats) do
+    dollars = format_dollars(period_stats.total_microdollars)
+    total_tokens = period_stats.total_input_tokens + period_stats.total_output_tokens
+    tokens_formatted = format_number(total_tokens)
+
+    """
+    <div class="summary-card">
+      <h2>#{title}</h2>
+      <div class="summary-stats">
+        <div class="summary-stat">
+          <span class="summary-stat-label">Invocations</span>
+          <span class="summary-stat-value">#{period_stats.invocation_count}</span>
+        </div>
+        <div class="summary-stat">
+          <span class="summary-stat-label">API Cost</span>
+          <span class="summary-stat-value">#{dollars}</span>
+        </div>
+        <div class="summary-stat">
+          <span class="summary-stat-label">Tokens</span>
+          <span class="summary-stat-value">#{tokens_formatted}</span>
+        </div>
+        <div class="summary-stat">
+          <span class="summary-stat-label">Errors</span>
+          <span class="summary-stat-value stat-error">#{period_stats.error_count}</span>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  defp format_dollars(microdollars) when is_integer(microdollars) do
+    dollars = microdollars / 1_000_000
+    "$#{:erlang.float_to_binary(dollars, decimals: 2)}"
+  end
+
+  defp format_number(num) when is_integer(num) and num >= 1_000_000 do
+    rounded = Float.round(num / 1_000_000, 1)
+    "#{:erlang.float_to_binary(rounded, decimals: 1)}M"
+  end
+
+  defp format_number(num) when is_integer(num) and num >= 1_000 do
+    rounded = Float.round(num / 1_000, 1)
+    "#{:erlang.float_to_binary(rounded, decimals: 1)}K"
+  end
+
+  defp format_number(num) when is_integer(num), do: Integer.to_string(num)
 end

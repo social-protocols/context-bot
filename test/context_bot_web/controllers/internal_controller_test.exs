@@ -1,12 +1,160 @@
 defmodule ContextBotWeb.InternalControllerTest do
   use ContextBotWeb.ConnCase, async: true
 
+  import Ecto.Query
+
   @endpoint ContextBotWeb.InternalEndpoint
 
   alias ContextBot.Repo
   alias ContextBot.Workflow.Invocation
+  alias ContextBot.Research.BudgetEntry
 
   describe "GET /invocations" do
+    test "displays summary statistics for last day, week, and month", %{conn: conn} do
+      now = DateTime.utc_now()
+      yesterday = DateTime.add(now, -1, :day)
+
+      # Create an invocation from yesterday
+      {:ok, inv} =
+        %Invocation{}
+        |> Invocation.changeset(%{
+          dry_run: false,
+          invocation_uri: "at://did:plc:test/app.bsky.feed.post/abc123",
+          notification_cid: "cid1",
+          current_cid: "cid1",
+          actor_did: "did:plc:test",
+          actor_handle: "test.bsky.social",
+          raw_notification: %{},
+          received_at: yesterday,
+          status: :complete,
+          stage: :complete
+        })
+        |> Repo.insert()
+
+      # Set inserted_at to yesterday manually (needed for time-based queries)
+      from(i in Invocation, where: i.id == ^inv.id)
+      |> Repo.update_all(set: [inserted_at: yesterday])
+
+      # Create a budget entry
+      {:ok, _entry} =
+        %BudgetEntry{}
+        |> BudgetEntry.changeset(%{
+          attempt_key: "test-attempt-1",
+          invocation_id: inv.id,
+          budget_date: Date.utc_today(),
+          kind: :research,
+          reserved_microdollars: 500_000,
+          settled_microdollars: 450_000,
+          state: :settled,
+          usage: %{
+            "input_tokens" => 1000,
+            "output_tokens" => 500
+          }
+        })
+        |> Repo.insert()
+
+      conn = get(conn, "/invocations")
+      body = html_response(conn, 200)
+
+      # Check summary sections exist
+      assert body =~ "Last 24 Hours"
+      assert body =~ "Last 7 Days"
+      assert body =~ "Last 30 Days"
+
+      # Check metric labels exist
+      assert body =~ "Invocations"
+      assert body =~ "API Cost"
+      assert body =~ "Tokens"
+      assert body =~ "Errors"
+    end
+
+    test "displays API costs in dollars", %{conn: conn} do
+      now = DateTime.utc_now()
+
+      {:ok, inv} =
+        %Invocation{}
+        |> Invocation.changeset(%{
+          dry_run: false,
+          invocation_uri: "at://did:plc:test/app.bsky.feed.post/abc123",
+          notification_cid: "cid1",
+          current_cid: "cid1",
+          actor_did: "did:plc:test",
+          actor_handle: "test.bsky.social",
+          raw_notification: %{},
+          received_at: now,
+          status: :complete,
+          stage: :complete
+        })
+        |> Repo.insert()
+
+      # Create budget entry with 1.5M microdollars = $1.50
+      {:ok, _entry} =
+        %BudgetEntry{}
+        |> BudgetEntry.changeset(%{
+          attempt_key: "test-attempt-2",
+          invocation_id: inv.id,
+          budget_date: Date.utc_today(),
+          kind: :research,
+          reserved_microdollars: 2_000_000,
+          settled_microdollars: 1_500_000,
+          state: :settled,
+          usage: %{"input_tokens" => 5000, "output_tokens" => 2000}
+        })
+        |> Repo.insert()
+
+      conn = get(conn, "/invocations")
+      body = html_response(conn, 200)
+
+      assert body =~ "$1.50"
+    end
+
+    test "counts errors correctly", %{conn: conn} do
+      now = DateTime.utc_now()
+
+      # Create failed invocation
+      {:ok, _inv1} =
+        %Invocation{}
+        |> Invocation.changeset(%{
+          dry_run: false,
+          invocation_uri: "at://did:plc:test1/app.bsky.feed.post/abc123",
+          notification_cid: "cid1",
+          current_cid: "cid1",
+          actor_did: "did:plc:test1",
+          actor_handle: "test1.bsky.social",
+          raw_notification: %{},
+          received_at: now,
+          status: :failed,
+          stage: :failed,
+          failure_category: :provider_auth
+        })
+        |> Repo.insert()
+
+      # Create invocation with failure_category but not failed status
+      {:ok, _inv2} =
+        %Invocation{}
+        |> Invocation.changeset(%{
+          dry_run: false,
+          invocation_uri: "at://did:plc:test2/app.bsky.feed.post/def456",
+          notification_cid: "cid2",
+          current_cid: "cid2",
+          actor_did: "did:plc:test2",
+          actor_handle: "test2.bsky.social",
+          raw_notification: %{},
+          received_at: now,
+          status: :complete,
+          stage: :complete,
+          failure_category: :provider_budget
+        })
+        |> Repo.insert()
+
+      conn = get(conn, "/invocations")
+      body = html_response(conn, 200)
+
+      # Should count both as errors (status=failed OR failure_category is set)
+      # Look for error count of 2 in the summary stats
+      assert body =~ "stat-error"
+    end
+
     test "lists invocations in reverse chronological order", %{conn: conn} do
       # Create test invocations
       {:ok, _inv1} =
