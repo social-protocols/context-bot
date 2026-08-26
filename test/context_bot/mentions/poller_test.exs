@@ -230,6 +230,92 @@ defmodule ContextBot.Mentions.PollerTest do
     assert_eventually(fn -> Store.received?(uri("second"), cid("second")) end)
   end
 
+  test "receipts a reply to a bot post as an invocation without a mention facet" do
+    poller = start_poller()
+
+    Poller.poll_now(poller)
+    assert_receive {:list_notifications, nil}
+    send(poller, {:notification_page, page([reply_to_bot("follow-up")])})
+
+    assert_eventually(fn -> Store.received?(uri("follow-up"), cid("follow-up")) end)
+
+    invocation = Repo.one!(Invocation)
+    assert invocation.actor_did == "did:plc:alice"
+    assert invocation.invocation_uri == uri("follow-up")
+    assert Repo.aggregate(Oban.Job, :count) == 1
+  end
+
+  test "still receipts an ordinary mention alongside a reply to the bot" do
+    poller = start_poller()
+
+    Poller.poll_now(poller)
+    assert_receive {:list_notifications, nil}
+
+    send(
+      poller,
+      {:notification_page, page([mention("mentioned"), reply_to_bot("replied")])}
+    )
+
+    assert_eventually(fn -> Repo.aggregate(Invocation, :count) == 2 end)
+    assert Store.received?(uri("mentioned"), cid("mentioned"))
+    assert Store.received?(uri("replied"), cid("replied"))
+  end
+
+  test "does not ingest a reply whose parent is a human post" do
+    poller = start_poller()
+
+    Poller.poll_now(poller)
+    assert_receive {:list_notifications, nil}
+    send(poller, {:notification_page, page([reply_to_human("thread-sibling")])})
+
+    assert_eventually(fn -> Poller.idle?(poller) end)
+    assert Repo.aggregate(Invocation, :count) == 0
+  end
+
+  test "does not ingest the bot's own post as an invocation" do
+    poller = start_poller()
+
+    Poller.poll_now(poller)
+    assert_receive {:list_notifications, nil}
+    send(poller, {:notification_page, page([bot_self_reply("part2")])})
+
+    assert_eventually(fn -> Poller.idle?(poller) end)
+    assert Repo.aggregate(Invocation, :count) == 0
+  end
+
+  test "does not double-ingest a reply whose URI is already a mention invocation" do
+    known = mention("already")
+
+    assert {:ok, _invocation, :inserted} =
+             Store.receive_mention(receipt(known), DateTime.utc_now(), nil)
+
+    poller = start_poller()
+
+    Poller.poll_now(poller)
+    assert_receive {:list_notifications, nil}
+    send(poller, {:notification_page, page([reply_to_bot("already")])})
+
+    assert_eventually(fn -> Poller.idle?(poller) end)
+    assert Repo.aggregate(Invocation, :count) == 1
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "does not insert a second invocation when mention and reply share a URI" do
+    poller = start_poller()
+
+    Poller.poll_now(poller)
+    assert_receive {:list_notifications, nil}
+
+    send(
+      poller,
+      {:notification_page, page([mention("same"), reply_to_bot("same")])}
+    )
+
+    assert_eventually(fn -> Repo.aggregate(Invocation, :count) == 1 end)
+    assert Store.received?(uri("same"), cid("same"))
+    assert Repo.aggregate(Oban.Job, :count) == 1
+  end
+
   defp start_poller(overrides \\ []) do
     {:ok, poller} =
       Poller.start_link(
@@ -267,6 +353,39 @@ defmodule ContextBot.Mentions.PollerTest do
             ]
           }
         ]
+      }
+    }
+  end
+
+  defp reply_to_bot(rkey), do: reply(rkey, @bot_did, "did:plc:alice")
+
+  defp reply_to_human(rkey), do: reply(rkey, "did:plc:bob", "did:plc:alice")
+
+  defp bot_self_reply(rkey) do
+    rkey
+    |> reply(@bot_did, @bot_did)
+    |> Map.put("uri", "at://#{@bot_did}/app.bsky.feed.post/#{rkey}")
+  end
+
+  defp reply(rkey, parent_did, author_did) do
+    %{
+      "reason" => "reply",
+      "uri" => uri(rkey),
+      "cid" => cid(rkey),
+      "author" => %{"did" => author_did, "handle" => "alice.bsky.social"},
+      "record" => %{
+        "$type" => "app.bsky.feed.post",
+        "text" => "please add more context",
+        "reply" => %{
+          "parent" => %{
+            "uri" => "at://#{parent_did}/app.bsky.feed.post/3kbotpost",
+            "cid" => "bafyreibotpost"
+          },
+          "root" => %{
+            "uri" => "at://did:plc:bob/app.bsky.feed.post/3kroot",
+            "cid" => "bafyreiroot"
+          }
+        }
       }
     }
   end

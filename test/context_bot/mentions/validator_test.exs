@@ -17,9 +17,52 @@ defmodule ContextBot.Mentions.ValidatorTest do
     assert receipt.raw == notification
   end
 
-  test "rejects notifications that are not mention notifications" do
+  test "accepts a reply to a bot post as an invocation even without a mention facet" do
+    notification = reply_notification(@bot_did)
+
+    assert {:ok, receipt} = Validator.validate(notification, @bot_did)
+    assert receipt.uri == "at://did:plc:alice/app.bsky.feed.post/3kreply"
+    assert receipt.cid == "bafyreiareply"
+    assert receipt.actor_did == "did:plc:alice"
+    assert receipt.actor_handle == "alice.bsky.social"
+    assert receipt.raw == notification
+  end
+
+  test "rejects a reply whose parent is not authored by the bot" do
+    assert {:error, :parent_not_by_bot} =
+             Validator.validate(reply_notification("did:plc:bob"), @bot_did)
+  end
+
+  test "rejects a reply with an invalid parent URI" do
+    notification =
+      put_in(reply_notification(@bot_did), ["record", "reply", "parent", "uri"], "not-an-at-uri")
+
+    assert {:error, :invalid_reply_parent} = Validator.validate(notification, @bot_did)
+  end
+
+  test "rejects a bot replying to itself" do
+    notification =
+      reply_notification(@bot_did)
+      |> put_in(["author", "did"], @bot_did)
+      |> Map.put("uri", "at://#{@bot_did}/app.bsky.feed.post/3kreply")
+
+    assert {:error, :invalid_author} = Validator.validate(notification, @bot_did)
+  end
+
+  test "rejects a reply without a reply parent field" do
+    notification =
+      reply_notification(@bot_did)
+      |> put_in(["record"], %{
+        "$type" => "app.bsky.feed.post",
+        "text" => "This is just a regular post"
+      })
+
+    assert {:error, :missing_reply_parent} = Validator.validate(notification, @bot_did)
+  end
+
+  test "rejects notifications that are not mention or reply notifications" do
     assert {:error, _reason} =
-             Validator.validate(Map.put(mention_notification(), "reason", "reply"), @bot_did)
+             Validator.validate(Map.put(mention_notification(), "reason", "like"), @bot_did)
   end
 
   test "rejects records that are not Bluesky posts" do
@@ -111,6 +154,29 @@ defmodule ContextBot.Mentions.ValidatorTest do
             ]
           }
         ]
+      }
+    }
+  end
+
+  defp reply_notification(parent_did) do
+    %{
+      "reason" => "reply",
+      "uri" => "at://did:plc:alice/app.bsky.feed.post/3kreply",
+      "cid" => "bafyreiareply",
+      "author" => %{"did" => "did:plc:alice", "handle" => "alice.bsky.social"},
+      "record" => %{
+        "$type" => "app.bsky.feed.post",
+        "text" => "Thanks for the context!",
+        "reply" => %{
+          "parent" => %{
+            "uri" => "at://#{parent_did}/app.bsky.feed.post/3kbotpost",
+            "cid" => "bafyreibotpost"
+          },
+          "root" => %{
+            "uri" => "at://did:plc:bob/app.bsky.feed.post/3kroot",
+            "cid" => "bafyreiroot"
+          }
+        }
       }
     }
   end

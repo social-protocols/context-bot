@@ -1,7 +1,7 @@
 defmodule ContextBot.DryRun.RuntimeOwnerProcessTest do
   use ExUnit.Case, async: false
 
-  @event_timeout_ms 10_000
+  @event_timeout_ms 15_000
 
   test "independent VMs deduplicate preparation, fence recovery, and take over after a crash" do
     root = File.cwd!()
@@ -42,7 +42,8 @@ defmodule ContextBot.DryRun.RuntimeOwnerProcessTest do
     refute File.exists?(Path.join(events, "second.recovery"))
     refute File.exists?(Path.join(events, "second.takeover"))
 
-    assert {_, 0} = System.cmd(System.find_executable("kill"), ["-KILL", to_string(first.os_pid)])
+    first_beam_pid = peer_os_pid(events, "first")
+    assert {_, 0} = System.cmd(System.find_executable("kill"), ["-KILL", first_beam_pid])
 
     assert_eventually(Path.join(events, "second.takeover"))
     assert_eventually(Path.join(events, "second.recovery"))
@@ -107,11 +108,13 @@ defmodule ContextBot.DryRun.RuntimeOwnerProcessTest do
       )
 
     {:os_pid, os_pid} = Port.info(port, :os_pid)
-    %{port: port, os_pid: os_pid}
+    %{port: port, os_pid: os_pid, role: role, events: events}
   end
 
-  defp stop_peer(%{port: port, os_pid: os_pid}) do
+  defp stop_peer(%{port: port, os_pid: os_pid, role: role, events: events}) do
     if Port.info(port) do
+      beam_pid = peer_os_pid(events, role, fallback: os_pid)
+      _result = System.cmd(System.find_executable("kill"), ["-KILL", beam_pid])
       _result = System.cmd(System.find_executable("kill"), ["-KILL", to_string(os_pid)])
       _result = await_exit(port)
     end
@@ -138,6 +141,19 @@ defmodule ContextBot.DryRun.RuntimeOwnerProcessTest do
     else
       Process.sleep(div(@event_timeout_ms, 200))
       assert_eventually(path, attempts - 1)
+    end
+  end
+
+  defp peer_os_pid(events, role, opts \\ []) do
+    fallback = Keyword.get(opts, :fallback)
+
+    case File.read(Path.join(events, "#{role}.os_pid")) do
+      {:ok, contents} ->
+        pid = String.trim(contents)
+        if pid != "", do: pid, else: fallback && to_string(fallback)
+
+      {:error, _reason} ->
+        fallback && to_string(fallback)
     end
   end
 

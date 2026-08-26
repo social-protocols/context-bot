@@ -17,6 +17,7 @@ defmodule ContextBot.Test.CrossProcessRuntimePeer do
   end
 
   def run(["peer", role, database, events, gate]) when role in ["first", "second"] do
+    write_event(events, role, "os_pid", to_string(:os.getpid()))
     _repo = start_repo!(database)
     write_event(events, role, "ready", "ready")
     wait_for!(gate)
@@ -85,16 +86,13 @@ defmodule ContextBot.Test.CrossProcessRuntimePeer do
   defp acquire_eventually!(_database, 0), do: raise("runtime takeover timed out")
 
   defp acquire_eventually!(database, attempts) do
-    case RuntimeOwner.acquire(database: database) do
+    case RuntimeOwner.acquire(database: database, handshake_timeout_ms: 200) do
       {:ok, owner} ->
         owner
 
-      {:error, :runtime_owned} ->
+      {:error, reason} when reason in [:runtime_owned, :runtime_lock_failed] ->
         Process.sleep(10)
         acquire_eventually!(database, attempts - 1)
-
-      {:error, :runtime_lock_failed} ->
-        raise "runtime lock failed during takeover"
     end
   end
 

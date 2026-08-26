@@ -53,7 +53,8 @@ defmodule ContextBot.ATProto.ReqClientTest do
                  {"cursor", cursor},
                  {"limit", "100"},
                  {"priority", "false"},
-                 {"reasons", "mention"}
+                 {"reasons", "mention"},
+                 {"reasons", "reply"}
                ])
 
       assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer test-access-jwt-one"]

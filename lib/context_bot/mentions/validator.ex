@@ -1,6 +1,6 @@
 defmodule ContextBot.Mentions.Validator do
   @moduledoc """
-  Validates direct-mention notifications before they become durable receipts.
+  Validates direct-mention and reply-to-bot notifications before they become durable receipts.
   """
 
   alias ContextBot.ATProto.ATURI
@@ -23,12 +23,12 @@ defmodule ContextBot.Mentions.Validator do
           | {:error, atom()}
   def validate(notification, bot_did) when is_map(notification) and is_binary(bot_did) do
     with :ok <- raw_notification_within_limit?(notification),
-         :ok <- mention_reason(notification),
+         :ok <- eligible_reason(notification),
          {:ok, record} <- post_record(notification),
          {:ok, actor_did, actor_handle} <- author(notification, bot_did),
          {:ok, uri} <- post_uri(notification, actor_did),
          {:ok, cid} <- cid(notification),
-         :ok <- mentions_bot?(record, bot_did) do
+         :ok <- invocation_signal(notification, record, bot_did) do
       {:ok,
        %{
          uri: uri,
@@ -42,8 +42,8 @@ defmodule ContextBot.Mentions.Validator do
 
   def validate(_notification, _bot_did), do: {:error, :invalid_notification}
 
-  defp mention_reason(%{"reason" => "mention"}), do: :ok
-  defp mention_reason(_notification), do: {:error, :not_a_mention}
+  defp eligible_reason(%{"reason" => reason}) when reason in ["mention", "reply"], do: :ok
+  defp eligible_reason(_notification), do: {:error, :not_eligible_notification}
 
   defp post_record(%{"record" => %{"$type" => @post_type} = record}), do: {:ok, record}
   defp post_record(_notification), do: {:error, :not_a_post}
@@ -74,6 +74,26 @@ defmodule ContextBot.Mentions.Validator do
       {:error, _reason} -> {:error, :invalid_notification}
     end
   end
+
+  defp invocation_signal(%{"reason" => "mention"}, record, bot_did),
+    do: mentions_bot?(record, bot_did)
+
+  defp invocation_signal(%{"reason" => "reply"}, record, bot_did),
+    do: reply_to_bot?(record, bot_did)
+
+  defp invocation_signal(_notification, _record, _bot_did),
+    do: {:error, :not_eligible_notification}
+
+  defp reply_to_bot?(%{"reply" => %{"parent" => %{"uri" => parent_uri}}}, bot_did)
+       when is_binary(parent_uri) do
+    case ATURI.parse(parent_uri) do
+      {:ok, %{repo: ^bot_did}} -> :ok
+      {:ok, _parsed} -> {:error, :parent_not_by_bot}
+      :error -> {:error, :invalid_reply_parent}
+    end
+  end
+
+  defp reply_to_bot?(_record, _bot_did), do: {:error, :missing_reply_parent}
 
   defp mentions_bot?(%{"facets" => facets}, bot_did) when is_list(facets) do
     if Enum.any?(facets, &mention_facet?(&1, bot_did)) do
