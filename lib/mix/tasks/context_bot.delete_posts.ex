@@ -3,8 +3,8 @@ defmodule Mix.Tasks.ContextBot.DeletePosts do
 
   use Mix.Task
 
-  alias ContextBot.ATProto.Session
   alias ContextBot.ATProto.ReqClient
+  alias ContextBot.ATProto.Session
 
   @requirements ["app.config"]
   @shortdoc "Delete specific Bluesky posts"

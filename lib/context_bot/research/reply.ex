@@ -149,29 +149,33 @@ defmodule ContextBot.Research.Reply do
 
     case valid_splits do
       [] ->
-        # No split within target, try with hard max
-        {_, fallback_splits} =
-          Enum.reduce(parts, {[], []}, fn part, {acc_parts, valid_splits} ->
-            new_parts = acc_parts ++ [part]
-            left = Enum.join(new_parts, "\n\n")
-            right = parts |> Enum.drop(length(new_parts)) |> Enum.join("\n\n")
-
-            if right != "" and String.length(left) <= @hard_max_graphemes do
-              {new_parts, valid_splits ++ [{left, right}]}
-            else
-              {new_parts, valid_splits}
-            end
-          end)
-
-        case fallback_splits do
-          [] -> :error
-          splits -> validate_split_parts(elem(List.last(splits), 0), elem(List.last(splits), 1))
-        end
+        find_paragraph_fallback_splits(parts)
 
       splits ->
         # Use the last (rightmost) split within target
         {left, right} = List.last(splits)
         validate_split_parts(left, right)
+    end
+  end
+
+  defp find_paragraph_fallback_splits(parts) do
+    # No split within target, try with hard max
+    {_, fallback_splits} =
+      Enum.reduce(parts, {[], []}, fn part, {acc_parts, valid_splits} ->
+        new_parts = acc_parts ++ [part]
+        left = Enum.join(new_parts, "\n\n")
+        right = parts |> Enum.drop(length(new_parts)) |> Enum.join("\n\n")
+
+        if right != "" and String.length(left) <= @hard_max_graphemes do
+          {new_parts, valid_splits ++ [{left, right}]}
+        else
+          {new_parts, valid_splits}
+        end
+      end)
+
+    case fallback_splits do
+      [] -> :error
+      splits -> validate_split_parts(elem(List.last(splits), 0), elem(List.last(splits), 1))
     end
   end
 
@@ -246,26 +250,7 @@ defmodule ContextBot.Research.Reply do
         :error
 
       indices ->
-        # Find the last whitespace where left part is ≤ target_graphemes
-        valid_indices = Enum.filter(indices, fn idx -> idx > 0 and idx <= target_graphemes end)
-
-        split_index =
-          case valid_indices do
-            [] ->
-              # No split within target, try to find any within hard max
-              fallback =
-                Enum.filter(indices, fn idx -> idx > 0 and idx <= @hard_max_graphemes end)
-
-              case fallback do
-                [] -> nil
-                indices -> List.last(indices)
-              end
-
-            indices ->
-              List.last(indices)
-          end
-
-        case split_index do
+        case find_whitespace_split_index(indices, target_graphemes) do
           nil ->
             :error
 
@@ -275,6 +260,25 @@ defmodule ContextBot.Research.Reply do
             right = Enum.join(right_graphemes) |> String.trim_leading()
             validate_split_parts(left, right)
         end
+    end
+  end
+
+  defp find_whitespace_split_index(indices, target_graphemes) do
+    # Find the last whitespace where left part is ≤ target_graphemes
+    valid_indices = Enum.filter(indices, fn idx -> idx > 0 and idx <= target_graphemes end)
+
+    case valid_indices do
+      [] ->
+        # No split within target, try to find any within hard max
+        fallback = Enum.filter(indices, fn idx -> idx > 0 and idx <= @hard_max_graphemes end)
+
+        case fallback do
+          [] -> nil
+          indices -> List.last(indices)
+        end
+
+      indices ->
+        List.last(indices)
     end
   end
 
