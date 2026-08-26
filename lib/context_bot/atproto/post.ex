@@ -4,8 +4,10 @@ defmodule ContextBot.ATProto.Post do
   """
 
   alias ContextBot.ATProto.StrongRef
+  alias ContextBot.Research.ReplyLimits
 
   @post_type "app.bsky.feed.post"
+  @link_suffix " (full response)"
 
   @spec build(binary(), String.t() | nil, map(), map() | nil, DateTime.t()) ::
           {:ok, map()}
@@ -14,15 +16,17 @@ defmodule ContextBot.ATProto.Post do
       when is_binary(text) and is_struct(created_at, DateTime) do
     with {:ok, parent} <- validate_ref(parent_ref, :invalid_parent),
          {:ok, root} <- validate_root(root_ref, parent) do
+      {published_text, with_link?} = publish_text(text, reader_url)
+
       base_record = %{
         "$type" => @post_type,
-        "text" => build_text(text, reader_url),
+        "text" => published_text,
         "createdAt" => DateTime.to_iso8601(created_at),
         "reply" => %{"parent" => parent, "root" => root}
       }
 
       record =
-        if reader_url do
+        if with_link? do
           Map.put(base_record, "facets", build_facets(text, reader_url))
         else
           base_record
@@ -38,10 +42,16 @@ defmodule ContextBot.ATProto.Post do
   def build(_text, _reader_url, _parent_ref, _root_ref, _created_at),
     do: {:error, :invalid_created_at}
 
-  defp build_text(text, nil), do: text
+  defp publish_text(text, nil), do: {text, false}
 
-  defp build_text(text, reader_url) when is_binary(reader_url) do
-    text <> " (full response)"
+  defp publish_text(text, reader_url) when is_binary(reader_url) do
+    candidate = text <> @link_suffix
+
+    if ReplyLimits.fits_one_post?(candidate) do
+      {candidate, true}
+    else
+      {text, false}
+    end
   end
 
   defp build_facets(text, reader_url) when is_binary(reader_url) do

@@ -138,6 +138,8 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     }
 
     assert persisted.reply_record == expected_record
+    assert persisted.reply_part2_rkey == nil
+    assert persisted.reply_part2_record == nil
 
     assert [%Oban.Job{} = reply_job] = Repo.all(Oban.Job)
     assert reply_job.worker == "ContextBot.Workers.ReplyWorker"
@@ -151,6 +153,40 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
 
     # The future PDS worker can only become visible in the same commit as this queryable intent.
     assert Repo.get!(Invocation, invocation.id).reply_record == expected_record
+  end
+
+  test "freezes a two-post intent only when the runner result includes text_part2" do
+    invocation = invocation("split-success", :thread_ready)
+    part1 = String.duplicate("a", 150)
+    part2 = String.duplicate("b", 160)
+
+    configure_runner(
+      {:ok,
+       runner_result()
+       |> Map.put(:text, part1)
+       |> Map.put(:text_part2, part2)
+       |> Map.put(:validation, %{
+         "result" => "split",
+         "repair_used" => true,
+         "part1_graphemes" => 150,
+         "part2_graphemes" => 160
+       })}
+    )
+
+    {:ok, agent} = Agent.start_link(fn -> ["3mpart1rkey111", "3mpart2rkey222"] end)
+
+    configure_worker(
+      tid_generator: fn _timestamp ->
+        Agent.get_and_update(agent, fn [head | tail] -> {head, tail} end)
+      end
+    )
+
+    assert :ok = perform(invocation)
+    persisted = Repo.reload!(invocation)
+    assert persisted.selected_reply == part1
+    assert persisted.reply_record["text"] == part1
+    assert persisted.reply_part2_rkey == "3mpart2rkey222"
+    assert persisted.reply_part2_record["text"] == part2
   end
 
   test "completes a dry run with all research evidence and no publication intent" do

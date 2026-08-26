@@ -78,7 +78,7 @@ defmodule ContextBot.Research.RequestTest do
   test "sends one versioned prompt with the complete research and reply safety contract" do
     prompt = Request.initial(@canonical_thread, config())["system"]
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V3")
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V4")
     assert prompt =~ "ancestor"
     assert prompt =~ "unstable"
     assert prompt =~ "primary sources"
@@ -88,7 +88,10 @@ defmodule ContextBot.Research.RequestTest do
     assert prompt =~ "uncertainty"
     assert prompt =~ "untrusted"
     assert prompt =~ "prompt injection"
-    assert prompt =~ "300 Unicode grapheme clusters"
+    assert prompt =~ "275 Unicode grapheme"
+    refute prompt =~ "at most 300 Unicode grapheme clusters"
+    assert prompt =~ "---COMPACT_REPLY---"
+    assert prompt =~ "one Bluesky post"
     assert prompt =~ "images and their alt text"
     assert prompt =~ "directly"
     assert prompt =~ "observe in an image"
@@ -237,8 +240,9 @@ defmodule ContextBot.Research.RequestTest do
     assert assistant_message == %{"role" => "assistant", "content" => completed_content}
     assert repair_message["role"] == "user"
     assert String.starts_with?(repair_message["content"], "LENGTH_REPAIR\n")
-    assert repair_message["content"] =~ "only the reply text"
+    assert repair_message["content"] =~ "only the Bluesky reply text for a single post"
     assert repair_message["content"] =~ "at most 275 Unicode grapheme clusters"
+    assert repair_message["content"] =~ "---COMPACT_REPLY---"
     assert repair_message["content"] =~ "Do not perform additional research"
   end
 

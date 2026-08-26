@@ -52,5 +52,14 @@ defmodule ContextBot.ATProto.PostWithLinkTest do
       base_bytes = byte_size(text)
       assert facet["index"]["byteStart"] == base_bytes + byte_size(" (")
     end
+
+    test "omits the full-response link when it would exceed the Bluesky grapheme limit" do
+      text = String.duplicate("a", 285)
+
+      assert {:ok, record} = Post.build(text, @reader_url, @parent, @root, @created_at)
+
+      assert record["text"] == text
+      refute Map.has_key?(record, "facets")
+    end
   end
 end
