@@ -25,9 +25,9 @@ defmodule ContextBotWeb.PageControllerTest do
 
     response = html_response(conn, 200)
     assert response =~ "What it is"
-    assert response =~ "Philosophy"
     assert response =~ "Why it works"
-    assert response =~ "Transparency"
     assert response =~ "How to use"
+    assert response =~ "Invite Only"
+    assert response =~ "Transparent"
   end
 end
