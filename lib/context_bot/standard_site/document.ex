@@ -42,13 +42,32 @@ defmodule ContextBot.StandardSite.Document do
     case client.put_record(repo, @collection, rkey, record) do
       {:ok, _status, _headers, _body} ->
         uri = "at://#{repo}/#{@collection}/#{rkey}"
-        reader_url = "#{@reader_base_url}/#{repo}/#{rkey}"
-        {:ok, %{uri: uri, rkey: rkey, reader_url: reader_url}}
+        {:ok, %{uri: uri, rkey: rkey, reader_url: reader_url(uri)}}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
+
+  @doc """
+  Derives the Standard Reader HTTPS URL from a stored `site.standard.document` AT URI.
+
+  Returns nil when the value is missing or is not a Standard.site document AT URI.
+  """
+  @spec reader_url(String.t() | nil) :: String.t() | nil
+  def reader_url(nil), do: nil
+
+  def reader_url("at://" <> rest) do
+    case String.split(rest, "/", parts: 3) do
+      [did, @collection, rkey] when did != "" and rkey != "" ->
+        "#{@reader_base_url}/#{did}/#{rkey}"
+
+      _other ->
+        nil
+    end
+  end
+
+  def reader_url(_other), do: nil
 
   @doc """
   Updates an existing document to add the bskyPostRef after the Bluesky reply is published.

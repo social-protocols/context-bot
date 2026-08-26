@@ -51,6 +51,28 @@ defmodule ContextBot.Workflow.InvocationTest do
     assert Repo.reload!(invocation).canonical_media == media
   end
 
+  test "persists Standard.site document fields on research handoff" do
+    invocation =
+      %Invocation{}
+      |> Invocation.changeset(public_attrs())
+      |> Repo.insert!()
+
+    uri = "at://did:plc:bot/site.standard.document/3kfulldoc"
+
+    invocation
+    |> Invocation.transition_changeset(%{
+      full_response: "Detailed analysis.",
+      standard_site_document_uri: uri,
+      standard_site_document_rkey: "3kfulldoc"
+    })
+    |> Repo.update!()
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.full_response == "Detailed analysis."
+    assert persisted.standard_site_document_uri == uri
+    assert persisted.standard_site_document_rkey == "3kfulldoc"
+  end
+
   defp public_attrs do
     %{
       invocation_uri: "at://did:plc:actor/app.bsky.feed.post/public",

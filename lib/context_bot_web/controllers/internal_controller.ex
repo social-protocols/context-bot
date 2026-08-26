@@ -8,6 +8,7 @@ defmodule ContextBotWeb.InternalController do
   import Ecto.Query
   alias ContextBot.Repo
   alias ContextBot.Research.BudgetEntry
+  alias ContextBot.StandardSite.Document
   alias ContextBot.Workflow.Invocation
 
   def index(conn, _params) do
@@ -31,6 +32,7 @@ defmodule ContextBotWeb.InternalController do
         invocation_uri: i.invocation_uri,
         reply_uri: i.reply_uri,
         reply_part2_uri: i.reply_part2_uri,
+        standard_site_document_uri: i.standard_site_document_uri,
         anthropic_attempt_sequence: i.anthropic_attempt_sequence,
         failure_category: i.failure_category,
         failure_detail: i.failure_detail,
@@ -212,6 +214,7 @@ defmodule ContextBotWeb.InternalController do
             <th>Error</th>
             <th>Invocation</th>
             <th>Reply</th>
+            <th>Full Response</th>
             <th>Inserted</th>
             <th>Completed</th>
           </tr>
@@ -243,6 +246,9 @@ defmodule ContextBotWeb.InternalController do
             <td>
               #{reply_link(inv.reply_uri, "1")}
               #{reply_link(inv.reply_part2_uri, "2")}
+            </td>
+            <td>
+              #{full_response_link(inv.standard_site_document_uri)}
             </td>
             <td>#{format_datetime(inv.inserted_at)}</td>
             <td>#{format_datetime(inv.completed_at)}</td>
@@ -281,6 +287,13 @@ defmodule ContextBotWeb.InternalController do
     case bluesky_post_url(uri) do
       nil -> ""
       url -> ~s(<a href="#{url}" target="_blank">#{label}</a>)
+    end
+  end
+
+  defp full_response_link(uri) do
+    case Document.reader_url(uri) do
+      nil -> "—"
+      url -> ~s(<a href="#{escape_html(url)}" target="_blank">full response</a>)
     end
   end
 

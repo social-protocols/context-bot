@@ -287,6 +287,91 @@ defmodule ContextBotWeb.InternalControllerTest do
       refute body =~ "https://bsky.app/profile/did:plc:bot/"
     end
 
+    test "links to the Standard Reader URL from standard_site_document_uri", %{conn: conn} do
+      {:ok, _inv} =
+        %Invocation{}
+        |> Invocation.changeset(%{
+          dry_run: false,
+          invocation_uri: "at://did:plc:test/app.bsky.feed.post/abc123",
+          notification_cid: "cid1",
+          current_cid: "cid1",
+          actor_did: "did:plc:test",
+          actor_handle: "test.bsky.social",
+          raw_notification: %{},
+          received_at: ~U[2026-08-26 10:00:00Z],
+          status: :complete,
+          stage: :complete,
+          reply_uri: "at://did:plc:bot/app.bsky.feed.post/reply1",
+          standard_site_document_uri: "at://did:plc:bot/site.standard.document/3kfulldoc"
+        })
+        |> Repo.insert()
+
+      conn = get(conn, "/invocations")
+      body = html_response(conn, 200)
+
+      assert body =~ "Full Response"
+      assert body =~ ~s(href="https://standard-reader.app/a/did:plc:bot/3kfulldoc")
+      assert body =~ ">full response</a>"
+      refute body =~ "—"
+      assert body =~ "https://bsky.app/profile/did:plc:test/post/abc123"
+      assert body =~ "https://bsky.app/profile/did:plc:bot/post/reply1"
+    end
+
+    test "shows an em dash when standard_site_document_uri is absent", %{conn: conn} do
+      {:ok, inv} =
+        %Invocation{}
+        |> Invocation.changeset(%{
+          dry_run: true,
+          target_uri: "at://did:plc:test/app.bsky.feed.post/xyz789",
+          invocation_text: "Test question",
+          invocation_uri: "at://did:plc:test/app.bsky.feed.post/abc123",
+          notification_cid: "cid1",
+          current_cid: "cid1",
+          actor_did: "did:plc:test",
+          actor_handle: "test.bsky.social",
+          raw_notification: %{},
+          received_at: ~U[2026-08-26 10:00:00Z],
+          status: :complete,
+          stage: :complete
+        })
+        |> Repo.insert()
+
+      conn = get(conn, "/invocations")
+      body = html_response(conn, 200)
+
+      assert body =~ Integer.to_string(inv.id)
+      assert body =~ "—"
+      refute body =~ "standard-reader.app"
+      refute body =~ ~s(href="" )
+    end
+
+    test "shows an em dash for a malformed standard_site_document_uri", %{conn: conn} do
+      {:ok, inv} =
+        %Invocation{}
+        |> Invocation.changeset(%{
+          dry_run: false,
+          invocation_uri: "at://did:plc:test/app.bsky.feed.post/abc123",
+          notification_cid: "cid1",
+          current_cid: "cid1",
+          actor_did: "did:plc:test",
+          actor_handle: "test.bsky.social",
+          raw_notification: %{},
+          received_at: ~U[2026-08-26 10:00:00Z],
+          status: :failed,
+          stage: :failed,
+          standard_site_document_uri: "at://did:plc:bot/app.bsky.feed.post/notadoc"
+        })
+        |> Repo.insert()
+
+      conn = get(conn, "/invocations")
+      body = html_response(conn, 200)
+
+      assert body =~ Integer.to_string(inv.id)
+      assert body =~ "—"
+      refute body =~ "standard-reader.app"
+      refute body =~ ~s(href="at://)
+    end
+
     test "displays attempt count from anthropic_attempt_sequence", %{conn: conn} do
       {:ok, _inv} =
         %Invocation{}
