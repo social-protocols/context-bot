@@ -5,7 +5,7 @@ defmodule Mix.Tasks.ContextBot.DryRun do
 
   import Ecto.Query
 
-  alias ContextBot.{DryRun, Repo, Settings}
+  alias ContextBot.{DryRun, LocalMigrate, Repo, Settings}
   alias ContextBot.DryRun.{Interrupts, Progress}
   alias ContextBot.Research.BudgetEntry
 
@@ -24,6 +24,7 @@ defmodule Mix.Tasks.ContextBot.DryRun do
     settings = Application.fetch_env!(:context_bot, :settings)
 
     validate_runtime!(settings)
+    LocalMigrate.ensure_migrated!()
     ensure_application_started!(runtime)
 
     {invocation, disposition} = prepare!(service, post, question)

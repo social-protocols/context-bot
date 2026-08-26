@@ -14,6 +14,7 @@ defmodule Mix.Tasks.ContextBot.LiveRun do
   alias ContextBot.LiveRun
   alias ContextBot.LiveRun.Progress
   alias ContextBot.LiveRun.Runtime
+  alias ContextBot.LocalMigrate
   alias ContextBot.Repo
   alias ContextBot.Research.BudgetEntry
   alias ContextBot.Settings
@@ -39,6 +40,7 @@ defmodule Mix.Tasks.ContextBot.LiveRun do
 
     validate_runtime!(settings, owner_retry_ms)
     database = configure_runtime!(runtime, database)
+    LocalMigrate.ensure_migrated!()
     uri = resolve!(service, post, resolver)
     print_mode(settings, uri)
 
