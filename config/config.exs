@@ -32,6 +32,16 @@ config :context_bot, ContextBotWeb.Endpoint,
   pubsub_server: ContextBot.PubSub,
   live_view: [signing_salt: "WXfARleR"]
 
+# Configure the internal endpoint (6PN-only in production)
+config :context_bot, ContextBotWeb.InternalEndpoint,
+  url: [host: "localhost"],
+  adapter: Bandit.PhoenixAdapter,
+  render_errors: [
+    formats: [json: ContextBotWeb.ErrorJSON],
+    layout: false
+  ],
+  pubsub_server: ContextBot.PubSub
+
 # Configure all application and OTP output as one safe JSON object per line.
 config :logger, :default_handler,
   config: [type: :standard_error],
