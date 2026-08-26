@@ -16,15 +16,23 @@ defmodule ContextBot.Reply.Intent do
           optional(:reply_part2_record) => map()
         }
 
-  @spec build(Invocation.t(), term(), term(), term(), (integer() -> term())) ::
+  @spec build(Invocation.t(), term(), term(), term(), (integer() -> term()), keyword()) ::
           {:ok, t()} | {:error, atom()}
-  def build(%Invocation{} = invocation, text, bot_did, created_at, tid_generator)
+  def build(
+        %Invocation{} = invocation,
+        text,
+        bot_did,
+        created_at,
+        tid_generator,
+        opts \\ []
+      )
       when is_function(tid_generator, 1) do
     parent = %{"uri" => invocation.invocation_uri, "cid" => invocation.current_cid}
+    reader_url = Keyword.get(opts, :reader_url)
 
     with {:ok, reply_repo} <- publication_repo(bot_did),
          {:ok, root} <- root_ref(invocation),
-         {:ok, record} <- Post.build(text, parent, root, created_at),
+         {:ok, record} <- Post.build(text, reader_url, parent, root, created_at),
          {:ok, rkey} <- generate_rkey(created_at, tid_generator) do
       {:ok,
        %{
@@ -56,14 +64,16 @@ defmodule ContextBot.Reply.Intent do
         text_part2,
         bot_did,
         created_at,
-        tid_generator
+        tid_generator,
+        opts \\ []
       )
       when is_function(tid_generator, 1) do
     parent = %{"uri" => invocation.invocation_uri, "cid" => invocation.current_cid}
+    reader_url = Keyword.get(opts, :reader_url)
 
     with {:ok, reply_repo} <- publication_repo(bot_did),
          {:ok, root} <- root_ref(invocation),
-         {:ok, record1} <- Post.build(text_part1, parent, root, created_at),
+         {:ok, record1} <- Post.build(text_part1, reader_url, parent, root, created_at),
          {:ok, rkey1} <- generate_rkey(created_at, tid_generator),
          {:ok, part2_data, rkey2} <- prepare_part2(text_part2, tid_generator) do
       {:ok,

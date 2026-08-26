@@ -119,9 +119,6 @@ defmodule Mix.Tasks.ContextBot.DeletePosts do
 
       {:ok, %{authenticated?: true}} ->
         Mix.shell().info("✓ Already authenticated")
-
-      {:error, reason} ->
-        Mix.raise("Session unavailable: #{inspect(reason)}")
     end
   end
 end

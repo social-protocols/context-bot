@@ -21,7 +21,7 @@ defmodule ContextBot.ATProto.PostTest do
       }
     }
 
-    assert {:ok, record} = Post.build("Concise context.", parent, root, @created_at)
+    assert {:ok, record} = Post.build("Concise context.", nil, parent, root, @created_at)
     assert record == expected
   end
 
@@ -29,13 +29,14 @@ defmodule ContextBot.ATProto.PostTest do
     {:ok, parent} = StrongRef.new(@invocation_uri, "bafyreicurrent")
 
     assert {:ok, %{"reply" => %{"parent" => ^parent, "root" => ^parent}}} =
-             Post.build("Concise context.", parent, nil, @created_at)
+             Post.build("Concise context.", nil, parent, nil, @created_at)
   end
 
   test "rejects an invalid parent reference" do
     assert {:error, :invalid_parent} =
              Post.build(
                "Concise context.",
+               nil,
                %{"uri" => @invocation_uri, "cid" => ""},
                nil,
                @created_at

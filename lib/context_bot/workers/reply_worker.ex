@@ -404,7 +404,7 @@ defmodule ContextBot.Workers.ReplyWorker do
          {:ok, created_at} <- extract_created_at(frozen_record) do
       parent = %{"uri" => part1_uri, "cid" => part1_cid}
       root = build_root_ref(root_uri, root_cid)
-      Post.build(text, parent, root, created_at)
+      Post.build(text, nil, parent, root, created_at)
     end
   end
 
