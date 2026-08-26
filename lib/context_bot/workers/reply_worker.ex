@@ -294,11 +294,45 @@ defmodule ContextBot.Workers.ReplyWorker do
 
     case Store.renew_publication_claim(invocation, token, dependencies.now.()) do
       {:ok, current} ->
-        publish_part2_record(current, dependencies, part1_uri, part1_cid)
+        current_with_final_part2 = finalize_part2_tid_and_timestamp(current, dependencies)
+        publish_part2_record(current_with_final_part2, dependencies, part1_uri, part1_cid)
 
       {:error, :stale_claim} ->
         :stale_claim
     end
+  end
+
+  defp finalize_part2_tid_and_timestamp(invocation, dependencies) do
+    with {:ok, frozen_created_at} <- extract_created_at(invocation.reply_part2_record),
+         true <- needs_final_timestamp?(frozen_created_at) do
+      alias ContextBot.ATProto.TID
+
+      # Generate final timestamp and TID at publish time
+      final_created_at = dependencies.now.()
+      final_timestamp_us = DateTime.to_unix(final_created_at, :microsecond)
+      final_rkey = TID.generate(final_timestamp_us)
+
+      # Update the frozen record with final createdAt
+      updated_record =
+        Map.put(invocation.reply_part2_record, "createdAt", DateTime.to_iso8601(final_created_at))
+
+      # Update invocation with final rkey and record
+      invocation
+      |> Invocation.changeset(%{
+        reply_part2_rkey: final_rkey,
+        reply_part2_record: updated_record
+      })
+      |> Repo.update!()
+    else
+      _ ->
+        # Already has a final timestamp, or extraction failed - use as-is
+        invocation
+    end
+  end
+
+  defp needs_final_timestamp?(%DateTime{} = dt) do
+    # Check if this is the placeholder timestamp (epoch + 9 microseconds)
+    DateTime.to_unix(dt, :microsecond) == 9
   end
 
   defp publish_part2_record(invocation, dependencies, part1_uri, part1_cid) do
@@ -389,11 +423,7 @@ defmodule ContextBot.Workers.ReplyWorker do
   defp has_part2?(_invocation), do: false
 
   defp rebuild_part2_record(
-         %Invocation{
-           reply_part2_record: frozen_record,
-           root_uri: root_uri,
-           root_cid: root_cid
-         },
+         %Invocation{reply_part2_record: frozen_record} = invocation,
          part1_uri,
          part1_cid
        )
@@ -401,9 +431,9 @@ defmodule ContextBot.Workers.ReplyWorker do
     alias ContextBot.ATProto.Post
 
     with {:ok, text} <- extract_text(frozen_record),
-         {:ok, created_at} <- extract_created_at(frozen_record) do
+         {:ok, created_at} <- extract_created_at(frozen_record),
+         {:ok, root} <- extract_root_or_infer(frozen_record, invocation) do
       parent = %{"uri" => part1_uri, "cid" => part1_cid}
-      root = build_root_ref(root_uri, root_cid)
       Post.build(text, nil, parent, root, created_at)
     end
   end
@@ -430,6 +460,21 @@ defmodule ContextBot.Workers.ReplyWorker do
   end
 
   defp extract_created_at(_record), do: {:error, :missing_created_at}
+
+  defp extract_root_or_infer(%{"reply" => %{"root" => root}}, _invocation) when is_map(root),
+    do: {:ok, root}
+
+  defp extract_root_or_infer(_frozen_record, %Invocation{root_uri: nil, root_cid: nil}),
+    do: {:ok, nil}
+
+  defp extract_root_or_infer(_frozen_record, %Invocation{
+         root_uri: root_uri,
+         root_cid: root_cid
+       })
+       when is_binary(root_uri) and is_binary(root_cid),
+       do: {:ok, %{"uri" => root_uri, "cid" => root_cid}}
+
+  defp extract_root_or_infer(_frozen_record, _invocation), do: {:error, :missing_root}
 
   defp fail_auth(invocation, token, completed_at) do
     transition_terminal(

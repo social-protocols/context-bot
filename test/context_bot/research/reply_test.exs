@@ -597,5 +597,54 @@ defmodule ContextBot.Research.ReplyTest do
     assert Reply.split_text(text) == :error
   end
 
+  test "packs part1 to ~275 graphemes at sentence boundary" do
+    # Create text with sentence breaks at 200, 270, and 280 graphemes (before trim)
+    part_200 = String.duplicate("a", 199) <> "."
+    part_270 = String.duplicate("b", 69) <> "."
+    part_280 = String.duplicate("c", 9) <> "."
+    remainder = String.duplicate("d", 30)
+    text = part_200 <> " " <> part_270 <> " " <> part_280 <> " " <> remainder
+
+    assert String.length(text) == 313
+    assert {:ok, split1, split2} = Reply.split_text(text)
+
+    # Should split at 271 graphemes (after second sentence, includes trailing space before trim)
+    # Split position is at byte after ". " following part_270, then trimmed
+    assert String.length(split1) == 271
+    assert String.length(split2) == 41
+  end
+
+  test "packs part1 to maximum when multiple sentences fit under 275" do
+    # Create sentences that cumulatively fit: 100, 201, 276 (after trim)
+    s1 = String.duplicate("a", 99) <> "."
+    s2 = String.duplicate("b", 99) <> "."
+    s3 = String.duplicate("c", 73) <> "."
+    s4 = String.duplicate("d", 25)
+    text = s1 <> " " <> s2 <> " " <> s3 <> " " <> s4
+
+    assert String.length(text) == 302
+    assert {:ok, split1, split2} = Reply.split_text(text)
+
+    # Should split after s2 (201 graphemes after trim, largest ≤ 275)
+    # s3 would give 276 which exceeds 275
+    assert String.length(split1) == 201
+    assert String.length(split2) == 100
+  end
+
+  test "splits at whitespace near 275 when no sentence boundary fits" do
+    # Create text with only one sentence break at 311 graphemes
+    part1 = String.duplicate("a", 280)
+    part2 = String.duplicate("b", 30) <> "."
+    remainder = String.duplicate("c", 20)
+    text = part1 <> " " <> part2 <> " " <> remainder
+
+    assert String.length(text) == 333
+    assert {:ok, split1, _split2} = Reply.split_text(text)
+
+    # Should split at whitespace closest to but ≤ 275 when no sentence fits
+    split1_len = String.length(split1)
+    assert split1_len <= 280 and split1_len >= 270
+  end
+
   defp text(value), do: %{"type" => "text", "text" => value}
 end

@@ -75,7 +75,7 @@ defmodule ContextBot.Reply.Intent do
          {:ok, root} <- root_ref(invocation),
          {:ok, record1} <- Post.build(text_part1, reader_url, parent, root, created_at),
          {:ok, rkey1} <- generate_rkey(created_at, tid_generator),
-         {:ok, part2_data, rkey2} <- prepare_part2(text_part2, tid_generator) do
+         {:ok, part2_data, rkey2} <- prepare_part2(text_part2, parent, root, tid_generator) do
       {:ok,
        %{
          reply_repo: reply_repo,
@@ -87,13 +87,20 @@ defmodule ContextBot.Reply.Intent do
     end
   end
 
-  defp prepare_part2(text_part2, tid_generator) when is_binary(text_part2) do
-    part2_created_at = DateTime.utc_now()
+  defp prepare_part2(text_part2, parent, root, tid_generator) when is_binary(text_part2) do
+    # Generate a placeholder TID at freeze time. This will be replaced at publish time.
+    # Use a sentinel timestamp to mark this as needing regeneration.
+    placeholder_timestamp_us = 9
+    placeholder_created_at = DateTime.from_unix!(placeholder_timestamp_us, :microsecond)
 
-    with {:ok, part2_rkey} <- generate_rkey(part2_created_at, tid_generator) do
+    # Part2's root should be the same as part1's root. When root is nil, part1 uses parent as root.
+    part2_root = root || parent
+
+    with {:ok, part2_rkey} <- generate_rkey(placeholder_created_at, tid_generator) do
       part2_data = %{
         "text" => text_part2,
-        "createdAt" => DateTime.to_iso8601(part2_created_at)
+        "createdAt" => DateTime.to_iso8601(placeholder_created_at),
+        "reply" => %{"root" => part2_root}
       }
 
       {:ok, part2_data, part2_rkey}

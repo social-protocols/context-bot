@@ -144,6 +144,42 @@ defmodule ContextBot.Workflow.ReprocessorTest do
     assert {:error, :not_reprocessable} = Reprocessor.reprocess(wrong_failure.id, now: @now)
   end
 
+  test "reopens a complete invocation with recorded responses" do
+    invocation = complete_invocation_with_split(true, "complete-reprocess")
+    entry = recorded_attempt(invocation)
+    _envelope = recorded_envelope(invocation, entry)
+
+    assert {:ok, reopened} = Reprocessor.reprocess(invocation.id, now: @now)
+
+    assert reopened.status == :thread_ready
+    assert reopened.stage == :thread_ready
+    assert reopened.reply_uri == nil
+    assert reopened.reply_cid == nil
+    assert reopened.reply_part2_uri == nil
+    assert reopened.reply_part2_cid == nil
+    assert reopened.reply_part2_rkey == nil
+    assert reopened.reply_part2_record == nil
+    assert reopened.completed_at == nil
+  end
+
+  test "clears part2 fields when reopening complete split invocation" do
+    invocation = complete_invocation_with_split(false, "complete-split-reprocess")
+    entry = recorded_attempt(invocation)
+    _envelope = recorded_envelope(invocation, entry)
+
+    assert invocation.reply_part2_uri != nil
+    assert invocation.reply_part2_cid != nil
+    assert invocation.reply_part2_rkey != nil
+    assert invocation.reply_part2_record != nil
+
+    assert {:ok, reopened} = Reprocessor.reprocess(invocation.id, now: @now)
+
+    assert reopened.reply_part2_uri == nil
+    assert reopened.reply_part2_cid == nil
+    assert reopened.reply_part2_rkey == nil
+    assert reopened.reply_part2_record == nil
+  end
+
   test "rejects missing durable request or canonical thread" do
     missing_request = reprocessable_invocation(true, "missing-request")
 
@@ -329,6 +365,51 @@ defmodule ContextBot.Workflow.ReprocessorTest do
             fragment("json_extract(?, '$.cid')", job.args) == ^invocation.notification_cid,
         order_by: job.id
     )
+  end
+
+  defp complete_invocation_with_split(dry_run, suffix) do
+    uri = if(dry_run, do: "local://reprocessor/#{suffix}", else: public_uri(suffix))
+    cid = "bafy-complete-#{suffix}"
+
+    %Invocation{}
+    |> Invocation.changeset(%{
+      dry_run: dry_run,
+      target_uri: if(dry_run, do: public_uri("target-#{suffix}")),
+      invocation_text: if(dry_run, do: "Question?"),
+      invocation_uri: uri,
+      notification_cid: cid,
+      current_cid: cid,
+      actor_did: if(dry_run, do: "local:operator", else: "did:plc:actor"),
+      raw_notification: %{"source" => "test"},
+      received_at: @now,
+      status: :complete,
+      stage: :complete,
+      canonical_thread: "CONTEXT_BOT_THREAD_V2\n\nSome context",
+      canonical_thread_version: "2",
+      canonical_media: [],
+      anthropic_messages: %{
+        "model" => "claude-sonnet-5",
+        "messages" => [
+          %{
+            "role" => "user",
+            "content" => [%{"type" => "text", "text" => "Question?"}]
+          }
+        ]
+      },
+      anthropic_usage: %{"totals" => %{"input_tokens" => 14, "output_tokens" => 337}},
+      reply_uri: public_uri("reply-#{suffix}"),
+      reply_cid: "bafy-reply-#{suffix}",
+      reply_part2_uri: public_uri("reply-part2-#{suffix}"),
+      reply_part2_cid: "bafy-reply-part2-#{suffix}",
+      reply_part2_rkey: "2222222222test",
+      reply_part2_record: %{
+        "text" => "Part 2 text",
+        "createdAt" => "1970-01-01T00:00:00.000009Z",
+        "reply" => %{"root" => %{"uri" => public_uri("root"), "cid" => "bafy-root"}}
+      },
+      completed_at: @now
+    })
+    |> Repo.insert!()
   end
 
   defp public_uri(suffix),

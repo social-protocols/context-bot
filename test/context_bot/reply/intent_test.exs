@@ -109,9 +109,21 @@ defmodule ContextBot.Reply.IntentTest do
            }
 
     assert intent.reply_part2_rkey == "3mpart2rkey222"
-    assert %{"text" => "This is part 2.", "createdAt" => created_at} = intent.reply_part2_record
+
+    assert %{
+             "text" => "This is part 2.",
+             "createdAt" => created_at,
+             "reply" => %{"root" => root}
+           } = intent.reply_part2_record
+
     assert is_binary(created_at)
-    refute Map.has_key?(intent.reply_part2_record, "reply")
+
+    # Part2's root should match part1's root
+    assert root == %{
+             "uri" => invocation.root_uri,
+             "cid" => invocation.root_cid
+           }
+
     refute Map.has_key?(intent.reply_part2_record, "$type")
   end
 
