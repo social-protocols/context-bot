@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Pre-commit hook: run mix format and compile
+set -euo pipefail
+
+printf "Running pre-commit hook: format + compile\n"
+
+# Run mix format on staged Elixir files
+if git diff --cached --name-only --diff-filter=ACM | grep -qE '\.exs?$'; then
+  printf "Formatting Elixir files...\n"
+  mix format || {
+    printf "ERROR: mix format failed\n"
+    exit 1
+  }
+  # Re-add formatted files
+  git diff --cached --name-only --diff-filter=ACM | grep -E '\.exs?$' | xargs git add
+fi
+
+# Compile to catch any obvious errors
+printf "Compiling...\n"
+MIX_ENV=test mix compile --warnings-as-errors || {
+  printf "ERROR: compilation failed\n"
+  exit 1
+}
+
+printf "Pre-commit hook passed\n"
