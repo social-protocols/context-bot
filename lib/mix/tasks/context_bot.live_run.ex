@@ -14,6 +14,7 @@ defmodule Mix.Tasks.ContextBot.LiveRun do
   alias ContextBot.LiveRun
   alias ContextBot.LiveRun.Progress
   alias ContextBot.LiveRun.Runtime
+  alias ContextBot.LocalMigrate
   alias ContextBot.Repo
   alias ContextBot.Research.BudgetEntry
   alias ContextBot.Settings
@@ -39,7 +40,7 @@ defmodule Mix.Tasks.ContextBot.LiveRun do
 
     validate_runtime!(settings, owner_retry_ms)
     database = configure_runtime!(runtime, database)
-    ensure_migrated!()
+    LocalMigrate.ensure_migrated!()
     uri = resolve!(service, post, resolver)
     print_mode(settings, uri)
 
@@ -81,13 +82,6 @@ defmodule Mix.Tasks.ContextBot.LiveRun do
   end
 
   def run(_arguments), do: Mix.raise("expected exactly one invocation URL")
-
-  defp ensure_migrated! do
-    case Mix.Task.run("ecto.migrate", ["--quiet"]) do
-      :ok -> :ok
-      _ -> :ok
-    end
-  end
 
   defp run_existing(
          service,

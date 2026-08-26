@@ -5,7 +5,7 @@ defmodule Mix.Tasks.ContextBot.DryRun do
 
   import Ecto.Query
 
-  alias ContextBot.{DryRun, Repo, Settings}
+  alias ContextBot.{DryRun, LocalMigrate, Repo, Settings}
   alias ContextBot.DryRun.{Interrupts, Progress}
   alias ContextBot.Research.BudgetEntry
 
@@ -24,7 +24,7 @@ defmodule Mix.Tasks.ContextBot.DryRun do
     settings = Application.fetch_env!(:context_bot, :settings)
 
     validate_runtime!(settings)
-    ensure_migrated!()
+    LocalMigrate.ensure_migrated!()
     ensure_application_started!(runtime)
 
     {invocation, disposition} = prepare!(service, post, question)
@@ -49,13 +49,6 @@ defmodule Mix.Tasks.ContextBot.DryRun do
   end
 
   def run(_arguments), do: Mix.raise("expected exactly a post and question")
-
-  defp ensure_migrated! do
-    case Mix.Task.run("ecto.migrate", ["--quiet"]) do
-      :ok -> :ok
-      _ -> :ok
-    end
-  end
 
   defp print_result(result, settled_cost) do
     case result do

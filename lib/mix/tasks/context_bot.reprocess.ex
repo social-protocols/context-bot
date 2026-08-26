@@ -3,6 +3,7 @@ defmodule Mix.Tasks.ContextBot.Reprocess do
 
   use Mix.Task
 
+  alias ContextBot.LocalMigrate
   alias ContextBot.Workflow.{Reprocessor, ReprocessorRuntime}
 
   @requirements ["app.config"]
@@ -16,7 +17,7 @@ defmodule Mix.Tasks.ContextBot.Reprocess do
     reprocessor = Keyword.get(config, :reprocessor, Reprocessor)
     now = Keyword.get(config, :now, &DateTime.utc_now/0)
 
-    ensure_migrated!()
+    LocalMigrate.ensure_migrated!()
     start_runtime!(runtime)
 
     case reprocessor.reprocess(id, now: now.()) do
@@ -34,13 +35,6 @@ defmodule Mix.Tasks.ContextBot.Reprocess do
   end
 
   def run(_arguments), do: Mix.raise("expected exactly one positive integer invocation ID")
-
-  defp ensure_migrated! do
-    case Mix.Task.run("ecto.migrate", ["--quiet"]) do
-      :ok -> :ok
-      _ -> :ok
-    end
-  end
 
   defp parse_invocation_id!(value) when is_binary(value) do
     case Integer.parse(value) do
