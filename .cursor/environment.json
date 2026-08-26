@@ -3,5 +3,5 @@
     "dockerfile": ".cursor/Dockerfile",
     "context": ".."
   },
-  "install": "mix local.hex --force && mix local.rebar --force && mix deps.get && mix compile && cp .githooks/pre-commit .githooks/pre-push .git/hooks/ && chmod +x .git/hooks/pre-commit .git/hooks/pre-push"
+  "install": "mix local.hex --force && mix local.rebar --force && mix deps.get && mix compile && git config core.hooksPath .githooks"
 }
