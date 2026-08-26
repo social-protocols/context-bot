@@ -7,8 +7,8 @@ defmodule ContextBotWeb.InternalController do
 
   import Ecto.Query
   alias ContextBot.Repo
-  alias ContextBot.Workflow.Invocation
   alias ContextBot.Research.BudgetEntry
+  alias ContextBot.Workflow.Invocation
 
   def index(conn, _params) do
     now = DateTime.utc_now()

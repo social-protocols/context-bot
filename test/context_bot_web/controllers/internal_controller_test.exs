@@ -6,8 +6,8 @@ defmodule ContextBotWeb.InternalControllerTest do
   @endpoint ContextBotWeb.InternalEndpoint
 
   alias ContextBot.Repo
-  alias ContextBot.Workflow.Invocation
   alias ContextBot.Research.BudgetEntry
+  alias ContextBot.Workflow.Invocation
 
   describe "GET /invocations" do
     test "displays summary statistics for last day, week, and month", %{conn: conn} do
