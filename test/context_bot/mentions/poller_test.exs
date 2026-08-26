@@ -170,6 +170,66 @@ defmodule ContextBot.Mentions.PollerTest do
     assert Repo.aggregate(Invocation, :count) == 0
   end
 
+  test "continues polling after a transient client error" do
+    poller = start_poller()
+
+    Poller.poll_now(poller)
+    assert_receive {:list_notifications, nil}
+    send(poller, {:notification_error, :timeout})
+
+    assert_eventually(fn -> Poller.idle?(poller) end)
+
+    # Verify the next poll is scheduled
+    Poller.poll_now(poller)
+    assert_receive {:list_notifications, nil}
+    send(poller, {:notification_page, page([mention("recovered")])})
+
+    assert_eventually(fn -> Store.received?(uri("recovered"), cid("recovered")) end)
+  end
+
+  test "continues polling after a store error during receipt processing" do
+    # Create a poller with a mock store that will fail once
+    defmodule FailingStore do
+      def received?(_uri, _cid), do: false
+      def pending_capacity_available?(_max), do: true
+
+      def receive_mention(receipt, received_at, next_job) do
+        if :persistent_term.get({__MODULE__, :fail_once}, true) do
+          :persistent_term.put({__MODULE__, :fail_once}, false)
+          raise "simulated database error"
+        else
+          Store.receive_mention(receipt, received_at, next_job)
+        end
+      end
+    end
+
+    :persistent_term.put({FailingStore, :fail_once}, true)
+
+    on_exit(fn ->
+      :persistent_term.erase({FailingStore, :fail_once})
+    end)
+
+    poller = start_poller(store: FailingStore)
+
+    Poller.poll_now(poller)
+    assert_receive {:list_notifications, nil}
+    send(poller, {:notification_page, page([mention("first")])})
+
+    # Wait for the error to be logged and the poller to become idle
+    Process.sleep(100)
+
+    # Verify the poller is still alive and can process the next poll
+    assert Process.alive?(poller)
+    assert_eventually(fn -> Poller.idle?(poller) end)
+
+    # Verify the next poll works
+    Poller.poll_now(poller)
+    assert_receive {:list_notifications, nil}
+    send(poller, {:notification_page, page([mention("second")])})
+
+    assert_eventually(fn -> Store.received?(uri("second"), cid("second")) end)
+  end
+
   defp start_poller(overrides \\ []) do
     {:ok, poller} =
       Poller.start_link(

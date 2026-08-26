@@ -64,10 +64,21 @@ defmodule ContextBot.Mentions.Poller do
   def handle_info(:poll, %{draining?: true} = state), do: {:noreply, state}
 
   def handle_info(:poll, state) do
+    require Logger
     state = %{state | draining?: true}
-    receipts = drain(state, nil, 0, [])
-    receive_receipts(state, receipts)
-    Process.send_after(self(), :poll, state.poll_interval_ms)
+
+    try do
+      receipts = drain(state, nil, 0, [])
+      receive_receipts(state, receipts)
+    rescue
+      exception ->
+        Logger.error(
+          "Poller cycle failed: #{Exception.format(:error, exception, __STACKTRACE__)}"
+        )
+    after
+      Process.send_after(self(), :poll, state.poll_interval_ms)
+    end
+
     {:noreply, %{state | draining?: false}}
   end
 
