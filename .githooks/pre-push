@@ -29,4 +29,9 @@ bash test/live_run_wrapper_test.sh || {
   exit 1
 }
 
+bash test/fly_wrapper_test.sh || {
+  printf "ERROR: fly_wrapper_test.sh failed\n"
+  exit 1
+}
+
 printf "Pre-push hook passed\n"

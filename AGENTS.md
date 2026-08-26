@@ -66,6 +66,7 @@ Cursor cloud agents automatically install git hooks during environment setup. Th
 | `just docker-build` | Build the production image locally. |
 | `just secrets` / `deploy` | Validate Bitwarden fields or deploy to Fly. |
 | `just fly-status` / `fly-logs` | Inspect the Fly app. |
+| `just fly-dashboard` | Open the 6PN-only `/invocations` dashboard in Google Chrome via `fly proxy` to `context-bot-social-protocols.internal:4001`. |
 
 Run `direnv exec . just check` before any completion claim. For release or deployment changes, also run `direnv exec . just docker-build` and smoke-test `/health`.
 

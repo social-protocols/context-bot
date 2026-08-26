@@ -158,6 +158,7 @@ it reports the existing reply URL without another Claude request or Bluesky post
 | `just reprocess <invocation-id>` | With the bot disabled and workers stopped, reopen a guarded provider-processing failure from its retained response; performs no external I/O. |
 | `just fly-reprocess <id>` | Reprocess one production invocation from its retained response on Fly. May publish a Bluesky reply. External authorization required. |
 | `just fly-invocation <id>` | Query and display production invocation status by ID on Fly. External authorization required. |
+| `just fly-dashboard` | Proxy the 6PN-only dashboard (`context-bot-social-protocols.internal:4001/invocations`) to `http://127.0.0.1:4001/invocations` and open it in Google Chrome. External authorization required. |
 | `just docker-build` | Build `context-bot:local`. |
 | `just secrets` | Validate the allowlisted Bitwarden fields without printing values. |
 | `just deploy` | Stage the three runtime secrets and deploy to Fly. External authorization is required. |
