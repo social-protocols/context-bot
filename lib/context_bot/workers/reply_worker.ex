@@ -388,19 +388,36 @@ defmodule ContextBot.Workers.ReplyWorker do
   defp has_part2?(%Invocation{reply_part2_record: record}) when is_map(record), do: true
   defp has_part2?(_invocation), do: false
 
-  defp rebuild_part2_record(%Invocation{reply_part2_record: frozen_record}, part1_uri, part1_cid)
+  defp rebuild_part2_record(
+         %Invocation{
+           reply_part2_record: frozen_record,
+           root_uri: root_uri,
+           root_cid: root_cid
+         },
+         part1_uri,
+         part1_cid
+       )
        when is_map(frozen_record) and is_binary(part1_uri) and is_binary(part1_cid) do
     alias ContextBot.ATProto.Post
 
     with {:ok, text} <- extract_text(frozen_record),
          {:ok, created_at} <- extract_created_at(frozen_record) do
       parent = %{"uri" => part1_uri, "cid" => part1_cid}
-      Post.build(text, nil, parent, nil, created_at)
+      root = build_root_ref(root_uri, root_cid)
+      Post.build(text, nil, parent, root, created_at)
     end
   end
 
   defp rebuild_part2_record(_invocation, _part1_uri, _part1_cid),
     do: {:error, :invalid_part2_data}
+
+  defp build_root_ref(nil, nil), do: nil
+
+  defp build_root_ref(root_uri, root_cid)
+       when is_binary(root_uri) and is_binary(root_cid),
+       do: %{"uri" => root_uri, "cid" => root_cid}
+
+  defp build_root_ref(_root_uri, _root_cid), do: nil
 
   defp extract_text(%{"text" => text}) when is_binary(text), do: {:ok, text}
   defp extract_text(_record), do: {:error, :missing_text}

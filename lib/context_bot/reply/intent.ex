@@ -88,8 +88,7 @@ defmodule ContextBot.Reply.Intent do
   end
 
   defp prepare_part2(text_part2, tid_generator) when is_binary(text_part2) do
-    part2_timestamp_us = System.unique_integer([:positive, :monotonic])
-    part2_created_at = DateTime.from_unix!(part2_timestamp_us, :microsecond)
+    part2_created_at = DateTime.utc_now()
 
     with {:ok, part2_rkey} <- generate_rkey(part2_created_at, tid_generator) do
       part2_data = %{
