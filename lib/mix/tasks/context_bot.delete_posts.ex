@@ -3,8 +3,8 @@ defmodule Mix.Tasks.ContextBot.DeletePosts do
 
   use Mix.Task
 
-  alias ContextBot.ATProto.Session
   alias ContextBot.ATProto.ReqClient
+  alias ContextBot.ATProto.Session
 
   @requirements ["app.config"]
   @shortdoc "Delete specific Bluesky posts"
@@ -88,6 +88,7 @@ defmodule Mix.Tasks.ContextBot.DeletePosts do
 
   defp validate_environment! do
     password = System.get_env("BOT_APP_PASSWORD")
+
     unless password && String.trim(password) != "" do
       Mix.raise("BOT_APP_PASSWORD environment variable is required")
     end
