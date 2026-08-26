@@ -29,6 +29,7 @@ defmodule ContextBot.Research.Runner do
   @type result :: %{
           required(:messages) => map(),
           required(:text) => String.t(),
+          optional(:full_response) => String.t(),
           required(:usage) => map(),
           required(:validation) => map()
         }
@@ -275,6 +276,16 @@ defmodule ContextBot.Research.Runner do
 
   defp classify_stop_reason(invocation, _entry, decoded, config) do
     case select_reply(decoded, invocation) do
+      {:ok, full_response, text} ->
+        {:ok,
+         %{
+           messages: invocation.anthropic_messages,
+           text: text,
+           full_response: full_response,
+           usage: usage_evidence(invocation, config),
+           validation: %{"result" => "valid", "repair_used" => repair_request?(invocation)}
+         }}
+
       {:ok, text} ->
         {:ok,
          %{
