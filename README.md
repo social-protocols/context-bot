@@ -99,6 +99,8 @@ does not contact Anthropic or Bluesky. Start the normal runtime afterward, or re
 put it into maintenance before reprocessing, then restart it afterward. If the stored answer is over
 the Bluesky limit, the normal budgeted length-repair call may still occur.
 
+For production invocations on Fly, use `just fly-reprocess <id>` instead. This command connects via SSH to the running Fly machine, starts the necessary dependencies, and reprocesses the invocation directly on the production database. It may publish a Bluesky reply and requires explicit operator authorization. The bot remains enabled during reprocessing. Query production invocation status with `just fly-invocation <id>` before reprocessing to inspect failure details and decide whether reprocessing is appropriate.
+
 Every row created this way has `dry_run = 1`. It skips mention eligibility and mention-rate admission, but retains provider budgets, response/tool/token/storage limits, retries, leases, and full bounded provider response envelopes. It never starts the notification poller or ATProto session, never creates a reply record, and cannot acquire a publication lease. A budget deferral remains durable for later operator inspection; rerunning the command creates a new check.
 
 Inspect dry-run metadata without selecting stored thread, prompt, response, or answer content:
@@ -154,6 +156,8 @@ it reports the existing reply URL without another Claude request or Bluesky post
 | `just dry-run <post> <question>` | Run a durable local-only context check; reads Bluesky and may spend Anthropic budget. |
 | `just live-run <invocation-url>` | Process one real direct mention locally and publish its Bluesky reply. Explicit authorization required. |
 | `just reprocess <invocation-id>` | With the bot disabled and workers stopped, reopen a guarded provider-processing failure from its retained response; performs no external I/O. |
+| `just fly-reprocess <id>` | Reprocess one production invocation from its retained response on Fly. May publish a Bluesky reply. External authorization required. |
+| `just fly-invocation <id>` | Query and display production invocation status by ID on Fly. External authorization required. |
 | `just docker-build` | Build `context-bot:local`. |
 | `just secrets` | Validate the allowlisted Bitwarden fields without printing values. |
 | `just deploy` | Stage the three runtime secrets and deploy to Fly. External authorization is required. |
