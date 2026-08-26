@@ -434,7 +434,14 @@ defmodule ContextBot.Workers.ReplyWorker do
          {:ok, created_at} <- extract_created_at(frozen_record),
          {:ok, root} <- extract_root_or_infer(frozen_record, invocation) do
       parent = %{"uri" => part1_uri, "cid" => part1_cid}
-      Post.build(text, nil, parent, root, created_at)
+
+      case frozen_record do
+        %{"readerUrl" => reader_url} when is_binary(reader_url) and reader_url != "" ->
+          Post.build_link_only(reader_url, parent, root, created_at)
+
+        _unlinked ->
+          Post.build(text, nil, parent, root, created_at)
+      end
     end
   end
 

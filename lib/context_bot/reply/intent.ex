@@ -4,6 +4,7 @@ defmodule ContextBot.Reply.Intent do
   """
 
   alias ContextBot.ATProto.Post
+  alias ContextBot.Research.ReplyLimits
   alias ContextBot.Workflow.Invocation
 
   @did_regex ~r/\Adid:[a-z0-9]+:[A-Za-z0-9._:%-]+\z/
@@ -27,28 +28,24 @@ defmodule ContextBot.Reply.Intent do
         opts \\ []
       )
       when is_function(tid_generator, 1) do
-    parent = %{"uri" => invocation.invocation_uri, "cid" => invocation.current_cid}
-    reader_url = Keyword.get(opts, :reader_url)
-
-    with {:ok, reply_repo} <- publication_repo(bot_did),
-         {:ok, root} <- root_ref(invocation),
-         {:ok, record} <- Post.build(text, reader_url, parent, root, created_at),
-         {:ok, rkey} <- generate_rkey(created_at, tid_generator) do
-      {:ok,
-       %{
-         reply_repo: reply_repo,
-         reply_rkey: rkey,
-         reply_record: record
-       }}
-    end
+    place(
+      invocation,
+      text,
+      nil,
+      bot_did,
+      created_at,
+      tid_generator,
+      Keyword.get(opts, :reader_url)
+    )
   end
 
   @doc """
   Builds an intent with a second part for split replies.
 
-  Part 2 will reply to part 1 (not to the invocation). At freeze time, part2's record
-  contains only text and createdAt because part1 has not been published yet. ReplyWorker
-  rebuilds the full part2 record with part1's published URI and CID before publishing.
+  When a Standard Reader URL is present, part 2 is the full-response link by itself rather
+  than leftover compact body mixed with the link. Part 2 replies to part 1. At freeze time,
+  part2's record is incomplete because part1 has not been published yet; ReplyWorker rebuilds
+  the full part2 record with part1's published URI and CID before publishing.
   """
   @spec build_with_part2(
           Invocation.t(),
@@ -56,7 +53,8 @@ defmodule ContextBot.Reply.Intent do
           String.t(),
           term(),
           term(),
-          (integer() -> term())
+          (integer() -> term()),
+          keyword()
         ) :: {:ok, t()} | {:error, atom()}
   def build_with_part2(
         %Invocation{} = invocation,
@@ -68,22 +66,113 @@ defmodule ContextBot.Reply.Intent do
         opts \\ []
       )
       when is_function(tid_generator, 1) do
+    place(
+      invocation,
+      text_part1,
+      text_part2,
+      bot_did,
+      created_at,
+      tid_generator,
+      Keyword.get(opts, :reader_url)
+    )
+  end
+
+  defp place(invocation, text, remainder, bot_did, created_at, tid_generator, reader_url)
+       when is_binary(text) do
     parent = %{"uri" => invocation.invocation_uri, "cid" => invocation.current_cid}
-    reader_url = Keyword.get(opts, :reader_url)
 
     with {:ok, reply_repo} <- publication_repo(bot_did),
-         {:ok, root} <- root_ref(invocation),
-         {:ok, record1} <- Post.build(text_part1, reader_url, parent, root, created_at),
-         {:ok, rkey1} <- generate_rkey(created_at, tid_generator),
-         {:ok, part2_data, rkey2} <- prepare_part2(text_part2, parent, root, tid_generator) do
+         {:ok, root} <- root_ref(invocation) do
+      cond do
+        single_post_with_link?(text, remainder, reader_url) ->
+          freeze_single(text, reader_url, parent, root, created_at, tid_generator, reply_repo)
+
+        link_only_part2?(text, reader_url) ->
+          freeze_with_link_part2(
+            text,
+            reader_url,
+            parent,
+            root,
+            created_at,
+            tid_generator,
+            reply_repo
+          )
+
+        is_binary(remainder) ->
+          freeze_body_split(
+            text,
+            remainder,
+            parent,
+            root,
+            created_at,
+            tid_generator,
+            reply_repo
+          )
+
+        true ->
+          freeze_single(text, nil, parent, root, created_at, tid_generator, reply_repo)
+      end
+    end
+  end
+
+  defp single_post_with_link?(text, nil, reader_url) when is_binary(reader_url),
+    do: ReplyLimits.fits_one_post?(text <> Post.link_suffix())
+
+  defp single_post_with_link?(_text, _remainder, _reader_url), do: false
+
+  defp link_only_part2?(text, reader_url) when is_binary(reader_url),
+    do: ReplyLimits.fits_one_post?(text)
+
+  defp link_only_part2?(_text, _reader_url), do: false
+
+  defp freeze_single(text, reader_url, parent, root, created_at, tid_generator, reply_repo) do
+    with {:ok, record} <- Post.build(text, reader_url, parent, root, created_at),
+         {:ok, rkey} <- generate_rkey(created_at, tid_generator) do
+      {:ok, %{reply_repo: reply_repo, reply_rkey: rkey, reply_record: record}}
+    end
+  end
+
+  defp freeze_with_link_part2(
+         text,
+         reader_url,
+         parent,
+         root,
+         created_at,
+         tid_generator,
+         reply_repo
+       ) do
+    with {:ok, record} <- Post.build(text, nil, parent, root, created_at),
+         {:ok, rkey} <- generate_rkey(created_at, tid_generator),
+         {:ok, part2_data, rkey2} <- prepare_link_part2(reader_url, parent, root, tid_generator) do
       {:ok,
        %{
          reply_repo: reply_repo,
-         reply_rkey: rkey1,
-         reply_record: record1,
+         reply_rkey: rkey,
+         reply_record: record,
          reply_part2_rkey: rkey2,
          reply_part2_record: part2_data
        }}
+    end
+  end
+
+  defp freeze_body_split(text, remainder, parent, root, created_at, tid_generator, reply_repo) do
+    with {:ok, record} <- Post.build(text, nil, parent, root, created_at),
+         {:ok, rkey} <- generate_rkey(created_at, tid_generator),
+         {:ok, part2_data, rkey2} <- prepare_part2(remainder, parent, root, tid_generator) do
+      {:ok,
+       %{
+         reply_repo: reply_repo,
+         reply_rkey: rkey,
+         reply_record: record,
+         reply_part2_rkey: rkey2,
+         reply_part2_record: part2_data
+       }}
+    end
+  end
+
+  defp prepare_link_part2(reader_url, parent, root, tid_generator) do
+    with {:ok, part2_data, rkey} <- prepare_part2(Post.link_label(), parent, root, tid_generator) do
+      {:ok, Map.put(part2_data, "readerUrl", reader_url), rkey}
     end
   end
 
