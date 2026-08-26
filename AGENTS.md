@@ -36,6 +36,19 @@ just setup
 
 After completing each user prompt, commit the changes with a concise message explaining what changed. Do not create merge commits. Keep history linear with an explicit rebase, fast-forward, or selected cherry-picks, and integrate only the commits the user requests.
 
+### Git hooks
+
+The repository uses local git hooks in `.githooks/` to catch issues before CI:
+
+- **pre-commit**: runs `mix format` on staged Elixir files and compiles with warnings-as-errors
+- **pre-push**: runs the full test suite (`mix test` plus shell script tests)
+
+Hooks are automatically installed via `git config core.hooksPath .githooks` during the `.cursor/environment.json` install step. Never bypass hooks with `--no-verify` unless explicitly authorized for a specific commit; hooks provide fast feedback and reduce CI churn.
+
+## Cursor Cloud specific instructions
+
+Cursor cloud agents automatically install git hooks during environment setup. The hooks will run on every commit and push operation.
+
 ## Commands
 
 | Command | Purpose |

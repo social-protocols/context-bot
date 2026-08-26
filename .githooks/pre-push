@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Pre-push hook: run mix test
+set -euo pipefail
+
+printf "Running pre-push hook: tests\n"
+
+# Ensure data directory exists
+mkdir -p data
+
+# Run all tests
+mix test || {
+  printf "ERROR: tests failed\n"
+  exit 1
+}
+
+# Run shell script tests
+bash test/secrets_test.sh || {
+  printf "ERROR: secrets_test.sh failed\n"
+  exit 1
+}
+
+bash test/dry_run_wrapper_test.sh || {
+  printf "ERROR: dry_run_wrapper_test.sh failed\n"
+  exit 1
+}
+
+bash test/live_run_wrapper_test.sh || {
+  printf "ERROR: live_run_wrapper_test.sh failed\n"
+  exit 1
+}
+
+printf "Pre-push hook passed\n"
