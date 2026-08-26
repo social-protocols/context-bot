@@ -161,6 +161,7 @@ it reports the existing reply URL without another Claude request or Bluesky post
 | `just fly-dashboard` | Proxy the 6PN-only dashboard (`context-bot-social-protocols.internal:4001/invocations`) to `http://127.0.0.1:4001/invocations` and open it in Google Chrome. External authorization required. |
 | `just docker-build` | Build `context-bot:local`. |
 | `just secrets` | Validate the allowlisted Bitwarden fields without printing values. |
+| `just secrets-sync` | Load secrets from Bitwarden and synchronize them to Fly without deploying. External authorization is required. |
 | `just deploy` | Stage the three runtime secrets and deploy to Fly. External authorization is required. |
 | `just fly-status` / `fly-logs` | Inspect the Fly application. External authorization is required. |
 
@@ -216,6 +217,18 @@ fly ssh console --command \
 
 Keep live inspection aggregate-only. Do not select raw notifications, threads, Anthropic messages, provider bodies, or frozen reply text.
 
+## Automatic deployment
+
+A GitHub Actions workflow automatically deploys the application to Fly whenever changes are pushed to the `main` branch. To enable automatic deployments, add the `FLY_API_TOKEN` as a GitHub Actions secret:
+
+1. Generate a Fly API token with `fly auth token` or retrieve it from your Bitwarden item.
+2. In your GitHub repository, go to Settings → Secrets and variables → Actions.
+3. Click "New repository secret" and add:
+   - Name: `FLY_API_TOKEN`
+   - Secret: Your Fly API token value
+
+The workflow uses the committed `fly.toml` configuration and does not modify `BOT_ENABLED` or other environment variables. Runtime secrets (`SECRET_KEY_BASE`, `BOT_APP_PASSWORD`, `ANTHROPIC_API_KEY`) must be staged separately using `just secrets-sync` or `just deploy` before the first deployment.
+
 ## Secrets and Fly configuration
 
 Create one Bitwarden item with these four custom fields, using the names exactly:
@@ -225,7 +238,17 @@ Create one Bitwarden item with these four custom fields, using the names exactly
 - `BOT_APP_PASSWORD`
 - `ANTHROPIC_API_KEY`
 
-`secrets.sh` accepts one or more names from that fixed allowlist, disables shell tracing while values are handled, exports only the requested fields after all requested values are present, removes the Bitwarden payload and temporary variables, restores the caller's tracing state, and reports names without values. `just dry-run` requests only `ANTHROPIC_API_KEY`; `just live-run` requests only `BOT_APP_PASSWORD` and `ANTHROPIC_API_KEY`. `just secrets` and `just deploy` request all four; `FLY_API_TOKEN` authenticates Fly, while deploy sends only `SECRET_KEY_BASE`, `BOT_APP_PASSWORD`, and `ANTHROPIC_API_KEY` to `fly secrets import --stage` over standard input. Secret values are never command-line arguments. With `set dotenv-load := true`, `just` reads non-secret local configuration such as `BITWARDEN_ITEM_ID` from the ignored `.env` file automatically.
+`secrets.sh` accepts one or more names from that fixed allowlist, disables shell tracing while values are handled, exports only the requested fields after all requested values are present, removes the Bitwarden payload and temporary variables, restores the caller's tracing state, and reports names without values. `just dry-run` requests only `ANTHROPIC_API_KEY`; `just live-run` requests only `BOT_APP_PASSWORD` and `ANTHROPIC_API_KEY`. `just secrets`, `just secrets-sync`, and `just deploy` request all four; `FLY_API_TOKEN` authenticates Fly, while `secrets-sync` sends only `SECRET_KEY_BASE`, `BOT_APP_PASSWORD`, and `ANTHROPIC_API_KEY` to `fly secrets import` and deploy sends the same three names to `fly secrets import --stage` over standard input. Secret values are never command-line arguments. With `set dotenv-load := true`, `just` reads non-secret local configuration such as `BITWARDEN_ITEM_ID` from the ignored `.env` file automatically.
+
+### Rotating secrets
+
+When secrets in Bitwarden are updated (e.g., after key rotation), synchronize them to Fly without triggering a full deployment:
+
+```bash
+just secrets-sync
+```
+
+This command loads the current secrets from Bitwarden and updates Fly's secret store. The running application will automatically restart to pick up the new values. Use `just deploy` instead if you also need to deploy code changes.
 
 Before any live deployment, replace the empty `BOT_DID`, `BOT_HANDLE`, and `BOT_PDS_URL` values in `fly.toml` with the real public bot DID, handle, and HTTPS PDS URL. Review the committed limits and the `OPERATOR_ALLOWED_DIDS` comma-separated DID allowlist. Do not set `BOT_ENABLED=true` yet. `APPVIEW_URL` is pinned to the reviewed `https://api.bsky.app` trust root, and authenticated `app.bsky.*` requests explicitly select `did:web:api.bsky.app#bsky_appview` through the PDS service proxy. Polling accepts only a 5,000–3,600,000 ms interval and a 1–20 page cap. ATProto/thread timeouts are capped at 60 seconds, the Anthropic timeout at 10 minutes, parent height at 100, provider output at 64,000 tokens, repair output at 8,192 tokens, each web-tool count at 10, fetched content at 100,000 tokens, continuations at 5, and HTTP retries at 3. Response and aggregate-storage caps are bounded at 16 MB and 128 MB; startup additionally requires enough aggregate storage for every permitted response plus envelope metadata. `QUEUE_CONCURRENCY` must remain exactly `1` so provider execution stays serial. The API version and server-tool types are date-validated. Retain the committed defaults unless a reviewed design or provider change requires otherwise.
 

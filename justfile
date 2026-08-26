@@ -127,6 +127,17 @@ secrets:
     source ./secrets.sh FLY_API_TOKEN SECRET_KEY_BASE BOT_APP_PASSWORD ANTHROPIC_API_KEY
     printf 'Deployment secrets loaded and validated.\n'
 
+secrets-sync:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    set +x
+    source ./secrets.sh FLY_API_TOKEN SECRET_KEY_BASE BOT_APP_PASSWORD ANTHROPIC_API_KEY
+    printf '%s\n' \
+      "SECRET_KEY_BASE=$SECRET_KEY_BASE" \
+      "BOT_APP_PASSWORD=$BOT_APP_PASSWORD" \
+      "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" | fly secrets import
+    printf 'Runtime secrets synchronized to Fly.\n'
+
 deploy:
     #!/usr/bin/env bash
     set -euo pipefail
