@@ -10,6 +10,7 @@ One-sentence facts and constraints distilled from investigations in this repo. L
 - Request Skywatch labels from direct `api.bsky.app` and require its labeler-confirmation response header. ([reports/2026-07-28-live-eligibility-signals.md](reports/2026-07-28-live-eligibility-signals.md))
 - Trust `bsky.team` only after bidirectional handle/DID verification; forward resolution can be stale. ([reports/2026-07-28-live-eligibility-signals.md](reports/2026-07-28-live-eligibility-signals.md))
 - Poll notifications newest-first with `priority=false`; filtered empty pages can still carry a cursor. ([reports/2026-07-29-poc-provider-contracts.md](reports/2026-07-29-poc-provider-contracts.md))
+- Treat `reason=reply` notifications whose `record.reply.parent` URI repo is the bot DID as invocations; skip the bot's own posts and dedupe by URI+CID.
 - Mark Anthropic attempts sent before POST; replay of exposed attempts needs a new budget reservation. ([reports/2026-07-29-poc-provider-contracts.md](reports/2026-07-29-poc-provider-contracts.md))
 - Freeze a TID reply record and reconcile GET/PUT results; never allocate a second rkey after ambiguity. ([reports/2026-07-29-poc-provider-contracts.md](reports/2026-07-29-poc-provider-contracts.md))
 - Req 0.7 nests named-Finch timeouts under `finch:`; Oban SQLite uses `Oban.Engines.Lite`. ([reports/2026-07-29-poc-provider-contracts.md](reports/2026-07-29-poc-provider-contracts.md))

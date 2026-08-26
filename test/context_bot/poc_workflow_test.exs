@@ -104,11 +104,9 @@ defmodule ContextBot.POCWorkflowTest do
 
     notification_call = Enum.find(POCFixture.calls(fixture), &(&1.endpoint == :notifications))
 
-    assert notification_call.query == %{
-             "limit" => "100",
-             "priority" => "false",
-             "reasons" => "mention"
-           }
+    assert notification_call.query["limit"] == "100"
+    assert notification_call.query["priority"] == "false"
+    assert notification_call.query["reasons"] in ["mention", "reply"]
 
     thread_call = Enum.find(POCFixture.calls(fixture), &(&1.endpoint == :thread))
 

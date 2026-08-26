@@ -1,6 +1,6 @@
 defmodule ContextBot.Mentions.Poller do
   @moduledoc """
-  Drains direct-mention notification pages into durable workflow receipts.
+  Drains mention and reply-to-bot notification pages into durable workflow receipts.
 
   Every drain starts at the newest notification page. Cursors are intentionally
   ephemeral backward-pagination tokens, never checkpoints.

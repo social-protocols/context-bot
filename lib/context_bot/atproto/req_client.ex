@@ -14,13 +14,14 @@ defmodule ContextBot.ATProto.ReqClient do
 
   @impl true
   def list_notifications(cursor) when is_binary(cursor) or is_nil(cursor) do
-    params = [reasons: "mention", priority: false, limit: 100]
-    params = if cursor, do: Keyword.put(params, :cursor, cursor), else: params
+    query =
+      [{"reasons", "mention"}, {"reasons", "reply"}, {"priority", "false"}, {"limit", "100"}]
+      |> maybe_put_cursor(cursor)
+      |> URI.encode_query()
 
     authenticated_request(
       method: :get,
-      url: pds_url() <> "/xrpc/app.bsky.notification.listNotifications",
-      params: params,
+      url: pds_url() <> "/xrpc/app.bsky.notification.listNotifications?" <> query,
       headers: [@appview_proxy_header]
     )
   end
@@ -263,6 +264,9 @@ defmodule ContextBot.ATProto.ReqClient do
       end) and
       Regex.match?(~r/[a-z]/, List.last(labels))
   end
+
+  defp maybe_put_cursor(pairs, nil), do: pairs
+  defp maybe_put_cursor(pairs, cursor), do: [{"cursor", cursor} | pairs]
 
   defp pds_url do
     settings = Application.fetch_env!(:context_bot, :settings)
