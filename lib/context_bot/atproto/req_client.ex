@@ -101,6 +101,20 @@ defmodule ContextBot.ATProto.ReqClient do
     )
   end
 
+  @impl true
+  def delete_record(repo, collection, rkey)
+      when is_binary(repo) and is_binary(collection) and is_binary(rkey) do
+    authenticated_request(
+      method: :post,
+      url: pds_url() <> "/xrpc/com.atproto.repo.deleteRecord",
+      json: %{
+        "repo" => repo,
+        "collection" => collection,
+        "rkey" => rkey
+      }
+    )
+  end
+
   defp authenticated_request(request_options) do
     session = config()[:session] || ContextBot.ATProto.Session
 

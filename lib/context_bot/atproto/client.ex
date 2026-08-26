@@ -37,4 +37,10 @@ defmodule ContextBot.ATProto.Client do
               rkey :: String.t(),
               record :: map()
             ) :: result()
+
+  @callback delete_record(
+              repo :: String.t(),
+              collection :: String.t(),
+              rkey :: String.t()
+            ) :: result()
 end
