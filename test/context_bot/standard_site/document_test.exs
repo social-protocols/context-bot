@@ -41,6 +41,23 @@ defmodule ContextBot.StandardSite.DocumentTest do
     end
   end
 
+  describe "reader_url_from_uri/1" do
+    test "converts a stored document AT URI into the Standard Reader URL" do
+      uri = "at://did:plc:test123abc/site.standard.document/3k123abc"
+
+      assert Document.reader_url_from_uri(uri) ==
+               "https://standard-reader.app/a/did:plc:test123abc/3k123abc"
+    end
+
+    test "returns nil when the URI is missing or not a Standard.site document" do
+      assert Document.reader_url_from_uri(nil) == nil
+      assert Document.reader_url_from_uri("") == nil
+      assert Document.reader_url_from_uri("https://example.com/doc") == nil
+      assert Document.reader_url_from_uri("at://did:plc:test/app.bsky.feed.post/3k123") == nil
+      assert Document.reader_url_from_uri("at://did:plc:test/site.standard.document/") == nil
+    end
+  end
+
   describe "add_post_ref/4" do
     test "updates document with bskyPostRef" do
       post_uri = "at://did:plc:abc/app.bsky.feed.post/3k456"
