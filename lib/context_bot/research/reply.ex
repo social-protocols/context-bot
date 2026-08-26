@@ -250,11 +250,9 @@ defmodule ContextBot.Research.Reply do
   end
 
   defp find_whitespace_near_target(graphemes, target) do
-    indexed = Enum.with_index(graphemes)
-
     # Find all whitespace positions
     whitespace_indices =
-      grapheme_list
+      graphemes
       |> Enum.with_index()
       |> Enum.filter(fn {char, _idx} -> char in [" ", "\n", "\t"] end)
       |> Enum.map(fn {_char, idx} -> idx + 1 end)
