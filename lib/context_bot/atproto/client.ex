@@ -6,6 +6,7 @@ defmodule ContextBot.ATProto.Client do
   secret-free error categories on failure.
   """
 
+  @type t :: module()
   @type headers :: %{optional(String.t()) => [String.t()]}
   @type success :: {:ok, non_neg_integer(), headers(), term()}
 
