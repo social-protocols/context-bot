@@ -43,11 +43,11 @@ The repository uses local git hooks in `.githooks/` to catch issues before CI:
 - **pre-commit**: runs `mix format` on staged Elixir files and compiles with warnings-as-errors
 - **pre-push**: runs the full test suite (`mix test` plus shell script tests)
 
-Hooks are automatically installed via `git config core.hooksPath .githooks` during the `.cursor/environment.json` install step. Never bypass hooks with `--no-verify` unless explicitly authorized for a specific commit; hooks provide fast feedback and reduce CI churn.
+Hooks are automatically installed via `git config core.hooksPath .githooks` during the `.cursor/environment.json` install step. Never bypass hooks with `git commit --no-verify` or `git push --no-verify` unless Jonathan explicitly authorizes it for a specific commit. CI is the backstop, not the only gate — hooks provide fast local feedback and reduce CI churn.
 
 ## Cursor Cloud specific instructions
 
-Cursor cloud agents automatically install git hooks during environment setup. The hooks will run on every commit and push operation.
+Cursor cloud agents automatically install git hooks during environment setup. The hooks will run on every commit and push operation. Do not use `--no-verify` to bypass hooks unless explicitly authorized.
 
 ## Commands
 
