@@ -213,15 +213,8 @@ defmodule ContextBot.Research.Reply do
       candidates ->
         # Prefer: maximize part1 up to prompt_target, else find closest to prompt_target
         best =
-          candidates
-          |> Enum.max_by(fn {_split_pos, left_graphemes} ->
-            if left_graphemes <= prompt_target do
-              # Within target: prefer larger
-              {1, left_graphemes}
-            else
-              # Over target: prefer closer (smaller distance)
-              {0, -abs(left_graphemes - prompt_target)}
-            end
+          Enum.max_by(candidates, fn {_split_pos, left_graphemes} ->
+            score_split_candidate(left_graphemes, prompt_target)
           end)
 
         {split_pos, _graphemes} = best
@@ -259,20 +252,23 @@ defmodule ContextBot.Research.Reply do
 
     case whitespace_indices do
       [] ->
-        :error
+        nil
 
       indices ->
         # Find whitespace that maximizes part1 up to target, else closest to target
-        Enum.max_by(indices, fn idx ->
-          if idx <= target do
-            # Within target: prefer larger (closer to target)
-            {1, idx}
-          else
-            # Over target: prefer closer (smaller distance)
-            {0, -abs(idx - target)}
-          end
-        end)
+        Enum.max_by(indices, &score_split_candidate(&1, target))
     end
+  end
+
+  # Score a split candidate: prefer maximizing part1 up to target, else find closest to target
+  defp score_split_candidate(value, target) when value <= target do
+    # Within target: prefer larger (closer to target)
+    {1, value}
+  end
+
+  defp score_split_candidate(value, target) do
+    # Over target: prefer closer (smaller distance)
+    {0, -abs(value - target)}
   end
 
   defp validate_split_parts(left, right) do

@@ -441,14 +441,6 @@ defmodule ContextBot.Workers.ReplyWorker do
   defp rebuild_part2_record(_invocation, _part1_uri, _part1_cid),
     do: {:error, :invalid_part2_data}
 
-  defp build_root_ref(nil, nil), do: nil
-
-  defp build_root_ref(root_uri, root_cid)
-       when is_binary(root_uri) and is_binary(root_cid),
-       do: %{"uri" => root_uri, "cid" => root_cid}
-
-  defp build_root_ref(_root_uri, _root_cid), do: nil
-
   defp extract_text(%{"text" => text}) when is_binary(text), do: {:ok, text}
   defp extract_text(_record), do: {:error, :missing_text}
 
