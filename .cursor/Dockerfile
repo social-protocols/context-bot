@@ -14,4 +14,7 @@ RUN apt-get update && \
     sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
+# Install just (static binary for command runner)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+
 # Mix and hex tools come with Elixir; Elixir is already on PATH

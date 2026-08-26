@@ -114,16 +114,10 @@ defmodule Mix.Tasks.ContextBot.ReprocessTest do
   end
 
   test "just reprocess delegates to the Mix task" do
-    case System.find_executable("just") do
-      nil ->
-        :ok
+    {recipe, 0} =
+      System.cmd("just", ["--dry-run", "reprocess", "42"], stderr_to_stdout: true)
 
-      _path ->
-        {recipe, 0} =
-          System.cmd("just", ["--dry-run", "reprocess", "42"], stderr_to_stdout: true)
-
-        assert recipe == "mix context_bot.reprocess '42'\n"
-    end
+    assert recipe == "mix context_bot.reprocess '42'\n"
   end
 
   defp run(arguments) do

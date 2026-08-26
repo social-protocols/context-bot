@@ -224,17 +224,11 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
   end
 
   test "just dry-run delegates to the signal-safe wrapper and retains dotenv loading" do
-    case System.find_executable("just") do
-      nil ->
-        :ok
+    {recipe, 0} =
+      System.cmd("just", ["--dry-run", "dry-run", "post", "question"], stderr_to_stdout: true)
 
-      _path ->
-        {recipe, 0} =
-          System.cmd("just", ["--dry-run", "dry-run", "post", "question"], stderr_to_stdout: true)
-
-        assert recipe == "./dry-run.sh 'post' 'question'\n"
-        assert File.read!("justfile") =~ "set dotenv-load := true"
-    end
+    assert recipe == "./dry-run.sh 'post' 'question'\n"
+    assert File.read!("justfile") =~ "set dotenv-load := true"
   end
 
   test "fails closed when the public bot is enabled" do
