@@ -191,96 +191,84 @@ defmodule ContextBot.Research.Reply do
   end
 
   defp find_best_sentence_split(text, matches) do
-    # Target 275 graphemes for part 1, with 300 as hard max
-    target_graphemes = ReplyLimits.prompt_target_graphemes()
-
-    # Find the last sentence break where the left part is ≤ target_graphemes
     byte_length = byte_size(text)
+    prompt_target = ReplyLimits.prompt_target_graphemes()
 
-    # Convert each match to a potential split and check grapheme count
-    valid_splits =
-      Enum.filter(matches, fn {pos, len} ->
-        split_pos = pos + len
-        left = binary_part(text, 0, split_pos)
-        left_graphemes = String.length(left)
-        left_graphemes > 0 and left_graphemes <= target_graphemes
-      end)
-
-    case valid_splits do
+    # Find the sentence break that maximizes part1 length while staying ≤ prompt_target graphemes
+    # If none fit within prompt_target, find the one closest to prompt_target
+    matches
+    |> Enum.map(fn {pos, len} ->
+      split_pos = pos + len
+      left = binary_part(text, 0, split_pos)
+      left_graphemes = String.length(left)
+      {split_pos, left_graphemes}
+    end)
+    |> Enum.filter(fn {_split_pos, left_graphemes} ->
+      left_graphemes <= @hard_max_graphemes
+    end)
+    |> case do
       [] ->
-        # No split within target, try to find any split within hard max
-        fallback_splits =
-          Enum.filter(matches, fn {pos, len} ->
-            split_pos = pos + len
-            left = binary_part(text, 0, split_pos)
-            left_graphemes = String.length(left)
-            left_graphemes > 0 and left_graphemes <= @hard_max_graphemes
+        :error
+
+      candidates ->
+        # Prefer: maximize part1 up to prompt_target, else find closest to prompt_target
+        best =
+          Enum.max_by(candidates, fn {_split_pos, left_graphemes} ->
+            score_split_candidate(left_graphemes, prompt_target)
           end)
 
-        case fallback_splits do
-          [] -> :error
-          splits -> try_last_split(text, List.last(splits), byte_length)
-        end
-
-      splits ->
-        # Use the last (rightmost) split within target
-        try_last_split(text, List.last(splits), byte_length)
+        {split_pos, _graphemes} = best
+        left = binary_part(text, 0, split_pos)
+        right = binary_part(text, split_pos, byte_length - split_pos)
+        validate_split_parts(left, right)
     end
   end
 
-  defp try_last_split(text, {pos, len}, byte_length) do
-    split_pos = pos + len
-    left = binary_part(text, 0, split_pos)
-    right = binary_part(text, split_pos, byte_length - split_pos)
-    validate_split_parts(left, right)
+  defp try_split_at_whitespace(text) do
+    graphemes = String.graphemes(text)
+    prompt_target = ReplyLimits.prompt_target_graphemes()
+
+    graphemes
+    |> find_whitespace_near_target(prompt_target)
+    |> case do
+      nil ->
+        :error
+
+      split_index ->
+        {left_graphemes, right_graphemes} = Enum.split(graphemes, split_index)
+        left = Enum.join(left_graphemes)
+        right = Enum.join(right_graphemes) |> String.trim_leading()
+        validate_split_parts(left, right)
+    end
   end
 
-  defp try_split_at_whitespace(text) do
-    target_graphemes = ReplyLimits.prompt_target_graphemes()
-    grapheme_list = String.graphemes(text)
-
+  defp find_whitespace_near_target(graphemes, target) do
     # Find all whitespace positions
     whitespace_indices =
-      grapheme_list
+      graphemes
       |> Enum.with_index()
       |> Enum.filter(fn {char, _idx} -> char in [" ", "\n", "\t"] end)
       |> Enum.map(fn {_char, idx} -> idx + 1 end)
 
     case whitespace_indices do
       [] ->
-        :error
+        nil
 
       indices ->
-        case find_whitespace_split_index(indices, target_graphemes) do
-          nil ->
-            :error
-
-          idx ->
-            {left_graphemes, right_graphemes} = Enum.split(grapheme_list, idx)
-            left = Enum.join(left_graphemes)
-            right = Enum.join(right_graphemes) |> String.trim_leading()
-            validate_split_parts(left, right)
-        end
+        # Find whitespace that maximizes part1 up to target, else closest to target
+        Enum.max_by(indices, &score_split_candidate(&1, target))
     end
   end
 
-  defp find_whitespace_split_index(indices, target_graphemes) do
-    # Find the last whitespace where left part is ≤ target_graphemes
-    valid_indices = Enum.filter(indices, fn idx -> idx > 0 and idx <= target_graphemes end)
+  # Score a split candidate: prefer maximizing part1 up to target, else find closest to target
+  defp score_split_candidate(value, target) when value <= target do
+    # Within target: prefer larger (closer to target)
+    {1, value}
+  end
 
-    case valid_indices do
-      [] ->
-        # No split within target, try to find any within hard max
-        fallback = Enum.filter(indices, fn idx -> idx > 0 and idx <= @hard_max_graphemes end)
-
-        case fallback do
-          [] -> nil
-          indices -> List.last(indices)
-        end
-
-      indices ->
-        List.last(indices)
-    end
+  defp score_split_candidate(value, target) do
+    # Over target: prefer closer (smaller distance)
+    {0, -abs(value - target)}
   end
 
   defp validate_split_parts(left, right) do

@@ -65,10 +65,14 @@ defmodule ContextBot.Workflow.Reprocessor do
         reply_repo: nil,
         reply_rkey: nil,
         reply_record: nil,
+        reply_part2_rkey: nil,
+        reply_part2_record: nil,
         publication_claim_token: nil,
         publication_claimed_at: nil,
         reply_uri: nil,
         reply_cid: nil,
+        reply_part2_uri: nil,
+        reply_part2_cid: nil,
         failure_category: nil,
         failure_detail: nil,
         completed_at: nil
@@ -86,6 +90,16 @@ defmodule ContextBot.Workflow.Reprocessor do
          status: :failed,
          stage: :failed,
          failure_category: :provider_response,
+         canonical_thread: canonical_thread,
+         anthropic_messages: anthropic_messages
+       })
+       when is_binary(canonical_thread) and canonical_thread != "" and
+              is_map(anthropic_messages),
+       do: :ok
+
+  defp validate_invocation!(%Invocation{
+         status: :complete,
+         stage: :complete,
          canonical_thread: canonical_thread,
          anthropic_messages: anthropic_messages
        })
