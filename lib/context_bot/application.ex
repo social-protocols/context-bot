@@ -16,7 +16,7 @@ defmodule ContextBot.Application do
         {Finch, name: ContextBot.Finch},
         {DNSCluster, query: Application.get_env(:context_bot, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: ContextBot.PubSub}
-      ] ++ bot_children(settings) ++ [ContextBotWeb.Endpoint]
+      ] ++ bot_children(settings) ++ [ContextBotWeb.Endpoint, ContextBotWeb.InternalEndpoint]
 
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options
@@ -29,6 +29,7 @@ defmodule ContextBot.Application do
   @impl true
   def config_change(changed, _new, removed) do
     ContextBotWeb.Endpoint.config_change(changed, removed)
+    ContextBotWeb.InternalEndpoint.config_change(changed, removed)
     :ok
   end
 
