@@ -804,6 +804,40 @@ defmodule ContextBot.Research.RunnerTest do
     assert_received {:anthropic_call, _continued, %{kind: :continuation}, false}
   end
 
+  test "selects model text from a bash_code_execution envelope without publishing stdout" do
+    invocation = invocation("bash-code-execution-success")
+    fixture = decoded_fixture("tool_success.json")
+
+    body =
+      put_in(fixture, ["content"], [
+        %{
+          "type" => "server_tool_use",
+          "id" => "srvtoolu_bash_1",
+          "name" => "bash_code_execution",
+          "input" => %{"command" => "sleep 20 && echo done"}
+        },
+        %{
+          "type" => "bash_code_execution_tool_result",
+          "tool_use_id" => "srvtoolu_bash_1",
+          "content" => %{
+            "type" => "bash_code_execution_result",
+            "stdout" => "done\n",
+            "stderr" => "",
+            "return_code" => 0,
+            "content" => []
+          }
+        },
+        %{"type" => "text", "text" => "Useful context from primary sources."}
+      ])
+
+    Process.put(:runner_client_results, [{:ok, envelope(200, Jason.encode!(body))}])
+
+    assert {:ok, result} = Runner.run(invocation, options())
+    assert result.text == "Useful context from primary sources."
+    refute result.text =~ "done"
+    assert result.usage["tool_use_counts"] == %{"web_fetch" => 0, "web_search" => 0}
+  end
+
   test "rejects malformed saved tool history before sending a continuation" do
     code_result = %{
       "type" => "code_execution_tool_result",

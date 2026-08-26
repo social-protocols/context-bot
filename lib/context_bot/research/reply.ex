@@ -11,6 +11,14 @@ defmodule ContextBot.Research.Reply do
 
   @hard_max_graphemes ReplyLimits.hard_max_graphemes()
   @max_bytes ReplyLimits.max_bytes()
+  @web_server_tools ~w(web_search web_fetch)
+  @code_execution_tools ~w(code_execution bash_code_execution text_editor_code_execution)
+  @allowed_server_tools @web_server_tools ++ @code_execution_tools
+  @code_execution_result_types ~w(
+    code_execution_tool_result
+    bash_code_execution_tool_result
+    text_editor_code_execution_tool_result
+  )
 
   @type reason :: atom() | {atom(), term()}
   @type server_tool_name :: String.t()
@@ -31,7 +39,8 @@ defmodule ContextBot.Research.Reply do
 
   A bare stop reason means there are no server-tool calls pending from an earlier response. For a
   continued `pause_turn`, pass `%{stop_reason: reason, pending_server_tools: %{id => name}}` so a
-  leading result block can complete the prior `web_search`, `web_fetch`, or `code_execution` call.
+  leading result block can complete the prior `web_search`, `web_fetch`, `code_execution`,
+  `bash_code_execution`, or `text_editor_code_execution` call.
   Prior response text is intentionally not accepted here and is never included in the selected
   reply.
   """
@@ -348,7 +357,7 @@ defmodule ContextBot.Research.Reply do
 
   defp valid_pending_server_tools?(pending_server_tools) do
     Enum.all?(pending_server_tools, fn {id, name} ->
-      is_binary(id) and id != "" and name in ["web_search", "web_fetch", "code_execution"]
+      is_binary(id) and id != "" and name in @allowed_server_tools
     end)
   end
 
@@ -401,23 +410,18 @@ defmodule ContextBot.Research.Reply do
     do: {:halt, {:error, :unexpected_tool_use}}
 
   defp collect_block(
-         %{
-           "type" => "server_tool_use",
-           "id" => id,
-           "name" => "code_execution",
-           "input" => input
-         },
+         %{"type" => "server_tool_use", "id" => id, "name" => name, "input" => input},
          {:ok, texts, pending, prior_pending, seen_tool_ids}
        )
-       when is_binary(id) and id != "" and is_map(input) do
-    add_pending_tool(id, "code_execution", texts, pending, prior_pending, seen_tool_ids)
+       when is_binary(id) and id != "" and is_map(input) and name in @code_execution_tools do
+    add_pending_tool(id, name, texts, pending, prior_pending, seen_tool_ids)
   end
 
   defp collect_block(
          %{"type" => "server_tool_use", "id" => id, "name" => name, "input" => _input},
          {:ok, texts, pending, prior_pending, seen_tool_ids}
        )
-       when is_binary(id) and id != "" and name in ["web_search", "web_fetch"] do
+       when is_binary(id) and id != "" and name in @web_server_tools do
     add_pending_tool(id, name, texts, pending, prior_pending, seen_tool_ids)
   end
 
@@ -438,15 +442,19 @@ defmodule ContextBot.Research.Reply do
   end
 
   defp collect_block(
-         %{
-           "type" => "code_execution_tool_result",
-           "tool_use_id" => id,
-           "content" => content
-         },
+         %{"type" => type, "tool_use_id" => id, "content" => content},
          {:ok, texts, pending, prior_pending, seen_tool_ids}
        )
-       when is_binary(id) and id != "" and is_map(content) do
-    complete_tool(id, "code_execution", texts, pending, prior_pending, seen_tool_ids)
+       when is_binary(id) and id != "" and is_map(content) and
+              type in @code_execution_result_types do
+    complete_tool(
+      id,
+      code_execution_tool_name(type),
+      texts,
+      pending,
+      prior_pending,
+      seen_tool_ids
+    )
   end
 
   defp collect_block(
@@ -468,13 +476,12 @@ defmodule ContextBot.Research.Reply do
   defp collect_block(%{"type" => type}, _state)
        when type in [
               "web_search_tool_result",
-              "web_fetch_tool_result",
-              "code_execution_tool_result"
+              "web_fetch_tool_result" | @code_execution_result_types
             ],
        do: {:halt, {:error, :invalid_content}}
 
   defp collect_block(%{"type" => "server_tool_use", "name" => name}, _state)
-       when is_binary(name) and name not in ["web_search", "web_fetch", "code_execution"],
+       when is_binary(name) and name not in @allowed_server_tools,
        do: {:halt, {:error, :unexpected_tool_use}}
 
   defp collect_block(%{"type" => "server_tool_use"}, _state),
@@ -506,6 +513,12 @@ defmodule ContextBot.Research.Reply do
         {:halt, {:error, :unexpected_tool_use}}
     end
   end
+
+  defp code_execution_tool_name("code_execution_tool_result"), do: "code_execution"
+  defp code_execution_tool_name("bash_code_execution_tool_result"), do: "bash_code_execution"
+
+  defp code_execution_tool_name("text_editor_code_execution_tool_result"),
+    do: "text_editor_code_execution"
 
   defp validate_saved_content(content, pending, seen_tool_ids) do
     content
@@ -561,17 +574,14 @@ defmodule ContextBot.Research.Reply do
   end
 
   defp validate_saved_block(
-         %{
-           "type" => "code_execution_tool_result",
-           "tool_use_id" => id,
-           "content" => content
-         },
+         %{"type" => type, "tool_use_id" => id, "content" => content},
          {:ok, pending, prior_pending, seen_tool_ids}
        )
-       when is_binary(id) and id != "" and is_map(content) do
+       when is_binary(id) and id != "" and is_map(content) and
+              type in @code_execution_result_types do
     complete_saved_tool(
       id,
-      "code_execution",
+      code_execution_tool_name(type),
       content,
       pending,
       prior_pending,
@@ -587,28 +597,23 @@ defmodule ContextBot.Research.Reply do
        do: {:halt, {:error, :unexpected_tool_use}}
 
   defp validate_saved_block(
-         %{
-           "type" => "server_tool_use",
-           "id" => id,
-           "name" => "code_execution",
-           "input" => input
-         },
+         %{"type" => "server_tool_use", "id" => id, "name" => name, "input" => input},
          {:ok, pending, prior_pending, seen_tool_ids}
        )
-       when is_binary(id) and id != "" and is_map(input) do
-    add_saved_tool(id, "code_execution", pending, prior_pending, seen_tool_ids)
+       when is_binary(id) and id != "" and is_map(input) and name in @code_execution_tools do
+    add_saved_tool(id, name, pending, prior_pending, seen_tool_ids)
   end
 
   defp validate_saved_block(
          %{"type" => "server_tool_use", "id" => id, "name" => name, "input" => _input},
          {:ok, pending, prior_pending, seen_tool_ids}
        )
-       when is_binary(id) and id != "" and name in ["web_search", "web_fetch"] do
+       when is_binary(id) and id != "" and name in @web_server_tools do
     add_saved_tool(id, name, pending, prior_pending, seen_tool_ids)
   end
 
   defp validate_saved_block(%{"type" => "server_tool_use", "name" => name}, _state)
-       when is_binary(name) and name not in ["web_search", "web_fetch", "code_execution"],
+       when is_binary(name) and name not in @allowed_server_tools,
        do: {:halt, {:error, :unexpected_tool_use}}
 
   defp validate_saved_block(%{"type" => "server_tool_use"}, _state),
@@ -620,8 +625,7 @@ defmodule ContextBot.Research.Reply do
   defp validate_saved_block(%{"type" => type}, _state)
        when type in [
               "web_search_tool_result",
-              "web_fetch_tool_result",
-              "code_execution_tool_result"
+              "web_fetch_tool_result" | @code_execution_result_types
             ],
        do: {:halt, {:error, :invalid_content}}
 
@@ -677,7 +681,9 @@ defmodule ContextBot.Research.Reply do
        ),
        do: is_binary(error_code)
 
-  defp valid_tool_result_content?("code_execution", content) when is_map(content), do: true
+  defp valid_tool_result_content?(name, content)
+       when name in @code_execution_tools and is_map(content),
+       do: true
 
   defp valid_tool_result_content?(_tool_name, _content), do: false
 

@@ -145,6 +145,121 @@ defmodule ContextBot.Research.ReplyTest do
     assert Reply.select(completed_content, context) == {:ok, "Final context only."}
   end
 
+  test "accepts paired bash and text-editor code execution while selecting only model text" do
+    content = [
+      %{"type" => "thinking", "thinking" => "opaque", "signature" => "signed"},
+      %{
+        "type" => "server_tool_use",
+        "id" => "code-1",
+        "name" => "code_execution",
+        "input" => %{"code" => "opaque provider program"}
+      },
+      %{
+        "type" => "code_execution_tool_result",
+        "tool_use_id" => "code-1",
+        "content" => %{
+          "type" => "encrypted_code_execution_result",
+          "encrypted_stdout" => "opaque"
+        }
+      },
+      %{
+        "type" => "server_tool_use",
+        "id" => "bash-1",
+        "name" => "bash_code_execution",
+        "input" => %{"command" => "sleep 20 && echo done"}
+      },
+      %{
+        "type" => "bash_code_execution_tool_result",
+        "tool_use_id" => "bash-1",
+        "content" => %{
+          "type" => "bash_code_execution_result",
+          "stdout" => "done\n",
+          "stderr" => "",
+          "return_code" => 0,
+          "content" => []
+        }
+      },
+      %{
+        "type" => "server_tool_use",
+        "id" => "editor-1",
+        "name" => "text_editor_code_execution",
+        "input" => %{"command" => "view", "path" => "/tmp/notes.md"}
+      },
+      %{
+        "type" => "text_editor_code_execution_tool_result",
+        "tool_use_id" => "editor-1",
+        "content" => %{
+          "type" => "text_editor_code_execution_view_result",
+          "file_type" => "text",
+          "content" => "opaque file body"
+        }
+      },
+      %{
+        "type" => "server_tool_use",
+        "id" => "code-2",
+        "name" => "code_execution",
+        "input" => %{"code" => "more opaque"}
+      },
+      %{
+        "type" => "code_execution_tool_result",
+        "tool_use_id" => "code-2",
+        "content" => %{"type" => "code_execution_result", "content" => []}
+      },
+      text("Publish this. "),
+      text("Not the tool output.")
+    ]
+
+    assert Reply.select(content, :end_turn) == {:ok, "Publish this. Not the tool output."}
+  end
+
+  test "fails closed on malformed, duplicate, mismatched, and orphaned bash code execution" do
+    call = %{
+      "type" => "server_tool_use",
+      "id" => "bash-1",
+      "name" => "bash_code_execution",
+      "input" => %{"command" => "echo done"}
+    }
+
+    result = %{
+      "type" => "bash_code_execution_tool_result",
+      "tool_use_id" => "bash-1",
+      "content" => %{"type" => "bash_code_execution_result", "stdout" => "done\n"}
+    }
+
+    invalid_content = [
+      [Map.delete(call, "id"), result, text("must not publish")],
+      [Map.put(call, "id", ""), result, text("must not publish")],
+      [Map.put(call, "input", "not-a-map"), result, text("must not publish")],
+      [call, Map.delete(result, "content"), text("must not publish")],
+      [call, Map.put(result, "content", []), text("must not publish")],
+      [call, Map.put(result, "tool_use_id", "other"), text("must not publish")],
+      [call, call, result, text("must not publish")],
+      [result, text("must not publish")]
+    ]
+
+    Enum.each(invalid_content, fn content ->
+      assert {:error, _reason} = Reply.select(content, :end_turn)
+    end)
+  end
+
+  test "completes bash code execution started in a prior pause" do
+    completed_content = [
+      %{
+        "type" => "bash_code_execution_tool_result",
+        "tool_use_id" => "paused-bash-1",
+        "content" => %{"type" => "bash_code_execution_result", "stdout" => "done\n"}
+      },
+      text("Final context only.")
+    ]
+
+    context = %{
+      stop_reason: "end_turn",
+      pending_server_tools: %{"paused-bash-1" => "bash_code_execution"}
+    }
+
+    assert Reply.select(completed_content, context) == {:ok, "Final context only."}
+  end
+
   test "completes a server tool started in a prior pause without publishing prior partial text" do
     paused_content = [
       text("Partial pre-pause narration must not publish. "),
