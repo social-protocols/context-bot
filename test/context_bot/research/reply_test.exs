@@ -2,6 +2,7 @@ defmodule ContextBot.Research.ReplyTest do
   use ExUnit.Case, async: true
 
   alias ContextBot.Research.Reply
+  alias ContextBot.Research.ReplyLimits
 
   test "accepts ordered model text at exactly 300 graphemes and 3,000 bytes" do
     reply =
@@ -699,6 +700,11 @@ defmodule ContextBot.Research.ReplyTest do
   test "refuses to split text already within limits" do
     within_limits = String.duplicate("a", 300)
     assert Reply.split_text(within_limits) == :error
+  end
+
+  test "fits_one_post?/1 accepts 300 graphemes and rejects 301" do
+    assert ReplyLimits.fits_one_post?(String.duplicate("a", 300))
+    refute ReplyLimits.fits_one_post?(String.duplicate("a", 301))
   end
 
   test "validates both parts are within grapheme and byte limits" do

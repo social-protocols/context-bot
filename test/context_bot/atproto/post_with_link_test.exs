@@ -52,5 +52,25 @@ defmodule ContextBot.ATProto.PostWithLinkTest do
       base_bytes = byte_size(text)
       assert facet["index"]["byteStart"] == base_bytes + byte_size(" (")
     end
+
+    test "appends the full-response link even when the combined text exceeds 300 graphemes" do
+      text = String.duplicate("a", 285)
+
+      assert {:ok, record} = Post.build(text, @reader_url, @parent, @root, @created_at)
+
+      assert record["text"] == text <> " (full response)"
+      assert [facet] = record["facets"]
+      assert hd(facet["features"])["uri"] == @reader_url
+    end
+
+    test "build_link_only/4 facets the entire full-response label" do
+      assert {:ok, record} = Post.build_link_only(@reader_url, @parent, @root, @created_at)
+
+      assert record["text"] == "full response"
+      assert [facet] = record["facets"]
+      assert facet["index"]["byteStart"] == 0
+      assert facet["index"]["byteEnd"] == byte_size("full response")
+      assert hd(facet["features"])["uri"] == @reader_url
+    end
   end
 end

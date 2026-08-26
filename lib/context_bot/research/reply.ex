@@ -724,10 +724,8 @@ defmodule ContextBot.Research.Reply do
   end
 
   defp parse_dual_response(text) do
-    separator = "\n---COMPACT_REPLY---\n"
-
-    case String.split(text, separator, parts: 2) do
-      [full_response, compact_reply] when byte_size(full_response) > 0 ->
+    case String.split(text, "---COMPACT_REPLY---", parts: 2) do
+      [full_response, compact_reply] ->
         trimmed_full = String.trim(full_response)
         trimmed_compact = String.trim(compact_reply)
 

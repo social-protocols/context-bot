@@ -20,6 +20,19 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       assert compact == "Short summary for Bluesky"
     end
 
+    test "parses a separator without surrounding newlines" do
+      content = [
+        %{
+          "type" => "text",
+          "text" => "Full writeup---COMPACT_REPLY---Short summary for Bluesky"
+        }
+      ]
+
+      assert {:ok, full, compact} = Reply.select(content, :end_turn)
+      assert full == "Full writeup"
+      assert compact == "Short summary for Bluesky"
+    end
+
     test "falls back to single format when separator not found" do
       content = [
         %{

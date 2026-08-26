@@ -794,6 +794,84 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
     assert length(snapshot.calls) == 6
   end
 
+  test "rebuilds a link-only part 2 with a facet covering the full-response label" do
+    rkey_part1 = "3mreplypart1111"
+    rkey_part2 = "3mreplypart2222"
+    part1_cid = "bafy-part1-published"
+    part2_cid = "bafy-part2-published"
+    reader_url = "https://standard-reader.app/a/did:plc:test/3k123"
+
+    invocation =
+      invocation("link-only-part2", :reply_ready, %{
+        reply_rkey: rkey_part1,
+        reply_part2_rkey: rkey_part2,
+        reply_part2_record: %{
+          "text" => "full response",
+          "createdAt" => "2026-07-29T12:59:01.123456Z",
+          "readerUrl" => reader_url
+        }
+      })
+
+    part1_remote_record = remote_record(invocation, part1_cid)
+    part1_uri = part1_remote_record["uri"]
+
+    rebuilt_part2_record = %{
+      "$type" => "app.bsky.feed.post",
+      "text" => "full response",
+      "createdAt" => "2026-07-29T12:59:01.123456Z",
+      "reply" => %{
+        "parent" => %{
+          "uri" => part1_uri,
+          "cid" => part1_cid
+        },
+        "root" => %{
+          "uri" => part1_uri,
+          "cid" => part1_cid
+        }
+      },
+      "facets" => [
+        %{
+          "index" => %{"byteStart" => 0, "byteEnd" => byte_size("full response")},
+          "features" => [
+            %{
+              "$type" => "app.bsky.richtext.facet#link",
+              "uri" => reader_url
+            }
+          ]
+        }
+      ]
+    }
+
+    part2_remote_record = %{
+      "uri" => "at://#{@bot_did}/#{@collection}/#{rkey_part2}",
+      "cid" => part2_cid,
+      "value" => rebuilt_part2_record
+    }
+
+    remote =
+      configure_remote(
+        get_results: [
+          {:error, :record_not_found},
+          {:ok, 200, %{}, part1_remote_record},
+          {:error, :record_not_found},
+          {:ok, 200, %{}, part2_remote_record}
+        ],
+        put_results: [
+          {:ok, 200, %{}, %{"uri" => part1_uri, "cid" => part1_cid}},
+          {:ok, 200, %{}, %{"uri" => part2_remote_record["uri"], "cid" => part2_cid}}
+        ]
+      )
+
+    assert :ok = perform(invocation)
+
+    snapshot = Remote.snapshot(remote)
+
+    assert Enum.member?(
+             snapshot.calls,
+             {:put, @bot_did, @collection, rkey_part2, rebuilt_part2_record}
+           )
+  end
+
   defp configure_remote(options \\ []) do
     get_hook = Keyword.get(options, :get_hook)
     put_hook = Keyword.get(options, :put_hook)

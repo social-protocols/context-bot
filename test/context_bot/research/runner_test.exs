@@ -963,6 +963,7 @@ defmodule ContextBot.Research.RunnerTest do
     assert {:ok, result} = Runner.run(invocation, options())
     assert result.text == "A concise repaired answer."
     assert result.validation == %{"result" => "valid", "repair_used" => true}
+    refute Map.has_key?(result, :text_part2)
 
     assert result.usage["attempts"] |> List.last() |> get_in(["usage", "cache_read_input_tokens"]) ==
              0
@@ -1058,6 +1059,71 @@ defmodule ContextBot.Research.RunnerTest do
     assert result.validation["part1_graphemes"] == 150
     assert result.validation["part2_graphemes"] == 160
 
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    assert_received {:anthropic_call, _request, %{kind: :repair}, false}
+  end
+
+  test "an under-limit reply stays one post without repair or split" do
+    invocation = invocation("under-limit-one-post")
+    text = String.duplicate("a", 300)
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(message_body(text)))}
+    ])
+
+    assert {:ok, result} = Runner.run(invocation, options())
+    assert result.text == text
+    refute Map.has_key?(result, :text_part2)
+    assert result.validation == %{"result" => "valid", "repair_used" => false}
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
+  end
+
+  test "a dual-format compact that fits in one post does not split" do
+    invocation = invocation("dual-format-one-post")
+    compact = String.duplicate("b", 250)
+    full = "Thorough markdown writeup with sources and method."
+    dual = full <> "\n---COMPACT_REPLY---\n" <> compact
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(message_body(dual)))}
+    ])
+
+    assert {:ok, result} = Runner.run(invocation, options())
+    assert result.text == compact
+    assert result.full_response == full
+    refute Map.has_key?(result, :text_part2)
+    assert result.validation == %{"result" => "valid", "repair_used" => false}
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
+  end
+
+  test "an over-limit dual-format compact that repairs under the limit stays one post" do
+    invocation = invocation("dual-format-repair-one-post")
+    fixture = decoded_fixture("repair_success.json")
+    compact = String.duplicate("c", 328)
+    full = "Thorough markdown writeup."
+    dual = full <> "\n---COMPACT_REPLY---\n" <> compact
+
+    primary =
+      put_in(fixture, ["primary", "content"], [%{"type" => "text", "text" => dual}])["primary"]
+
+    repair =
+      put_in(
+        fixture,
+        ["repair", "content"],
+        [%{"type" => "text", "text" => "A concise repaired answer."}]
+      )["repair"]
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(primary))},
+      {:ok, envelope(200, Jason.encode!(repair))}
+    ])
+
+    assert {:ok, result} = Runner.run(invocation, options())
+    assert result.text == "A concise repaired answer."
+    refute Map.has_key?(result, :text_part2)
+    assert result.validation == %{"result" => "valid", "repair_used" => true}
     assert_received {:anthropic_call, _request, %{kind: :research}, false}
     assert_received {:anthropic_call, _request, %{kind: :repair}, false}
   end
@@ -1336,6 +1402,17 @@ defmodule ContextBot.Research.RunnerTest do
   end
 
   defp decoded_fixture(name), do: name |> fixture() |> Jason.decode!()
+
+  defp message_body(text) do
+    %{
+      "id" => "msg_test",
+      "type" => "message",
+      "role" => "assistant",
+      "content" => [%{"type" => "text", "text" => text}],
+      "stop_reason" => "end_turn",
+      "usage" => usage()
+    }
+  end
 
   defp usage do
     %{

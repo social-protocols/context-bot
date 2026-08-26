@@ -19,4 +19,10 @@ defmodule ContextBot.Research.ReplyLimits do
 
   @doc "Byte ceiling for additional safety."
   def max_bytes, do: @max_bytes
+
+  @doc "True when the text fits in a single Bluesky post."
+  @spec fits_one_post?(String.t()) :: boolean()
+  def fits_one_post?(text) when is_binary(text) do
+    String.length(text) <= @hard_max_graphemes and byte_size(text) <= @max_bytes
+  end
 end

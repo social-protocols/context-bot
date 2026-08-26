@@ -127,6 +127,75 @@ defmodule ContextBot.Reply.IntentTest do
     refute Map.has_key?(intent.reply_part2_record, "$type")
   end
 
+  test "keeps compact reply and full-response link in one post when they fit" do
+    invocation = invocation()
+    text = String.duplicate("a", 250)
+    reader_url = "https://standard-reader.app/a/did:plc:test/3k123"
+
+    assert {:ok, intent} =
+             Intent.build(
+               invocation,
+               text,
+               "did:plc:contextbot",
+               @created_at,
+               fn _timestamp -> @rkey end,
+               reader_url: reader_url
+             )
+
+    assert intent.reply_record["text"] == text <> " (full response)"
+    assert [facet] = intent.reply_record["facets"]
+    assert hd(facet["features"])["uri"] == reader_url
+    refute Map.has_key?(intent, :reply_part2_record)
+  end
+
+  test "puts the full-response link alone in part 2 when it does not fit with the compact reply" do
+    invocation = invocation()
+    text = String.duplicate("a", 285)
+    reader_url = "https://standard-reader.app/a/did:plc:test/3k123"
+    rkey_generator = sequence_generator(["3mpart1rkey111", "3mpart2rkey222"])
+
+    assert {:ok, intent} =
+             Intent.build(
+               invocation,
+               text,
+               "did:plc:contextbot",
+               @created_at,
+               rkey_generator,
+               reader_url: reader_url
+             )
+
+    assert intent.reply_record["text"] == text
+    refute Map.has_key?(intent.reply_record, "facets")
+    assert intent.reply_part2_rkey == "3mpart2rkey222"
+    assert intent.reply_part2_record["text"] == "full response"
+    assert intent.reply_part2_record["readerUrl"] == reader_url
+  end
+
+  test "rare body split with a reader URL uses a link-only part 2 instead of remainder plus link" do
+    invocation = invocation()
+    part1 = String.duplicate("a", 208)
+    remainder = String.duplicate("b", 120)
+    reader_url = "https://standard-reader.app/a/did:plc:test/3k123"
+    rkey_generator = sequence_generator(["3mpart1rkey111", "3mpart2rkey222"])
+
+    assert {:ok, intent} =
+             Intent.build_with_part2(
+               invocation,
+               part1,
+               remainder,
+               "did:plc:contextbot",
+               @created_at,
+               rkey_generator,
+               reader_url: reader_url
+             )
+
+    assert intent.reply_record["text"] == part1
+    refute Map.has_key?(intent.reply_record, "facets")
+    assert intent.reply_part2_record["text"] == "full response"
+    assert intent.reply_part2_record["readerUrl"] == reader_url
+    refute intent.reply_part2_record["text"] =~ remainder
+  end
+
   defp sequence_generator(values) do
     agent_pid = Process.get(:rkey_sequence_agent)
 
