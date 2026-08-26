@@ -42,13 +42,33 @@ defmodule ContextBot.StandardSite.Document do
     case client.put_record(repo, @collection, rkey, record) do
       {:ok, _status, _headers, _body} ->
         uri = "at://#{repo}/#{@collection}/#{rkey}"
-        reader_url = "#{@reader_base_url}/#{repo}/#{rkey}"
-        {:ok, %{uri: uri, rkey: rkey, reader_url: reader_url}}
+        {:ok, %{uri: uri, rkey: rkey, reader_url: reader_url(repo, rkey)}}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
+
+  @doc """
+  Public Standard Reader URL for a stored `site.standard.document` AT URI.
+
+  Returns nil when the URI is missing or is not that collection. The scheme matches
+  the compact-reply facet: `https://standard-reader.app/a/{did}/{rkey}`.
+  """
+  @spec reader_url_from_uri(String.t() | nil) :: String.t() | nil
+  def reader_url_from_uri("at://" <> rest) do
+    case String.split(rest, "/", parts: 3) do
+      [did, @collection, rkey] when did != "" and rkey != "" ->
+        reader_url(did, rkey)
+
+      _ ->
+        nil
+    end
+  end
+
+  def reader_url_from_uri(_uri), do: nil
+
+  defp reader_url(did, rkey), do: "#{@reader_base_url}/#{did}/#{rkey}"
 
   @doc """
   Updates an existing document to add the bskyPostRef after the Bluesky reply is published.
