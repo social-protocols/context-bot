@@ -78,10 +78,13 @@ defmodule ContextBot.Research.RequestTest do
   test "sends one versioned prompt with the complete research and reply safety contract" do
     prompt = Request.initial(@canonical_thread, config())["system"]
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V4")
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V5")
     assert prompt =~ "ancestor"
     assert prompt =~ "unstable"
     assert prompt =~ "primary sources"
+    assert prompt =~ "native web_search"
+    assert prompt =~ "web_fetch"
+    assert prompt =~ "code execution"
     assert prompt =~ "smallest amount of web research"
     assert prompt =~ "facts"
     assert prompt =~ "value judgments"

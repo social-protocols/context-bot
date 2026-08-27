@@ -5,6 +5,10 @@ defmodule ContextBot.Research.Reply do
   Stop reasons may be provider strings or equivalent atoms. Recognized reasons are `end_turn`,
   `max_tokens`, `model_context_window_exceeded`, `refusal`, `pause_turn`, `tool_use`, and
   `stop_sequence`; unknown values fail closed.
+
+  Paired `code_execution` / `bash_code_execution` / `text_editor_code_execution` blocks are
+  protocol, not reply text. A failed runtime result is terminal (`:code_execution_failed`) and
+  must not compact, split, or publish. See `knowledge-base/reports/2026-08-27-code-execution-hard-fail.md`.
   """
 
   alias ContextBot.Research.ReplyLimits
@@ -12,7 +16,13 @@ defmodule ContextBot.Research.Reply do
   @hard_max_graphemes ReplyLimits.hard_max_graphemes()
   @max_bytes ReplyLimits.max_bytes()
   @web_server_tools ~w(web_search web_fetch)
+  # Dated web_search/web_fetch auto-provision code execution for dynamic filtering. Claude may
+  # then call web_search() from the interpreter instead of emitting native server_tool_use
+  # web_search/web_fetch blocks. Usage can still show web_search_requests while the envelope
+  # contains only code_execution pairs. Pairing those blocks is required protocol; a failed
+  # execution (non-zero return_code, *_tool_result_error, or timeout) is a hard failure.
   @code_execution_tools ~w(code_execution bash_code_execution text_editor_code_execution)
+  @code_execution_runtime_tools ~w(code_execution bash_code_execution)
   @allowed_server_tools @web_server_tools ++ @code_execution_tools
   @code_execution_result_types ~w(
     code_execution_tool_result
@@ -460,14 +470,15 @@ defmodule ContextBot.Research.Reply do
        )
        when is_binary(id) and id != "" and is_map(content) and
               type in @code_execution_result_types do
-    complete_tool(
-      id,
-      code_execution_tool_name(type),
-      texts,
-      pending,
-      prior_pending,
-      seen_tool_ids
-    )
+    name = code_execution_tool_name(type)
+
+    case classify_code_execution_result(name, content) do
+      :ok ->
+        complete_tool(id, name, texts, pending, prior_pending, seen_tool_ids)
+
+      {:error, reason} ->
+        {:halt, {:error, reason}}
+    end
   end
 
   defp collect_block(
@@ -660,14 +671,58 @@ defmodule ContextBot.Research.Reply do
          prior_pending,
          seen_tool_ids
        ) do
-    with true <- valid_tool_result_content?(expected_name, content),
+    with :ok <- validate_result_content(expected_name, content),
          {:ok, ^expected_name} <- Map.fetch(pending, id) do
       {:cont, {:ok, Map.delete(pending, id), Map.delete(prior_pending, id), seen_tool_ids}}
     else
-      false -> {:halt, {:error, :invalid_content}}
+      {:error, reason} -> {:halt, {:error, reason}}
       _missing_or_mismatched -> {:halt, {:error, :unexpected_tool_use}}
     end
   end
+
+  defp validate_result_content(name, content) when name in @code_execution_tools,
+    do: classify_code_execution_result(name, content)
+
+  defp validate_result_content(name, content) do
+    if valid_tool_result_content?(name, content) do
+      :ok
+    else
+      {:error, :invalid_content}
+    end
+  end
+
+  # Successful return_code 0 (including a negative research finding in stdout) is publishable.
+  # Missing return_code is treated as success so opaque/dynamic-filtering envelopes that omit it
+  # still pair. Present non-zero or non-integer return_code, documented *_tool_result_error
+  # payloads, and timeout/crash error_codes are terminal.
+  defp classify_code_execution_result(name, content)
+       when name in @code_execution_tools and is_map(content) do
+    if code_execution_failed?(name, content) do
+      {:error, :code_execution_failed}
+    else
+      :ok
+    end
+  end
+
+  defp classify_code_execution_result(_name, _content), do: {:error, :invalid_content}
+
+  defp code_execution_failed?(name, content) do
+    code_execution_error_payload?(content) or
+      (name in @code_execution_runtime_tools and failed_return_code?(content))
+  end
+
+  defp code_execution_error_payload?(%{"type" => type}) when is_binary(type),
+    do: String.ends_with?(type, "_error")
+
+  defp code_execution_error_payload?(%{"error_code" => error_code}) when is_binary(error_code),
+    do: true
+
+  defp code_execution_error_payload?(_content), do: false
+
+  defp failed_return_code?(%{"return_code" => 0}), do: false
+  defp failed_return_code?(%{"return_code" => code}) when is_integer(code), do: true
+  defp failed_return_code?(%{"return_code" => code}) when not is_nil(code), do: true
+  defp failed_return_code?(_content), do: false
 
   defp valid_tool_result_content?("web_search", content) when is_list(content),
     do: Enum.all?(content, &valid_web_search_result?/1)
