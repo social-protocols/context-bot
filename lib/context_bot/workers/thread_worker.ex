@@ -10,7 +10,7 @@ defmodule ContextBot.Workers.ThreadWorker do
 
   import Ecto.Query
 
-  alias ContextBot.ATProto.{PublicClient, ReqClient, TID}
+  alias ContextBot.ATProto.{Client, PublicClient, ReqClient, TID}
   alias ContextBot.{Operations, Repo}
   alias ContextBot.Reply.Intent
   alias ContextBot.Thread.Canonicalizer
@@ -135,17 +135,17 @@ defmodule ContextBot.Workers.ThreadWorker do
   defp handle_fetch({:error, :record_not_found}, invocation, _dependencies),
     do: fail_thread(invocation, "target_unavailable")
 
-  defp handle_fetch({:error, {:permanent, _status}}, invocation, _dependencies),
-    do: fail_thread(invocation, "target_unavailable")
-
-  defp handle_fetch({:error, {:permanent, _status, _detail}}, invocation, _dependencies),
-    do: fail_thread(invocation, "target_unavailable")
+  defp handle_fetch({:error, reason}, invocation, _dependencies) do
+    case Client.permanent_status(reason) do
+      status when is_integer(status) -> fail_thread(invocation, "target_unavailable")
+      nil -> {:error, reason}
+    end
+  end
 
   defp handle_fetch({:ok, status, _headers, _invalid_body}, invocation, _dependencies)
        when status in 200..299,
        do: fail_thread(invocation, "invalid_thread")
 
-  defp handle_fetch({:error, reason}, _invocation, _dependencies), do: {:error, reason}
   defp handle_fetch(_invalid_response, _invocation, _dependencies), do: {:error, :invalid_thread}
 
   defp handle_canonicalization({:ok, canonical}, invocation, raw_thread, dependencies) do

@@ -85,6 +85,16 @@ defmodule ContextBot.ATProto.Client do
   def error_fields(reason) when is_atom(reason), do: %{failure_reason: Atom.to_string(reason)}
   def error_fields(_reason), do: %{failure_reason: "provider_failure"}
 
+  @doc "HTTP status for a permanent ATProto error, with or without a detail map."
+  @spec permanent_status(term()) :: non_neg_integer() | nil
+  def permanent_status({:permanent, status}) when is_integer(status) and status >= 0, do: status
+
+  def permanent_status({:permanent, status, detail})
+      when is_integer(status) and status >= 0 and is_map(detail),
+      do: status
+
+  def permanent_status(_reason), do: nil
+
   defp put_atproto_error(fields, detail) do
     case string_field(detail, "error") do
       error when is_binary(error) and byte_size(error) > 0 ->

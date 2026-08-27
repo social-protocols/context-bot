@@ -15,7 +15,7 @@ defmodule ContextBot.Workers.ReplyWorker do
 
   import Ecto.Query
 
-  alias ContextBot.ATProto.ReqClient
+  alias ContextBot.ATProto.{Client, ReqClient}
   alias ContextBot.{Operations, Repo}
   alias ContextBot.Workflow.{Invocation, Store}
 
@@ -137,26 +137,27 @@ defmodule ContextBot.Workers.ReplyWorker do
       {:error, reason} when reason in [:unauthorized, :session_unavailable] ->
         fail_auth(invocation, token, dependencies.now.())
 
-      {:error, {:permanent, 403}} ->
-        fail_auth(invocation, token, dependencies.now.())
-
-      {:error, {:permanent, 403, _detail}} ->
-        fail_auth(invocation, token, dependencies.now.())
-
-      {:error, {:permanent, _status}} ->
-        fail_conflict(invocation, token, "publication_rejected", dependencies.now.())
-
-      {:error, {:permanent, _status, _detail}} ->
-        fail_conflict(invocation, token, "publication_rejected", dependencies.now.())
-
       {:error, reason} ->
-        reconcile_after_put(invocation, token, dependencies, reason)
+        handle_put_error(invocation, token, dependencies, reason)
 
       :stale_claim ->
         :ok
 
       _invalid ->
         fail_conflict(invocation, token, "invalid_provider_response", dependencies.now.())
+    end
+  end
+
+  defp handle_put_error(invocation, token, dependencies, reason) do
+    case Client.permanent_status(reason) do
+      403 ->
+        fail_auth(invocation, token, dependencies.now.())
+
+      status when is_integer(status) ->
+        fail_conflict(invocation, token, "publication_rejected", dependencies.now.())
+
+      nil ->
+        reconcile_after_put(invocation, token, dependencies, reason)
     end
   end
 
@@ -208,23 +209,19 @@ defmodule ContextBot.Workers.ReplyWorker do
       {:error, reason} when reason in [:unauthorized, :session_unavailable] ->
         :auth
 
-      {:error, {:permanent, 403}} ->
-        :auth
-
-      {:error, {:permanent, 403, _detail}} ->
-        :auth
-
-      {:error, {:permanent, _status}} ->
-        :invalid
-
-      {:error, {:permanent, _status, _detail}} ->
-        :invalid
-
       {:error, reason} ->
-        {:retry, reason}
+        classify_get_error(reason)
 
       _invalid ->
         :invalid
+    end
+  end
+
+  defp classify_get_error(reason) do
+    case Client.permanent_status(reason) do
+      403 -> :auth
+      status when is_integer(status) -> :invalid
+      nil -> {:retry, reason}
     end
   end
 
