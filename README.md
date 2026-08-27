@@ -44,7 +44,7 @@ curl --fail --silent --show-error http://127.0.0.1:4000/
 
 The homepage is reachable via the configured Phoenix host. Serving https://getcontext.bot (the bot's Bluesky handle and site.standard.publication domain) requires separate DNS configuration pointing to the Fly deployment.
 
-Do not paste logs containing post bodies, provider bodies, Bitwarden payloads, app passwords, or API keys into tickets or chat.
+Do not paste logs containing post bodies, provider bodies, Bitwarden payloads, app passwords, or API keys into tickets or chat. Report vulnerabilities privately using [SECURITY.md](SECURITY.md).
 
 ## Local read-only context check
 
