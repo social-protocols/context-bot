@@ -525,7 +525,8 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
           {"auth", :provider_auth, :provider_auth},
           {"malformed", :malformed_provider_response, :provider_response},
           {"interrupted", :interrupted_after_send, :provider_response},
-          {"tool-cap", :tool_use_limit_exceeded, :provider_response}
+          {"tool-cap", :tool_use_limit_exceeded, :provider_response},
+          {"code-exec", :code_execution_failed, :provider_response}
         ] do
       invocation = invocation(suffix, :thread_ready)
       configure_runner({:error, runner_error})

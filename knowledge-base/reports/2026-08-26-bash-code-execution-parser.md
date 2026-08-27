@@ -33,5 +33,7 @@ tool versions document bash and text-editor sub-tools:
 ## Implications
 
 Keep fail-closed on client `tool_use` and unknown server-tool names. Do not count bash or
-text-editor pairs against web-search/fetch caps. After deploying the parser, invocation 3 is
-a candidate for explicit envelope replay.
+text-editor pairs against web-search/fetch caps. Pairing a completed code-execution block is
+protocol, not success: a non-zero `return_code` or documented tool-result error is terminal
+and must not publish. After deploying the parser, invocation 3 is a candidate for explicit
+envelope replay.

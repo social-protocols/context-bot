@@ -213,6 +213,137 @@ defmodule ContextBot.Research.ReplyTest do
     assert Reply.select(content, :end_turn) == {:ok, "Publish this. Not the tool output."}
   end
 
+  test "fails closed when bash_code_execution returns a non-zero return_code" do
+    content = [
+      %{
+        "type" => "server_tool_use",
+        "id" => "bash-1",
+        "name" => "bash_code_execution",
+        "input" => %{"command" => "web_search('Lake America')"}
+      },
+      %{
+        "type" => "bash_code_execution_tool_result",
+        "tool_use_id" => "bash-1",
+        "content" => %{
+          "type" => "bash_code_execution_result",
+          "stdout" => "",
+          "stderr" => "encrypted-unreadable",
+          "return_code" => 1,
+          "content" => []
+        }
+      },
+      text("must not publish")
+    ]
+
+    assert Reply.select(content, :end_turn) == {:error, :code_execution_failed}
+  end
+
+  test "fails closed when encrypted code_execution stdout has a non-zero return_code" do
+    content = [
+      %{
+        "type" => "server_tool_use",
+        "id" => "code-1",
+        "name" => "code_execution",
+        "input" => %{"code" => "web_search('Lake Ontario Lake America')"}
+      },
+      %{
+        "type" => "code_execution_tool_result",
+        "tool_use_id" => "code-1",
+        "content" => %{
+          "type" => "encrypted_code_execution_result",
+          "encrypted_stdout" => "opaque",
+          "stderr" => "",
+          "return_code" => 1,
+          "content" => []
+        }
+      },
+      text("must not publish")
+    ]
+
+    assert Reply.select(content, :end_turn) == {:error, :code_execution_failed}
+  end
+
+  test "fails closed on documented code-execution tool-result errors and timeouts" do
+    variants = [
+      {"code_execution", "code_execution_tool_result",
+       %{
+         "type" => "code_execution_tool_result_error",
+         "error_code" => "unavailable"
+       }},
+      {"bash_code_execution", "bash_code_execution_tool_result",
+       %{
+         "type" => "bash_code_execution_tool_result_error",
+         "error_code" => "execution_time_exceeded"
+       }},
+      {"code_execution", "code_execution_tool_result",
+       %{
+         "type" => "code_execution_result",
+         "stdout" => "detection_timeout",
+         "stderr" => "",
+         "return_code" => 1,
+         "content" => []
+       }}
+    ]
+
+    Enum.each(variants, fn {tool_name, result_type, result_content} ->
+      content = [
+        %{
+          "type" => "server_tool_use",
+          "id" => "exec-1",
+          "name" => tool_name,
+          "input" => %{}
+        },
+        %{
+          "type" => result_type,
+          "tool_use_id" => "exec-1",
+          "content" => result_content
+        },
+        text("must not publish")
+      ]
+
+      assert Reply.select(content, :end_turn) == {:error, :code_execution_failed}
+    end)
+  end
+
+  test "still selects a reply after successful code_execution with a negative research finding" do
+    content = [
+      %{
+        "type" => "server_tool_use",
+        "id" => "code-1",
+        "name" => "code_execution",
+        "input" => %{"code" => "print('no primary source found')"}
+      },
+      %{
+        "type" => "code_execution_tool_result",
+        "tool_use_id" => "code-1",
+        "content" => %{
+          "type" => "code_execution_result",
+          "stdout" => "no primary source found\n",
+          "stderr" => "",
+          "return_code" => 0,
+          "content" => []
+        }
+      },
+      text("No primary source found.")
+    ]
+
+    assert Reply.select(content, :end_turn) == {:ok, "No primary source found."}
+  end
+
+  test "fails closed on unexpected_tool_use even when compact reply text follows" do
+    content = [
+      %{
+        "type" => "server_tool_use",
+        "id" => "unexpected-1",
+        "name" => "future_server_tool",
+        "input" => %{}
+      },
+      text("must not publish")
+    ]
+
+    assert Reply.select(content, :end_turn) == {:error, :unexpected_tool_use}
+  end
+
   test "fails closed on malformed, duplicate, mismatched, and orphaned bash code execution" do
     call = %{
       "type" => "server_tool_use",
@@ -259,6 +390,29 @@ defmodule ContextBot.Research.ReplyTest do
     }
 
     assert Reply.select(completed_content, context) == {:ok, "Final context only."}
+  end
+
+  test "fails closed when a paused bash_code_execution completes with return_code 1" do
+    completed_content = [
+      %{
+        "type" => "bash_code_execution_tool_result",
+        "tool_use_id" => "paused-bash-1",
+        "content" => %{
+          "type" => "bash_code_execution_result",
+          "stdout" => "",
+          "stderr" => "encrypted-unreadable",
+          "return_code" => 1
+        }
+      },
+      text("must not publish")
+    ]
+
+    context = %{
+      stop_reason: "end_turn",
+      pending_server_tools: %{"paused-bash-1" => "bash_code_execution"}
+    }
+
+    assert Reply.select(completed_content, context) == {:error, :code_execution_failed}
   end
 
   test "completes a server tool started in a prior pause without publishing prior partial text" do

@@ -882,6 +882,63 @@ defmodule ContextBot.Research.RunnerTest do
     assert result.usage["tool_use_counts"] == %{"web_fetch" => 0, "web_search" => 0}
   end
 
+  test "does not select a reply from a bash_code_execution envelope with return_code 1" do
+    invocation = invocation("bash-code-execution-failed")
+    fixture = decoded_fixture("tool_success.json")
+
+    body =
+      put_in(fixture, ["content"], [
+        %{
+          "type" => "server_tool_use",
+          "id" => "srvtoolu_bash_1",
+          "name" => "bash_code_execution",
+          "input" => %{"command" => "web_search('Lake America')"}
+        },
+        %{
+          "type" => "bash_code_execution_tool_result",
+          "tool_use_id" => "srvtoolu_bash_1",
+          "content" => %{
+            "type" => "bash_code_execution_result",
+            "stdout" => "",
+            "stderr" => "encrypted-unreadable",
+            "return_code" => 1,
+            "content" => []
+          }
+        },
+        %{"type" => "text", "text" => "must not publish"}
+      ])
+
+    Process.put(:runner_client_results, [{:ok, envelope(200, Jason.encode!(body))}])
+
+    assert {:error, :code_execution_failed} = Runner.run(invocation, options())
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+    assert [stored] = responses(invocation)
+    assert stored.raw_body == Jason.encode!(body)
+  end
+
+  test "fails closed on unexpected_tool_use instead of selecting following model text" do
+    invocation = invocation("unexpected-tool-use-fail-closed")
+    fixture = decoded_fixture("tool_success.json")
+
+    body =
+      put_in(fixture, ["content"], [
+        %{
+          "type" => "server_tool_use",
+          "id" => "srvtoolu_unknown_1",
+          "name" => "future_server_tool",
+          "input" => %{}
+        },
+        %{"type" => "text", "text" => "must not publish"}
+      ])
+
+    Process.put(:runner_client_results, [{:ok, envelope(200, Jason.encode!(body))}])
+
+    assert {:error, :unexpected_tool_use} = Runner.run(invocation, options())
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+  end
+
   test "rejects malformed saved tool history before sending a continuation" do
     code_result = %{
       "type" => "code_execution_tool_result",
