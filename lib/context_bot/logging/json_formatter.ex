@@ -23,7 +23,7 @@ defmodule ContextBot.Logging.JSONFormatter do
   )a)
 
   @safe_messages MapSet.new(
-                   ~w(context_bot_attempt context_bot_startup_recovery context_bot_interrupt_recovery context_bot_standard_site)
+                   ~w(context_bot_attempt context_bot_startup_recovery context_bot_interrupt_recovery context_bot_standard_site context_bot_poller context_bot_recovery)
                  )
   @media_dispositions MapSet.new(~w(supported video_unsupported image_limit_exceeded))
   @token ~r/\A[a-z][a-z0-9_-]{0,127}\z/

@@ -97,12 +97,60 @@ defmodule ContextBot.Workers.ReplyWorker do
   end
 
   defp publish(invocation, token, dependencies) do
-    if valid_intent?(invocation.reply_repo, invocation.reply_rkey, invocation.reply_record) do
-      reconcile_before_put(invocation, token, dependencies)
-    else
-      fail_conflict(invocation, token, "invalid_frozen_intent", dependencies.now.())
+    cond do
+      not valid_intent?(invocation.reply_repo, invocation.reply_rkey, invocation.reply_record) ->
+        fail_conflict(invocation, token, "invalid_frozen_intent", dependencies.now.())
+
+      missing_required_reader_url?(invocation) ->
+        refuse_unlinked_publication(invocation, token, dependencies)
+
+      true ->
+        reconcile_before_put(invocation, token, dependencies)
     end
   end
+
+  defp refuse_unlinked_publication(invocation, token, dependencies) do
+    case get_record(invocation, token, dependencies) do
+      {:match, uri, cid} ->
+        complete(invocation, token, uri, cid, dependencies.now.())
+
+      :missing ->
+        fail_quality(invocation, token, "missing_reader_url", dependencies.now.())
+
+      :conflict ->
+        fail_conflict(invocation, token, "record_mismatch", dependencies.now.())
+
+      :auth ->
+        fail_auth(invocation, token, dependencies.now.())
+
+      {:retry, reason} ->
+        retry_or_exhausted(invocation, token, reason, dependencies)
+
+      :invalid ->
+        fail_conflict(invocation, token, "invalid_provider_response", dependencies.now.())
+
+      :stale_claim ->
+        :ok
+    end
+  end
+
+  defp missing_required_reader_url?(%Invocation{dry_run: true}), do: false
+
+  defp missing_required_reader_url?(%Invocation{full_response: full} = invocation)
+       when is_binary(full) and byte_size(full) > 0,
+       do: not frozen_reader_url?(invocation)
+
+  defp missing_required_reader_url?(_invocation), do: false
+
+  defp frozen_reader_url?(%Invocation{reply_record: %{"facets" => facets}})
+       when is_list(facets) and facets != [],
+       do: true
+
+  defp frozen_reader_url?(%Invocation{reply_part2_record: %{"readerUrl" => url}})
+       when is_binary(url) and url != "",
+       do: true
+
+  defp frozen_reader_url?(_invocation), do: false
 
   defp reconcile_before_put(invocation, token, dependencies) do
     case get_record(invocation, token, dependencies) do
@@ -504,6 +552,19 @@ defmodule ContextBot.Workers.ReplyWorker do
       :failed,
       %{
         failure_category: :publication_conflict,
+        failure_detail: %{"reason" => reason}
+      },
+      completed_at
+    )
+  end
+
+  defp fail_quality(invocation, token, reason, completed_at) do
+    transition_terminal(
+      invocation,
+      token,
+      :failed,
+      %{
+        failure_category: :provider_response,
         failure_detail: %{"reason" => reason}
       },
       completed_at

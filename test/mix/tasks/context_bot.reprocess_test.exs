@@ -83,6 +83,7 @@ defmodule Mix.Tasks.ContextBot.ReprocessTest do
     for {reason, message} <- [
           {:not_found, "invocation not found"},
           {:not_reprocessable, "invocation is not reprocessable"},
+          {:already_published, "invocation already has a published reply"},
           {:ambiguous_provider_attempt, "provider attempt is ambiguous"},
           {:missing_recorded_response, "recorded response is missing"},
           {:invalid_recorded_response, "recorded response is not replayable"},

@@ -4,8 +4,9 @@ defmodule ContextBot.Workflow.Reprocessor do
   or when `interrupted_after_send` has waited out the Anthropic HTTP timeout.
 
   This is an explicit operator action, not ordinary orphan recovery. It never reopens an
-  unrecorded provider attempt that is still inside the HTTP timeout window, and never
-  performs provider or ATProto I/O itself.
+  unrecorded provider attempt that is still inside the HTTP timeout window, never
+  performs provider or ATProto I/O itself, and never clears a published `reply_uri` to
+  allocate a second Bluesky TID.
   """
 
   import Ecto.Query
@@ -18,6 +19,7 @@ defmodule ContextBot.Workflow.Reprocessor do
   @type error_reason ::
           :not_found
           | :not_reprocessable
+          | :already_published
           | :ambiguous_provider_attempt
           | :missing_recorded_response
           | :invalid_recorded_response
@@ -42,6 +44,7 @@ defmodule ContextBot.Workflow.Reprocessor do
 
   defp reopen(invocation_id, %DateTime{} = now) do
     invocation = Repo.get(Invocation, invocation_id) || Repo.rollback(:not_found)
+    reject_published!(invocation)
     validate_invocation!(invocation)
     reject_in_flight!(invocation, now)
 
@@ -52,6 +55,14 @@ defmodule ContextBot.Workflow.Reprocessor do
       envelope = recorded_response(entry) || Repo.rollback(:missing_recorded_response)
       validate_response!(entry, envelope)
       enqueue_reopen(invocation, now)
+    end
+  end
+
+  defp reject_published!(invocation) do
+    if InterruptRecovery.published?(invocation) do
+      Repo.rollback(:already_published)
+    else
+      :ok
     end
   end
 
@@ -90,10 +101,6 @@ defmodule ContextBot.Workflow.Reprocessor do
         reply_part2_record: nil,
         publication_claim_token: nil,
         publication_claimed_at: nil,
-        reply_uri: nil,
-        reply_cid: nil,
-        reply_part2_uri: nil,
-        reply_part2_cid: nil,
         failure_category: nil,
         failure_detail: nil,
         completed_at: nil

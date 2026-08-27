@@ -144,40 +144,73 @@ defmodule ContextBot.Workflow.ReprocessorTest do
     assert {:error, :not_reprocessable} = Reprocessor.reprocess(wrong_failure.id, now: @now)
   end
 
-  test "reopens a complete invocation with recorded responses" do
+  test "refuses a provider failure that already has a published reply_uri" do
+    invocation = reprocessable_invocation(false, "failed-already-published")
+    entry = recorded_attempt(invocation)
+    _envelope = recorded_envelope(invocation, entry)
+    reply_uri = public_uri("existing-reply")
+
+    invocation
+    |> Invocation.transition_changeset(%{reply_uri: reply_uri, reply_cid: "bafy-existing-reply"})
+    |> Repo.update!()
+
+    assert {:error, :already_published} = Reprocessor.reprocess(invocation.id, now: @now)
+    assert Repo.reload!(invocation).reply_uri == reply_uri
+    assert research_jobs(invocation) == []
+  end
+
+  test "refuses a complete invocation that already has a published reply" do
     invocation = complete_invocation_with_split(true, "complete-reprocess")
     entry = recorded_attempt(invocation)
     _envelope = recorded_envelope(invocation, entry)
+    original_uri = invocation.reply_uri
+    original_rkey = invocation.reply_part2_rkey
 
-    assert {:ok, reopened} = Reprocessor.reprocess(invocation.id, now: @now)
+    assert {:error, :already_published} = Reprocessor.reprocess(invocation.id, now: @now)
 
-    assert reopened.status == :thread_ready
-    assert reopened.stage == :thread_ready
-    assert reopened.reply_uri == nil
-    assert reopened.reply_cid == nil
-    assert reopened.reply_part2_uri == nil
-    assert reopened.reply_part2_cid == nil
-    assert reopened.reply_part2_rkey == nil
-    assert reopened.reply_part2_record == nil
-    assert reopened.completed_at == nil
+    persisted = Repo.reload!(invocation)
+    assert persisted.status == :complete
+    assert persisted.stage == :complete
+    assert persisted.reply_uri == original_uri
+    assert persisted.reply_cid == invocation.reply_cid
+    assert persisted.reply_part2_uri == invocation.reply_part2_uri
+    assert persisted.reply_part2_rkey == original_rkey
+    assert persisted.reply_part2_record == invocation.reply_part2_record
+    assert research_jobs(invocation) == []
   end
 
-  test "clears part2 fields when reopening complete split invocation" do
+  test "refuses a public complete split invocation rather than allocating a second TID" do
     invocation = complete_invocation_with_split(false, "complete-split-reprocess")
     entry = recorded_attempt(invocation)
     _envelope = recorded_envelope(invocation, entry)
 
-    assert invocation.reply_part2_uri != nil
-    assert invocation.reply_part2_cid != nil
-    assert invocation.reply_part2_rkey != nil
-    assert invocation.reply_part2_record != nil
+    assert invocation.reply_uri != nil
+    assert {:error, :already_published} = Reprocessor.reprocess(invocation.id, now: @now)
+    assert Repo.reload!(invocation).reply_uri == invocation.reply_uri
+    assert research_jobs(invocation) == []
+  end
+
+  test "reopens a complete dry-run that never published a Bluesky reply" do
+    invocation = complete_invocation_with_split(true, "complete-dry-unpublished")
+    entry = recorded_attempt(invocation)
+    _envelope = recorded_envelope(invocation, entry)
+
+    invocation
+    |> Invocation.transition_changeset(%{
+      reply_uri: nil,
+      reply_cid: nil,
+      reply_part2_uri: nil,
+      reply_part2_cid: nil,
+      reply_part2_rkey: nil,
+      reply_part2_record: nil
+    })
+    |> Repo.update!()
 
     assert {:ok, reopened} = Reprocessor.reprocess(invocation.id, now: @now)
-
-    assert reopened.reply_part2_uri == nil
-    assert reopened.reply_part2_cid == nil
-    assert reopened.reply_part2_rkey == nil
-    assert reopened.reply_part2_record == nil
+    assert reopened.status == :thread_ready
+    assert reopened.stage == :thread_ready
+    assert reopened.reply_uri == nil
+    assert [_job] = research_jobs(invocation)
   end
 
   test "rejects missing durable request or canonical thread" do

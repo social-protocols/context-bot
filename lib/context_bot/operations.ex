@@ -94,6 +94,22 @@ defmodule ContextBot.Operations do
     :ok
   end
 
+  @spec log_poller(term()) :: :ok
+  def log_poller(reason) do
+    fields = Client.error_fields(reason)
+
+    payload = %{
+      stage: "received",
+      status_code: fields[:status_code],
+      failure_reason: fields[:failure_reason],
+      atproto_error: fields[:atproto_error],
+      atproto_message: fields[:message]
+    }
+
+    Logger.warning("context_bot_poller", Map.to_list(payload))
+    :ok
+  end
+
   defp safe_aggregates(now) do
     %{
       queues: queue_counts(),

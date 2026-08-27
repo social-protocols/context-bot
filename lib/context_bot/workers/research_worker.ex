@@ -139,11 +139,33 @@ defmodule ContextBot.Workers.ResearchWorker do
     created_at = dependencies.now.()
     bot_did = dependencies.settings.bot_did
 
-    # Create Standard.site document if we have a full response
-    {document_result, reader_url, document_error} =
-      create_standard_site_document(invocation, result, bot_did, created_at, dependencies)
+    case create_standard_site_document(invocation, result, bot_did, created_at, dependencies) do
+      {:error, document_error} ->
+        fail_document_create(invocation, result, document_error, created_at, token)
 
-    # Build intent with reader_url if available
+      document ->
+        freeze_reply_intent(
+          invocation,
+          result,
+          token,
+          dependencies,
+          created_at,
+          bot_did,
+          document
+        )
+    end
+  end
+
+  defp freeze_reply_intent(
+         invocation,
+         result,
+         token,
+         dependencies,
+         created_at,
+         bot_did,
+         document
+       ) do
+    reader_url = document_reader_url(document)
     intent_opts = if reader_url, do: [reader_url: reader_url], else: []
 
     intent_result =
@@ -170,52 +192,72 @@ defmodule ContextBot.Workers.ResearchWorker do
 
     case intent_result do
       {:ok, intent} ->
-        attrs = %{
-          anthropic_messages: result.messages,
-          anthropic_usage: result.usage,
-          full_response: Map.get(result, :full_response),
-          selected_reply: result.text,
-          reply_validation: result.validation,
-          standard_site_document_uri: document_uri(document_result),
-          standard_site_document_rkey: document_rkey(document_result),
-          reply_repo: intent.reply_repo,
-          reply_rkey: intent.reply_rkey,
-          reply_record: intent.reply_record,
-          reply_part2_rkey: Map.get(intent, :reply_part2_rkey),
-          reply_part2_record: Map.get(intent, :reply_part2_record),
-          publication_claim_token: nil,
-          publication_claimed_at: nil,
-          defer_until: nil,
-          failure_category: nil,
-          failure_detail: document_error,
-          research_claim_token: nil,
-          research_claimed_at: nil,
-          completed_at: nil,
-          deferred_attempt_kind: nil
-        }
-
-        next_job = dependencies.reply_job_builder.(invocation)
-
-        case Store.transition_research(
-               invocation,
-               token,
-               :reply_ready,
-               attrs,
-               next_job,
-               created_at
-             ) do
-          {:ok, _reply_ready} ->
-            :ok
-
-          {:error, :stale_claim} ->
-            :ok
-
-          {:error, changeset} ->
-            raise Ecto.InvalidChangesetError, action: :update, changeset: changeset
-        end
+        persist_reply_ready(
+          invocation,
+          result,
+          token,
+          dependencies,
+          created_at,
+          intent,
+          document
+        )
 
       {:error, reason} ->
         fail_research(invocation, reason, created_at, token)
+    end
+  end
+
+  defp persist_reply_ready(
+         invocation,
+         result,
+         token,
+         dependencies,
+         created_at,
+         intent,
+         document
+       ) do
+    attrs = %{
+      anthropic_messages: result.messages,
+      anthropic_usage: result.usage,
+      full_response: Map.get(result, :full_response),
+      selected_reply: result.text,
+      reply_validation: result.validation,
+      standard_site_document_uri: document_uri(document),
+      standard_site_document_rkey: document_rkey(document),
+      reply_repo: intent.reply_repo,
+      reply_rkey: intent.reply_rkey,
+      reply_record: intent.reply_record,
+      reply_part2_rkey: Map.get(intent, :reply_part2_rkey),
+      reply_part2_record: Map.get(intent, :reply_part2_record),
+      publication_claim_token: nil,
+      publication_claimed_at: nil,
+      defer_until: nil,
+      failure_category: nil,
+      failure_detail: nil,
+      research_claim_token: nil,
+      research_claimed_at: nil,
+      completed_at: nil,
+      deferred_attempt_kind: nil
+    }
+
+    next_job = dependencies.reply_job_builder.(invocation)
+
+    case Store.transition_research(
+           invocation,
+           token,
+           :reply_ready,
+           attrs,
+           next_job,
+           created_at
+         ) do
+      {:ok, _reply_ready} ->
+        :ok
+
+      {:error, :stale_claim} ->
+        :ok
+
+      {:error, changeset} ->
+        raise Ecto.InvalidChangesetError, action: :update, changeset: changeset
     end
   end
 
@@ -233,8 +275,7 @@ defmodule ContextBot.Workers.ResearchWorker do
     full_response = Map.get(result, :full_response)
     client = Map.fetch!(dependencies, :atproto_client)
 
-    if full_response && byte_size(full_response) > 0 do
-      # Ensure publication exists
+    if is_binary(full_response) and byte_size(full_response) > 0 do
       case Publication.ensure_exists(client, repo, created_at) do
         {:ok, publication_uri} ->
           create_document_with_publication(
@@ -250,8 +291,7 @@ defmodule ContextBot.Workers.ResearchWorker do
           fail_standard_site(invocation, "site.standard.publication", reason)
       end
     else
-      # No full response, skip document creation
-      {nil, nil, nil}
+      :skipped
     end
   end
 
@@ -271,7 +311,7 @@ defmodule ContextBot.Workers.ResearchWorker do
 
     case Document.create(client, repo, publication_uri, content, created_at) do
       {:ok, doc_result} ->
-        {doc_result, doc_result.reader_url, nil}
+        {:ok, doc_result}
 
       {:error, reason} ->
         fail_standard_site(invocation, "site.standard.document", reason)
@@ -280,7 +320,18 @@ defmodule ContextBot.Workers.ResearchWorker do
 
   defp fail_standard_site(invocation, collection, reason) do
     Operations.log_standard_site(invocation, collection: collection, reason: reason)
-    {nil, nil, standard_site_failure_detail(collection, reason)}
+    {:error, standard_site_failure_detail(collection, reason)}
+  end
+
+  defp fail_document_create(invocation, result, document_error, completed_at, token) do
+    fail_research(invocation, :standard_site_document_failed, completed_at, token, %{
+      anthropic_messages: result.messages,
+      anthropic_usage: result.usage,
+      full_response: Map.get(result, :full_response),
+      selected_reply: result.text,
+      reply_validation: Map.get(result, :validation),
+      failure_detail: document_error
+    })
   end
 
   defp standard_site_failure_detail(collection, reason) do
@@ -298,11 +349,17 @@ defmodule ContextBot.Workers.ResearchWorker do
   defp maybe_put_failure_field(detail, _key, nil), do: detail
   defp maybe_put_failure_field(detail, key, value), do: Map.put(detail, key, value)
 
-  defp document_uri(nil), do: nil
-  defp document_uri(%{uri: uri}), do: uri
+  defp document_uri({:ok, %{uri: uri}}), do: uri
+  defp document_uri(_document), do: nil
 
-  defp document_rkey(nil), do: nil
-  defp document_rkey(%{rkey: rkey}), do: rkey
+  defp document_rkey({:ok, %{rkey: rkey}}), do: rkey
+  defp document_rkey(_document), do: nil
+
+  defp document_reader_url({:ok, %{reader_url: reader_url}})
+       when is_binary(reader_url) and reader_url != "",
+       do: reader_url
+
+  defp document_reader_url(_document), do: nil
 
   defp defer_budget(invocation, defer_until, kind, token) do
     case Store.transition_research(
@@ -329,20 +386,22 @@ defmodule ContextBot.Workers.ResearchWorker do
     end
   end
 
-  defp fail_research(invocation, reason, completed_at, token) do
-    reason_string = safe_reason(reason)
+  defp fail_research(invocation, reason, completed_at, token, extra \\ %{}) do
+    attrs =
+      extra
+      |> Map.merge(%{
+        failure_category: failure_category(reason),
+        failure_detail: Map.get(extra, :failure_detail, %{"reason" => safe_reason(reason)}),
+        research_claim_token: nil,
+        research_claimed_at: nil,
+        completed_at: completed_at
+      })
 
     case Store.transition_research(
            Repo.reload!(invocation),
            token,
            :failed,
-           %{
-             failure_category: failure_category(reason),
-             failure_detail: %{"reason" => reason_string},
-             research_claim_token: nil,
-             research_claimed_at: nil,
-             completed_at: completed_at
-           },
+           attrs,
            nil,
            completed_at
          ) do
