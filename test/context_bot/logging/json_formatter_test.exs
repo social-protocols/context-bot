@@ -133,6 +133,33 @@ defmodule ContextBot.Logging.JSONFormatterTest do
     assert standard_site["atproto_message"] == "Lexicon not found: site.standard.publication"
     assert standard_site["failure_reason"] == "permanent"
 
+    poller =
+      %{
+        level: :warning,
+        msg: {:string, "context_bot_poller"},
+        meta: %{time: 0, stage: :received, failure_reason: :timeout, status_code: 400}
+      }
+      |> JSONFormatter.format(%{})
+      |> IO.iodata_to_binary()
+      |> Jason.decode!()
+
+    assert poller["message"] == "context_bot_poller"
+    assert poller["failure_reason"] == "timeout"
+    assert poller["status_code"] == 400
+
+    recovery =
+      %{
+        level: :error,
+        msg: {:string, "context_bot_recovery"},
+        meta: %{time: 0, failure_reason: :recovery_failed}
+      }
+      |> JSONFormatter.format(%{})
+      |> IO.iodata_to_binary()
+      |> Jason.decode!()
+
+    assert recovery["message"] == "context_bot_recovery"
+    assert recovery["failure_reason"] == "recovery_failed"
+
     for {key, value} <- Map.delete(metadata, :time) do
       assert decoded[Atom.to_string(key)] == normalize(value)
     end

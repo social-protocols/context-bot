@@ -17,6 +17,7 @@ defmodule ContextBot.Mentions.PollerTest do
   use ContextBot.DataCase, async: false
 
   import Ecto.Query
+  import ExUnit.CaptureLog
 
   alias ContextBot.Mentions.Poller
   alias ContextBot.Mentions.PollerTest.ClientStub
@@ -180,19 +181,66 @@ defmodule ContextBot.Mentions.PollerTest do
 
   test "continues polling after a transient client error" do
     poller = start_poller()
+    previous_level = Logger.level()
+    Logger.configure(level: :warning)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
 
     Poller.poll_now(poller)
     assert_receive {:list_notifications, nil}
-    send(poller, {:notification_error, :timeout})
 
-    assert_eventually(fn -> Poller.idle?(poller) end)
+    log =
+      capture_log(
+        [level: :warning, formatter: {ContextBot.Logging.JSONFormatter, %{}}],
+        fn ->
+          send(poller, {:notification_error, :timeout})
+          assert_eventually(fn -> Poller.idle?(poller) end)
+        end
+      )
 
-    # Verify the next poll is scheduled
+    decoded = Jason.decode!(log)
+    assert decoded["message"] == "context_bot_poller"
+    assert decoded["failure_reason"] == "timeout"
+    assert decoded["stage"] == "received"
+
     Poller.poll_now(poller)
     assert_receive {:list_notifications, nil}
     send(poller, {:notification_page, page([mention("recovered")])})
 
     assert_eventually(fn -> Store.received?(uri("recovered"), cid("recovered")) end)
+  end
+
+  test "logs a permanent notification 400 and continues polling" do
+    poller = start_poller()
+    previous_level = Logger.level()
+    Logger.configure(level: :warning)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    Poller.poll_now(poller)
+    assert_receive {:list_notifications, nil}
+
+    log =
+      capture_log(
+        [level: :warning, formatter: {ContextBot.Logging.JSONFormatter, %{}}],
+        fn ->
+          send(
+            poller,
+            {:notification_error, {:permanent, 400, %{"error" => "InvalidRequest"}}}
+          )
+
+          assert_eventually(fn -> Poller.idle?(poller) end)
+        end
+      )
+
+    decoded = Jason.decode!(log)
+    assert decoded["message"] == "context_bot_poller"
+    assert decoded["failure_reason"] == "permanent"
+    assert decoded["status_code"] == 400
+    assert decoded["atproto_error"] == "InvalidRequest"
+    assert Process.alive?(poller)
+
+    Poller.poll_now(poller)
+    assert_receive {:list_notifications, nil}
+    send(poller, {:notification_page, empty_page()})
   end
 
   test "continues polling after a store error during receipt processing" do

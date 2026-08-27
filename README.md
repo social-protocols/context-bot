@@ -94,7 +94,9 @@ just reprocess 42
 
 The command fails closed unless invocation 42 is a provider-response failure with a complete,
 successful retained envelope and no in-flight unrecorded attempt still inside the Anthropic HTTP
-timeout, or it is `interrupted_after_send` after that timeout (a new attempt is allowed then). Run
+timeout, or it is `interrupted_after_send` after that timeout (a new attempt is allowed then).
+It refuses a row that already has a published `reply_uri` rather than allocating a second Bluesky
+TID. Run
 it only with `BOT_ENABLED=false` and no Context Bot runtime already active against the same SQLite
 database. The
 command starts only the database dependencies, returns the invocation to durable pending work, and

@@ -211,6 +211,44 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
            ]
   end
 
+  test "does not PUT a compact reply that would omit the full-response link" do
+    invocation =
+      invocation("unlinked-full-response", :reply_ready, %{
+        full_response: "Thorough markdown writeup."
+      })
+
+    remote = configure_remote()
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :failed
+    assert persisted.failure_category == :provider_response
+    assert persisted.failure_detail == %{"reason" => "missing_reader_url"}
+    assert persisted.full_response == "Thorough markdown writeup."
+    assert persisted.reply_uri == nil
+    assert persisted.reply_rkey == @rkey
+    assert Remote.snapshot(remote).calls == [{:get, @bot_did, @collection, @rkey}]
+  end
+
+  test "records an already-written unlinked post instead of allocating a second TID" do
+    invocation =
+      invocation("existing-unlinked-full-response", :reply_ready, %{
+        full_response: "Thorough markdown writeup."
+      })
+
+    remote_record = remote_record(invocation, "bafy-existing-unlinked")
+    remote = configure_remote(get_results: [{:ok, 200, %{}, remote_record}])
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert persisted.reply_uri == remote_record["uri"]
+    assert persisted.reply_cid == "bafy-existing-unlinked"
+    assert Remote.snapshot(remote).calls == [{:get, @bot_did, @collection, @rkey}]
+  end
+
   test "accepts an existing exact record and its remote CID without PUT" do
     invocation = invocation("existing")
     remote_record = remote_record(invocation, "bafy-existing")

@@ -224,7 +224,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
              "https://standard-reader.app/a/#{@bot_did}/#{doc_rkey}"
   end
 
-  test "records a visible document failure and omits the reader URL when publication create fails" do
+  test "fails closed without freezing a reply when publication create fails" do
     invocation = invocation("publication-lexicon-unknown", :thread_ready)
 
     configure_runner(
@@ -243,19 +243,21 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
       )
 
     persisted = Repo.reload!(invocation)
-    assert persisted.stage == :reply_ready
+    assert persisted.stage == :failed
+    assert persisted.status == :failed
+    assert persisted.failure_category == :provider_response
     assert persisted.full_response == "Thorough markdown writeup."
+    assert persisted.selected_reply == "Frozen concise context."
     assert persisted.standard_site_document_uri == nil
     assert persisted.standard_site_document_rkey == nil
-    assert persisted.failure_category == nil
+    assert persisted.reply_rkey == nil
+    assert persisted.reply_record == nil
     assert persisted.failure_detail["reason"] == "standard_site_document_failed"
     assert persisted.failure_detail["collection"] == "site.standard.publication"
     assert persisted.failure_detail["status"] == 400
     assert persisted.failure_detail["error"] == "InvalidRequest"
     assert persisted.failure_detail["message"] == "Lexicon not found: site.standard.publication"
-    assert persisted.reply_record["text"] == "Frozen concise context."
-    refute Map.has_key?(persisted.reply_record, "facets")
-    assert [%Oban.Job{worker: "ContextBot.Workers.ReplyWorker"}] = Repo.all(Oban.Job)
+    assert Repo.all(Oban.Job) == []
 
     decoded = Jason.decode!(log)
     assert decoded["message"] == "context_bot_standard_site"
@@ -269,7 +271,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     refute log =~ "Thorough markdown writeup"
   end
 
-  test "records a visible document failure when the publication exists but document create fails" do
+  test "fails closed without freezing a reply when the publication exists but document create fails" do
     invocation = invocation("document-lexicon-unknown", :thread_ready)
 
     configure_runner(
@@ -285,13 +287,15 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
       )
 
     persisted = Repo.reload!(invocation)
-    assert persisted.stage == :reply_ready
+    assert persisted.stage == :failed
+    assert persisted.failure_category == :provider_response
+    assert persisted.full_response == "Thorough markdown writeup."
     assert persisted.standard_site_document_uri == nil
+    assert persisted.reply_record == nil
     assert persisted.failure_detail["collection"] == "site.standard.document"
     assert persisted.failure_detail["status"] == 400
     assert persisted.failure_detail["error"] == "InvalidRequest"
-    assert persisted.reply_record["text"] == "Frozen concise context."
-    refute Map.has_key?(persisted.reply_record, "facets")
+    assert Repo.all(Oban.Job) == []
     assert log =~ "context_bot_standard_site"
     assert log =~ "site.standard.document"
   end

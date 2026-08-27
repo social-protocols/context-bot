@@ -9,6 +9,7 @@ defmodule ContextBot.Mentions.Poller do
   use GenServer
 
   alias ContextBot.Mentions.Validator
+  alias ContextBot.Operations
   alias ContextBot.Workflow.Store
 
   @eligibility_worker "ContextBot.Workers.EligibilityWorker"
@@ -104,7 +105,12 @@ defmodule ContextBot.Mentions.Poller do
           {:continue, discovered} -> continue_drain(state, page, pages, discovered)
         end
 
-      _error ->
+      {:error, reason} ->
+        Operations.log_poller(reason)
+        receipts
+
+      _invalid ->
+        Operations.log_poller(:invalid_notification_page)
         receipts
     end
   end

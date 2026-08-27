@@ -52,6 +52,7 @@ defmodule Mix.Tasks.ContextBot.Reprocess do
 
   defp reprocess_error(:not_found), do: "invocation not found"
   defp reprocess_error(:not_reprocessable), do: "invocation is not reprocessable"
+  defp reprocess_error(:already_published), do: "invocation already has a published reply"
   defp reprocess_error(:ambiguous_provider_attempt), do: "provider attempt is ambiguous"
   defp reprocess_error(:missing_recorded_response), do: "recorded response is missing"
   defp reprocess_error(:invalid_recorded_response), do: "recorded response is not replayable"

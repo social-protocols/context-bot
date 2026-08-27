@@ -231,6 +231,36 @@ defmodule ContextBot.OperationsTest do
     refute log =~ invocation.invocation_uri
   end
 
+  test "structured poller logs keep status and ATProto error without credentials" do
+    previous_level = Logger.level()
+    Logger.configure(level: :warning)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    reason =
+      {:permanent, 400,
+       %{
+         "error" => "InvalidRequest",
+         "message" => "Bad notification cursor",
+         "authorization" => "Bearer provider-secret"
+       }}
+
+    log =
+      capture_log(
+        [level: :warning, formatter: {ContextBot.Logging.JSONFormatter, %{}}],
+        fn -> assert :ok = Operations.log_poller(reason) end
+      )
+
+    decoded = Jason.decode!(log)
+    assert decoded["message"] == "context_bot_poller"
+    assert decoded["stage"] == "received"
+    assert decoded["status_code"] == 400
+    assert decoded["atproto_error"] == "InvalidRequest"
+    assert decoded["failure_reason"] == "permanent"
+    assert decoded["atproto_message"] == "Bad notification cursor"
+    refute log =~ "Bearer"
+    refute log =~ "provider-secret"
+  end
+
   test "repository queries are not logged" do
     invocation = invocation(:researching, @now)
     previous_level = Logger.level()

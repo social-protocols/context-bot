@@ -57,7 +57,9 @@ defmodule ContextBot.Workflow.Recovery do
       |> recover_candidates(options)
     end
   rescue
-    _database_or_state_error -> {:error, :recovery_failed}
+    _database_or_state_error ->
+      Logger.error("context_bot_recovery", Map.to_list(%{failure_reason: "recovery_failed"}))
+      {:error, :recovery_failed}
   end
 
   defp recover_dry_pages(config, options) do

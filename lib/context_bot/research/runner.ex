@@ -11,6 +11,7 @@ defmodule ContextBot.Research.Runner do
 
   require Logger
 
+  alias ContextBot.ATProto.Client
   alias ContextBot.Repo
 
   alias ContextBot.Research.{
@@ -200,7 +201,20 @@ defmodule ContextBot.Research.Runner do
     end
   end
 
-  defp handle_transport_error(_invocation, sent, _reason, config) do
+  defp handle_transport_error(invocation, sent, reason, config) do
+    fields = Client.error_fields(reason)
+
+    Logger.warning(
+      "context_bot_interrupt_recovery",
+      Map.to_list(%{
+        invocation_id: invocation.id,
+        action: :wait_for_timeout,
+        remaining_ms: 0,
+        failure_reason: fields[:failure_reason],
+        status_code: fields[:status_code]
+      })
+    )
+
     with {:ok, _indeterminate} <-
            config.budget.mark_indeterminate(sent, now(config), config.claim_token) do
       {:error, :interrupted_after_send}
