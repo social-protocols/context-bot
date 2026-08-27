@@ -116,14 +116,14 @@ defmodule ContextBotWeb.ProductionConfigTest do
   test "runtime config keeps every workflow queue serial" do
     replace_environment(%{"BOT_ENABLED" => "false", "QUEUE_CONCURRENCY" => "1"})
 
-    queues =
+    oban =
       "config/runtime.exs"
       |> Config.Reader.read!(env: :test)
       |> Keyword.fetch!(:context_bot)
       |> Keyword.fetch!(Oban)
-      |> Keyword.fetch!(:queues)
 
-    assert queues == [eligibility: 1, thread: 1, research: 1, reply: 1, maintenance: 1]
+    assert oban[:queues] == [eligibility: 1, thread: 1, research: 1, reply: 1, maintenance: 1]
+    assert oban[:shutdown_grace_period] == Settings.shutdown_grace_period_ms(Settings.load([]))
   end
 
   test "runtime logging defaults to JSONL on stderr" do

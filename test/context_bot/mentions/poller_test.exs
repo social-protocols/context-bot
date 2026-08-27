@@ -49,6 +49,14 @@ defmodule ContextBot.Mentions.PollerTest do
     send(poller, {:notification_page, empty_page()})
   end
 
+  test "stop_accepting ignores later poll ticks" do
+    poller = start_poller()
+    assert :ok = Poller.stop_accepting(poller)
+
+    Poller.poll_now(poller)
+    refute_receive {:list_notifications, nil}, 50
+  end
+
   test "restarts each poll from the newest page" do
     poller = start_poller()
 

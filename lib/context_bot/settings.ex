@@ -44,6 +44,9 @@ defmodule ContextBot.Settings do
 
   @maximum_atproto_timeout_ms 60_000
   @maximum_anthropic_timeout_ms 600_000
+  # Fly kill_timeout max is 300s. Anthropic HTTP may use the same window.
+  @fly_max_kill_timeout_ms 300_000
+  @drain_grace_buffer_ms 15_000
   @maximum_thread_parent_height 100
   @maximum_anthropic_research_tokens 64_000
   @maximum_anthropic_repair_tokens 8_192
@@ -638,6 +641,18 @@ defmodule ContextBot.Settings do
 
   @spec bot_enabled?(t()) :: boolean()
   def bot_enabled?(%__MODULE__{bot_enabled: bot_enabled}), do: bot_enabled
+
+  @spec fly_max_kill_timeout_ms() :: pos_integer()
+  def fly_max_kill_timeout_ms, do: @fly_max_kill_timeout_ms
+
+  @spec fly_kill_timeout_s() :: pos_integer()
+  def fly_kill_timeout_s, do: div(@fly_max_kill_timeout_ms, 1_000)
+
+  @spec shutdown_grace_period_ms(t()) :: pos_integer()
+  def shutdown_grace_period_ms(%__MODULE__{anthropic_http_timeout_ms: timeout_ms})
+      when is_integer(timeout_ms) and timeout_ms > 0 do
+    min(timeout_ms + @drain_grace_buffer_ms, @fly_max_kill_timeout_ms)
+  end
 
   @spec anthropic_reservation_microdollars(
           t(),

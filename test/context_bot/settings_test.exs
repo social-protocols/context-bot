@@ -3,6 +3,17 @@ defmodule ContextBot.SettingsTest do
 
   alias ContextBot.Settings
 
+  test "caps Oban drain grace at Fly's kill_timeout maximum" do
+    assert Settings.fly_max_kill_timeout_ms() == 300_000
+    assert Settings.fly_kill_timeout_s() == 300
+
+    default = Settings.load([])
+    assert Settings.shutdown_grace_period_ms(default) == 300_000
+
+    short = Settings.load(anthropic_http_timeout_ms: 60_000)
+    assert Settings.shutdown_grace_period_ms(short) == 75_000
+  end
+
   test "loads the documented operational defaults" do
     settings = Settings.load([])
 

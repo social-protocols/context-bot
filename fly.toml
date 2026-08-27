@@ -1,5 +1,11 @@
 app = "context-bot-social-protocols"
 primary_region = "ewr"
+# Fly's default kill_signal is SIGINT, which the BEAM does not drain. SIGTERM
+# starts OTP shutdown so Oban can finish in-flight research/reply. kill_timeout
+# max is 300s, equal to ANTHROPIC_HTTP_TIMEOUT_MS; startup recovery still waits
+# out or replaces a sent-without-envelope attempt if the VM is hard-killed.
+kill_signal = "SIGTERM"
+kill_timeout = 300
 
 [build]
   dockerfile = "Dockerfile"

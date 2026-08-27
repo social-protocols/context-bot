@@ -83,6 +83,9 @@ defmodule ContextBot.Workers.ResearchWorker do
       {:ok, result} ->
         freeze_handoff(Repo.reload!(invocation), result, token, dependencies)
 
+      {:wait, remaining_ms} ->
+        {:snooze, snooze_seconds(remaining_ms)}
+
       {:deferred, %DateTime{} = defer_until, kind} ->
         defer_budget(invocation, defer_until, kind, token)
 
@@ -369,6 +372,11 @@ defmodule ContextBot.Workers.ResearchWorker do
 
   defp put_runner_claim(options, token) when is_map(options),
     do: Map.put(options, :claim_token, token)
+
+  defp snooze_seconds(remaining_ms) when is_integer(remaining_ms) and remaining_ms <= 0, do: 1
+
+  defp snooze_seconds(remaining_ms) when is_integer(remaining_ms) and remaining_ms > 0,
+    do: div(remaining_ms + 999, 1_000)
 
   defp reply_job(invocation) do
     Oban.Job.new(

@@ -508,6 +508,18 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert Repo.aggregate(Oban.Job, :count) == 0
   end
 
+  test "snoozes when the runner is waiting out an in-flight provider attempt" do
+    invocation = invocation("wait-inflight", :researching)
+    configure_runner({:wait, 5_001})
+    configure_worker()
+
+    assert {:snooze, 6} = perform(invocation)
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :researching
+    assert persisted.failure_category == nil
+    assert persisted.completed_at == nil
+  end
+
   test "maps terminal runner states to finite silent provider failures" do
     for {suffix, runner_error, category} <- [
           {"auth", :provider_auth, :provider_auth},

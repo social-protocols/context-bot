@@ -50,7 +50,7 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
     assert options[:batch_size] == 7
   end
 
-  test "maintenance terminalizes stale sent research without replaying the provider call" do
+  test "maintenance resumes stale sent research after the HTTP timeout" do
     invocation =
       invocation("ambiguous-research", :researching,
         minutes_ago: 400,
@@ -80,10 +80,10 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
     assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
 
     persisted = Repo.reload!(invocation)
-    assert persisted.stage == :failed
-    assert persisted.failure_detail == %{"reason" => "interrupted_after_send"}
+    assert persisted.stage == :thread_ready
+    assert persisted.failure_detail == nil
     assert Repo.reload!(entry).state == :indeterminate
-    assert Repo.reload!(job).state == "discarded"
+    assert Repo.reload!(job).state == "available"
     assert Repo.aggregate(BudgetEntry, :count) == 1
   end
 

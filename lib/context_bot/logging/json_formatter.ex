@@ -7,22 +7,24 @@ defmodule ContextBot.Logging.JSONFormatter do
     invocation_id job_id queue worker attempt attempt_kind attempt_index stage duration_ms
     input_tokens output_tokens cache_creation_input_tokens cache_read_input_tokens
     tool_uses web_search_uses cost_microdollars failure_category failure_reason
-    request_id method path status status_code examined resumed terminalized unchanged
-    media_disposition image_count
+    request_id method path status status_code examined resumed terminalized unchanged remaining_ms
+    media_disposition image_count action
   )a)
 
   @numeric_metadata MapSet.new(~w(
     invocation_id job_id attempt attempt_index duration_ms input_tokens output_tokens
     cache_creation_input_tokens cache_read_input_tokens tool_uses web_search_uses
     cost_microdollars status status_code examined resumed terminalized unchanged
-    image_count
+    remaining_ms image_count
   )a)
 
   @token_metadata MapSet.new(~w(
-    queue attempt_kind stage failure_category failure_reason
+    queue attempt_kind stage failure_category failure_reason action
   )a)
 
-  @safe_messages MapSet.new(~w(context_bot_attempt context_bot_startup_recovery))
+  @safe_messages MapSet.new(
+                   ~w(context_bot_attempt context_bot_startup_recovery context_bot_interrupt_recovery)
+                 )
   @media_dispositions MapSet.new(~w(supported video_unsupported image_limit_exceeded))
   @token ~r/\A[a-z][a-z0-9_-]{0,127}\z/
   @worker ~r/\AElixir\.[A-Za-z0-9_.]{1,240}\z|\A[A-Z][A-Za-z0-9_.]{1,247}\z/

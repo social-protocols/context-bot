@@ -88,6 +88,8 @@ defmodule ContextBot.Logging.JSONFormatterTest do
       cost_microdollars: 12_345,
       failure_category: :provider_response,
       failure_reason: :interrupted_after_send,
+      remaining_ms: 12_345,
+      action: :new_attempt,
       request_id: "request-safe-id",
       method: "GET",
       path: "/health",
@@ -96,12 +98,12 @@ defmodule ContextBot.Logging.JSONFormatterTest do
     }
 
     decoded =
-      %{level: :info, msg: {:string, "context_bot_attempt"}, meta: metadata}
+      %{level: :info, msg: {:string, "context_bot_interrupt_recovery"}, meta: metadata}
       |> JSONFormatter.format(%{})
       |> IO.iodata_to_binary()
       |> Jason.decode!()
 
-    assert decoded["message"] == "context_bot_attempt"
+    assert decoded["message"] == "context_bot_interrupt_recovery"
 
     for {key, value} <- Map.delete(metadata, :time) do
       assert decoded[Atom.to_string(key)] == normalize(value)

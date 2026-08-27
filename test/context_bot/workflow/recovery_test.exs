@@ -48,32 +48,42 @@ defmodule ContextBot.Workflow.RecoveryTest do
     assert Repo.aggregate(BudgetEntry, :count) == 1
   end
 
-  test "sent research without a stored envelope terminalizes exactly once" do
+  test "sent research without a stored envelope waits out the HTTP timeout" do
     invocation = invocation(:researching, true, "ambiguous")
     job = executing_job(invocation, "ContextBot.Workers.ResearchWorker", :dry_research)
     entry = budget_entry(invocation, :sent, nil)
 
-    assert :terminalized = recover_invocation(invocation, startup?: true)
+    assert :resumed = recover_invocation(invocation, startup?: true)
     assert :unchanged = recover_invocation(invocation, startup?: true)
 
     persisted = Repo.reload!(invocation)
-    assert persisted.stage == :failed
-    assert persisted.failure_category == :provider_response
-    assert persisted.failure_detail == %{"reason" => "interrupted_after_send"}
+    assert persisted.stage == :researching
+    assert persisted.failure_category == nil
     assert persisted.research_claim_token == nil
-    assert Repo.reload!(entry).state == :indeterminate
-    assert Repo.reload!(job).state == "discarded"
+    assert Repo.reload!(entry).state == :sent
+    assert Repo.reload!(job).state == "scheduled"
+    assert DateTime.diff(Repo.reload!(job).scheduled_at, @now, :millisecond) == 300_000
     assert Repo.aggregate(BudgetEntry, :count) == 1
-
-    refute Repo.exists?(
-             from candidate in Oban.Job,
-               where:
-                 candidate.queue in ["research", "dry_research", "reply"] and
-                   candidate.state in ["available", "scheduled", "executing"]
-           )
   end
 
-  test "an older ambiguous attempt terminalizes despite a newer legacy reservation" do
+  test "sent research without an envelope starts a new attempt after the HTTP timeout" do
+    invocation = invocation(:researching, true, "ambiguous-elapsed")
+    job = executing_job(invocation, "ContextBot.Workers.ResearchWorker", :dry_research)
+    entry = budget_entry(invocation, :sent, nil)
+    later = DateTime.add(@now, 300_001, :millisecond)
+
+    assert :resumed = recover_invocation(invocation, startup?: true, now: later)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :thread_ready
+    assert persisted.failure_category == nil
+    assert persisted.completed_at == nil
+    assert Repo.reload!(entry).state == :indeterminate
+    assert Repo.reload!(job).state == "available"
+    assert Repo.aggregate(BudgetEntry, :count) == 1
+  end
+
+  test "an older unrecorded attempt inside the timeout parks instead of sending a reservation" do
     invocation = invocation(:researching, false, "older-ambiguous")
     job = executing_job(invocation, "ContextBot.Workers.ResearchWorker", :research)
     ambiguous = budget_entry(invocation, :sent, nil)
@@ -91,11 +101,38 @@ defmodule ContextBot.Workflow.RecoveryTest do
       })
       |> Repo.insert!()
 
-    assert :terminalized = recover_invocation(invocation, startup?: true)
-    assert Repo.reload!(invocation).stage == :failed
+    assert :resumed = recover_invocation(invocation, startup?: true)
+    assert Repo.reload!(invocation).stage == :researching
+    assert Repo.reload!(ambiguous).state == :sent
+    assert Repo.reload!(reserved).state == :reserved
+    assert Repo.reload!(job).state == "scheduled"
+  end
+
+  test "an older unrecorded attempt past the timeout stays indeterminate and resumes the reservation" do
+    invocation = invocation(:researching, false, "older-elapsed")
+    job = executing_job(invocation, "ContextBot.Workers.ResearchWorker", :research)
+    ambiguous = budget_entry(invocation, :sent, nil)
+
+    reserved =
+      %BudgetEntry{}
+      |> BudgetEntry.changeset(%{
+        attempt_key: "recovery-#{invocation.id}-retry-reserved-elapsed",
+        invocation_id: invocation.id,
+        budget_date: DateTime.to_date(@now),
+        kind: :retry,
+        reserved_microdollars: 5_000_000,
+        state: :reserved,
+        research_claim_token: "old-research-owner"
+      })
+      |> Repo.insert!()
+
+    later = DateTime.add(@now, 300_001, :millisecond)
+    assert :resumed = recover_invocation(invocation, startup?: true, now: later)
+    assert Repo.reload!(invocation).stage == :thread_ready
     assert Repo.reload!(ambiguous).state == :indeterminate
     assert Repo.reload!(reserved).state == :reserved
-    assert Repo.reload!(job).state == "discarded"
+    assert Repo.reload!(job).state == "available"
+    assert Repo.aggregate(BudgetEntry, :count) == 2
   end
 
   test "a stored provider envelope resumes processing without a new reservation" do
@@ -113,15 +150,137 @@ defmodule ContextBot.Workflow.RecoveryTest do
     assert Repo.aggregate(ResponseEnvelope, :count) == 1
   end
 
-  test "a response timestamp without its durable envelope is treated as ambiguous" do
+  test "a failed local parser envelope is reopened without a new reservation" do
+    invocation =
+      invocation(:failed, true, "parser-failure",
+        failure_category: :provider_response,
+        failure_detail: %{"reason" => "unexpected_tool_use"},
+        canonical_thread: "thread",
+        canonical_thread_version: "1",
+        anthropic_messages: %{"model" => "claude-sonnet-5", "messages" => []},
+        completed_at: @now
+      )
+
+    job = executing_job(invocation, "ContextBot.Workers.ResearchWorker", :dry_research)
+
+    job =
+      job |> Ecto.Changeset.change(%{state: "discarded", discarded_at: @now}) |> Repo.update!()
+
+    entry = budget_entry(invocation, :sent, @now)
+    _envelope = response_envelope(invocation, entry)
+
+    assert :resumed = recover_invocation(invocation, startup?: true)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :thread_ready
+    assert persisted.failure_category == nil
+    assert persisted.completed_at == nil
+    assert Repo.reload!(entry).state == :sent
+    assert Repo.aggregate(BudgetEntry, :count) == 1
+    assert Repo.aggregate(ResponseEnvelope, :count) == 1
+    assert [replay] = available_research_jobs(invocation)
+    assert replay.id != job.id
+    assert replay.state == "available"
+    assert replay.queue == "dry_research"
+  end
+
+  test "failed interrupted_after_send waits while the HTTP timeout is still open" do
+    invocation =
+      invocation(:failed, false, "failed-interrupt-wait",
+        failure_category: :provider_response,
+        failure_detail: %{"reason" => "interrupted_after_send"},
+        canonical_thread: "thread",
+        canonical_thread_version: "1",
+        anthropic_messages: %{"model" => "claude-sonnet-5", "messages" => []},
+        completed_at: @now
+      )
+
+    job = executing_job(invocation, "ContextBot.Workers.ResearchWorker", :research)
+
+    job =
+      job |> Ecto.Changeset.change(%{state: "discarded", discarded_at: @now}) |> Repo.update!()
+
+    entry = budget_entry(invocation, :sent, nil)
+
+    assert :resumed = recover_invocation(invocation, startup?: true)
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :researching
+    assert persisted.failure_category == nil
+    assert persisted.completed_at == nil
+    assert Repo.reload!(entry).state == :sent
+    assert [parked] = available_research_jobs(invocation)
+    assert parked.id != job.id
+    assert parked.state == "scheduled"
+    assert DateTime.diff(parked.scheduled_at, @now, :millisecond) == 300_000
+  end
+
+  test "failed interrupted_after_send is reopened after the HTTP timeout" do
+    invocation =
+      invocation(:failed, false, "failed-interrupt",
+        failure_category: :provider_response,
+        failure_detail: %{"reason" => "interrupted_after_send"},
+        canonical_thread: "thread",
+        canonical_thread_version: "1",
+        anthropic_messages: %{"model" => "claude-sonnet-5", "messages" => []},
+        completed_at: @now
+      )
+
+    job = executing_job(invocation, "ContextBot.Workers.ResearchWorker", :research)
+
+    job =
+      job |> Ecto.Changeset.change(%{state: "discarded", discarded_at: @now}) |> Repo.update!()
+
+    entry = budget_entry(invocation, :sent, nil)
+    later = DateTime.add(@now, 300_001, :millisecond)
+
+    assert {:ok, %{resumed: 1}} = recover(startup?: true, now: later)
+    assert {:ok, %{resumed: 0, unchanged: 1}} = recover(startup?: true, now: later)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :thread_ready
+    assert persisted.failure_category == nil
+    assert persisted.failure_detail == nil
+    assert persisted.completed_at == nil
+    assert Repo.reload!(entry).state == :indeterminate
+    assert [replay] = available_research_jobs(invocation)
+    assert replay.id != job.id
+    assert replay.state == "available"
+    assert replay.queue == "research"
+  end
+
+  test "a published reply is never given a second post" do
+    invocation =
+      invocation(:failed, false, "already-published",
+        failure_category: :provider_response,
+        failure_detail: %{"reason" => "interrupted_after_send"},
+        canonical_thread: "thread",
+        canonical_thread_version: "1",
+        anthropic_messages: %{"model" => "claude-sonnet-5", "messages" => []},
+        reply_uri: "at://did:plc:bot/app.bsky.feed.post/already",
+        reply_cid: "bafy-already",
+        completed_at: @now
+      )
+
+    later = DateTime.add(@now, 300_001, :millisecond)
+    assert :unchanged = recover_invocation(invocation, startup?: true, now: later)
+    assert Repo.reload!(invocation).stage == :failed
+    assert Repo.reload!(invocation).reply_uri == "at://did:plc:bot/app.bsky.feed.post/already"
+
+    refute Repo.exists?(
+             from job in Oban.Job,
+               where: job.worker == "ContextBot.Workers.ReplyWorker"
+           )
+  end
+
+  test "a response timestamp without its durable envelope waits while the timeout is open" do
     invocation = invocation(:researching, false, "missing-envelope")
     job = executing_job(invocation, "ContextBot.Workers.ResearchWorker", :research)
     entry = budget_entry(invocation, :sent, @now)
 
-    assert :terminalized = recover_invocation(invocation, startup?: true)
-    assert Repo.reload!(invocation).stage == :failed
-    assert Repo.reload!(entry).state == :indeterminate
-    assert Repo.reload!(job).state == "discarded"
+    assert :resumed = recover_invocation(invocation, startup?: true)
+    assert Repo.reload!(invocation).stage == :researching
+    assert Repo.reload!(entry).state == :sent
+    assert Repo.reload!(job).state == "scheduled"
   end
 
   test "publication is safely resumed only for public invocations" do
@@ -221,6 +380,19 @@ defmodule ContextBot.Workflow.RecoveryTest do
     assert Repo.reload!(complete).stage == :complete
   end
 
+  test "permanent non-replayable failures stay failed" do
+    invocation =
+      invocation(:failed, false, "identity-unavailable",
+        failure_category: :identity_unavailable,
+        completed_at: @now
+      )
+
+    assert :unchanged = recover_invocation(invocation, startup?: true)
+    assert Repo.reload!(invocation).stage == :failed
+    assert Repo.reload!(invocation).failure_category == :identity_unavailable
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
   test "repeated recovery does not create duplicate work" do
     invocation = invocation(:researching, true, "idempotent")
     _job = executing_job(invocation, "ContextBot.Workers.ResearchWorker", :dry_research)
@@ -295,8 +467,8 @@ defmodule ContextBot.Workflow.RecoveryTest do
       received_at: @now,
       status: stage,
       stage: stage,
-      canonical_thread: if(stage in [:thread_ready, :researching], do: "thread"),
-      canonical_thread_version: if(stage in [:thread_ready, :researching], do: "1"),
+      canonical_thread: if(stage in [:thread_ready, :researching, :failed], do: "thread"),
+      canonical_thread_version: if(stage in [:thread_ready, :researching, :failed], do: "1"),
       research_claim_token: if(stage == :researching, do: "old-research-owner"),
       research_claimed_at: if(stage == :researching, do: @now),
       publication_claim_token: if(stage == :publishing, do: "old-publication-owner"),
@@ -323,6 +495,23 @@ defmodule ContextBot.Workflow.RecoveryTest do
       attempted_by: ["old-node"]
     })
     |> Repo.update!()
+  end
+
+  defp available_research_jobs(invocation) do
+    invocation
+    |> research_jobs()
+    |> Enum.filter(&(&1.state in ["available", "scheduled"]))
+  end
+
+  defp research_jobs(invocation) do
+    Repo.all(
+      from job in Oban.Job,
+        where:
+          job.worker == "ContextBot.Workers.ResearchWorker" and
+            fragment("json_extract(?, '$.uri')", job.args) == ^invocation.invocation_uri and
+            fragment("json_extract(?, '$.cid')", job.args) == ^invocation.notification_cid,
+        order_by: job.id
+    )
   end
 
   defp set_attempted_at(job, attempted_at) do

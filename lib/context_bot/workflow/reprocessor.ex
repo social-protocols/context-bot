@@ -1,15 +1,17 @@
 defmodule ContextBot.Workflow.Reprocessor do
   @moduledoc """
-  Reopens a local provider-processing failure only when its paid response is durably replayable.
+  Reopens a local provider-processing failure when its paid response is durably replayable,
+  or when `interrupted_after_send` has waited out the Anthropic HTTP timeout.
 
-  This is an explicit operator action, not ordinary orphan recovery. It never reopens ambiguous
-  provider exposure and never performs provider or ATProto I/O itself.
+  This is an explicit operator action, not ordinary orphan recovery. It never reopens an
+  unrecorded provider attempt that is still inside the HTTP timeout window, and never
+  performs provider or ATProto I/O itself.
   """
 
   import Ecto.Query
 
   alias ContextBot.Repo
-  alias ContextBot.Research.{Budget, BudgetEntry, ResponseEnvelope}
+  alias ContextBot.Research.{BudgetEntry, InterruptRecovery, ResponseEnvelope}
   alias ContextBot.Workers.ResearchWorker
   alias ContextBot.Workflow.Invocation
 
@@ -41,15 +43,34 @@ defmodule ContextBot.Workflow.Reprocessor do
   defp reopen(invocation_id, %DateTime{} = now) do
     invocation = Repo.get(Invocation, invocation_id) || Repo.rollback(:not_found)
     validate_invocation!(invocation)
+    reject_in_flight!(invocation, now)
 
-    if Budget.unrecorded_exposed_attempt(invocation) do
-      Repo.rollback(:ambiguous_provider_attempt)
+    if lost_interrupt?(invocation) do
+      enqueue_reopen(invocation, now)
+    else
+      entry = latest_attempt(invocation) || Repo.rollback(:missing_recorded_response)
+      envelope = recorded_response(entry) || Repo.rollback(:missing_recorded_response)
+      validate_response!(entry, envelope)
+      enqueue_reopen(invocation, now)
     end
+  end
 
-    entry = latest_attempt(invocation) || Repo.rollback(:missing_recorded_response)
-    envelope = recorded_response(entry) || Repo.rollback(:missing_recorded_response)
-    validate_response!(entry, envelope)
+  defp lost_interrupt?(%Invocation{} = invocation) do
+    InterruptRecovery.interrupted_after_send?(invocation) and
+      InterruptRecovery.can_restart_research?(invocation) and
+      not InterruptRecovery.replayable_recorded_response?(invocation)
+  end
 
+  defp reject_in_flight!(invocation, now) do
+    timeout_ms = Application.fetch_env!(:context_bot, :settings).anthropic_http_timeout_ms
+
+    case InterruptRecovery.in_flight_attempt(invocation, now, timeout_ms) do
+      nil -> :ok
+      _in_flight -> Repo.rollback(:ambiguous_provider_attempt)
+    end
+  end
+
+  defp enqueue_reopen(invocation, now) do
     reopened =
       invocation
       |> Invocation.transition_changeset(%{
