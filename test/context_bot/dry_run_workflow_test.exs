@@ -128,6 +128,71 @@ defmodule ContextBot.DryRunWorkflowTest do
     assert Process.whereis(ContextBot.ATProto.Session) == nil
   end
 
+  test "a question-only dry run researches locally without AppView, eligibility, or publication" do
+    settings = Settings.load(anthropic_daily_budget_usd: "20.000000")
+    Application.put_env(:context_bot, :settings, settings)
+    public_job = seed_public_thread_job!()
+
+    raw_response = fixture("anthropic/tool_success.json")
+
+    Req.Test.expect(AnthropicClient, fn conn ->
+      invocation = Repo.one!(Invocation)
+
+      assert conn.method == "POST"
+      assert conn.request_path == "/v1/messages"
+      assert Plug.Conn.get_req_header(conn, "x-api-key") == ["anthropic-test-key-never-expose"]
+
+      assert [message] = conn.body_params["messages"]
+      assert [%{"type" => "text", "text" => text}] = message["content"]
+      assert text == invocation.canonical_thread
+      assert text =~ "CONTEXT_BOT_THREAD_V2"
+      assert text =~ "[invocation]\nText:\nWhat's missing?"
+      refute text =~ "[target]"
+      refute text =~ "[ancestor]"
+      refute text =~ "The root claim."
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "application/json")
+      |> Plug.Conn.put_resp_header("request-id", "question-only-dry-run-test")
+      |> Plug.Conn.send_resp(200, raw_response)
+    end)
+
+    assert {:ok, invocation, :created} = DryRun.prepare_question("What's missing?")
+    assert invocation.dry_run
+    assert invocation.stage == :thread_ready
+    assert invocation.target_uri == "local://context-bot/question"
+    assert invocation.root_uri == nil
+
+    assert queued_jobs() == [
+             {"thread", "ContextBot.Workers.ThreadWorker"},
+             {"dry_research", "ContextBot.Workers.ResearchWorker"}
+           ]
+
+    perform_and_delete!(:dry_research)
+
+    assert {:ok, complete} = DryRun.await(invocation, timeout_ms: 0)
+    assert complete.stage == :complete
+    assert complete.selected_reply == "Useful context from primary sources."
+    assert complete.completed_at
+    assert complete.reply_repo == nil
+    assert complete.reply_rkey == nil
+    assert complete.reply_record == nil
+    assert complete.reply_uri == nil
+    assert complete.reply_cid == nil
+    assert complete.publication_claim_token == nil
+    assert complete.anthropic_usage["totals"]["input_tokens"] == 100
+
+    assert [response] = Store.anthropic_responses(complete)
+    assert response.raw_body == raw_response
+
+    assert [%BudgetEntry{state: :settled, response_recorded_at: %DateTime{}}] =
+             Repo.all(BudgetEntry)
+
+    assert queued_jobs() == [{"thread", "ContextBot.Workers.ThreadWorker"}]
+    assert Repo.get!(Oban.Job, public_job.id).state == "available"
+    assert Process.whereis(ContextBot.ATProto.Session) == nil
+  end
+
   test "an exhausted daily budget persists deferral without calling Anthropic" do
     settings = Settings.load(anthropic_daily_budget_usd: "5.000000")
     Application.put_env(:context_bot, :settings, settings)

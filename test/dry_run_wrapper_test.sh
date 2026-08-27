@@ -47,7 +47,12 @@ export -f bw mix
 cd "$project_root"
 
 start_wrapper() {
+	start_wrapper_with_args "$1" "post reference" "question text"
+}
+
+start_wrapper_with_args() {
 	context_bot_test_label="$1"
+	shift
 	rm -f \
 		"$context_bot_test_tmp/arguments" \
 		"$context_bot_test_tmp/bot-enabled" \
@@ -60,10 +65,26 @@ start_wrapper() {
 	set +e
 	(
 		trap - INT
-		exec ./dry-run.sh "post reference" "question text"
+		exec ./dry-run.sh "$@"
 	) >"$context_bot_test_tmp/output-$context_bot_test_label" 2>&1 &
 	wrapper_pid=$!
 	set -e
+}
+
+assert_usage_error() {
+	context_bot_test_label="$1"
+	shift
+	set +e
+	./dry-run.sh "$@" >"$context_bot_test_tmp/output-$context_bot_test_label" 2>&1
+	wrapper_status=$?
+	set -e
+
+	[[ "$wrapper_status" -eq 64 ]] ||
+		fail "$context_bot_test_label exited $wrapper_status instead of usage status 64"
+	[[ ! -f "$context_bot_test_tmp/ready" ]] ||
+		fail "$context_bot_test_label started mix before rejecting usage"
+	[[ "$(<"$context_bot_test_tmp/output-$context_bot_test_label")" != *"anthropic-key-test-value"* ]] ||
+		fail "$context_bot_test_label leaked the Anthropic key"
 }
 
 wait_for_file() {
@@ -134,5 +155,41 @@ if [[ -f "$context_bot_test_tmp/child-pid" ]]; then
 		fail "launch-race child remained alive after wrapper exit"
 	fi
 fi
+
+start_wrapper_with_args one-arg "What's missing?"
+wait_for_file "$context_bot_test_tmp/ready" || fail "question-only child did not start"
+kill -INT "$wrapper_pid"
+wait_for_wrapper
+
+[[ "$wrapper_status" -eq 23 ]] || fail "question-only interrupt did not preserve the child status"
+[[ "$(<"$context_bot_test_tmp/bot-enabled")" == "false" ]] || fail "question-only dry run enabled the public bot"
+[[ "$(<"$context_bot_test_tmp/arguments")" == "context_bot.dry_run What's missing?" ]] ||
+	fail "question-only arguments were not forwarded exactly"
+[[ "$(<"$context_bot_test_tmp/output-one-arg")" != *"anthropic-key-test-value"* ]] ||
+	fail "question-only wrapper leaked the Anthropic key"
+
+rm -f "$context_bot_test_tmp/ready"
+assert_usage_error no-args
+[[ "$(<"$context_bot_test_tmp/output-no-args")" == *"question"* ]] ||
+	fail "zero-argument usage error did not mention a question"
+
+rm -f "$context_bot_test_tmp/ready"
+assert_usage_error extra-args "post" "question" "extra"
+[[ "$(<"$context_bot_test_tmp/output-extra-args")" == *"question"* ]] ||
+	fail "extra-argument usage error did not mention a question"
+
+rm -f "$context_bot_test_tmp/ready"
+assert_usage_error lone-at-uri "at://did:plc:alice/app.bsky.feed.post/3abc"
+[[ "$(<"$context_bot_test_tmp/output-lone-at-uri")" == *"question"* ]] ||
+	fail "lone at-uri usage error did not mention a question"
+[[ "$(<"$context_bot_test_tmp/output-lone-at-uri")" != *"did:plc:alice"* ]] ||
+	fail "lone at-uri usage error echoed the post reference"
+
+rm -f "$context_bot_test_tmp/ready"
+assert_usage_error lone-bsky-url "https://bsky.app/profile/alice.test/post/3abc"
+[[ "$(<"$context_bot_test_tmp/output-lone-bsky-url")" == *"question"* ]] ||
+	fail "lone bsky.app usage error did not mention a question"
+[[ "$(<"$context_bot_test_tmp/output-lone-bsky-url")" != *"alice.test"* ]] ||
+	fail "lone bsky.app usage error echoed the post reference"
 
 printf 'dry-run wrapper tests passed\n'

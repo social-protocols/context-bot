@@ -1,12 +1,12 @@
 defmodule Mix.Tasks.ContextBot.DryRun do
-  @moduledoc "Runs one durable, local-only context check against a public Bluesky post."
+  @moduledoc "Runs one durable, local-only context check against a question or public Bluesky post."
 
   use Mix.Task
 
   import Ecto.Query
 
   alias ContextBot.{DryRun, LocalMigrate, Repo, Settings}
-  alias ContextBot.DryRun.{Interrupts, Progress}
+  alias ContextBot.DryRun.{Interrupts, PostReference, Progress}
   alias ContextBot.Research.BudgetEntry
 
   @requirements ["app.config"]
@@ -14,7 +14,21 @@ defmodule Mix.Tasks.ContextBot.DryRun do
   @owner_retry_ticks 3
 
   @impl Mix.Task
-  def run([post, question]) do
+  def run([question]) when is_binary(question) do
+    if PostReference.looks_like_post_reference?(question) do
+      Mix.raise("a post reference also needs a question")
+    else
+      run_prepared(fn service -> service.prepare_question(question, []) end)
+    end
+  end
+
+  def run([post, question]) when is_binary(post) and is_binary(question) do
+    run_prepared(fn service -> service.prepare(post, question, []) end)
+  end
+
+  def run(_arguments), do: Mix.raise("expected a question, or a post and question")
+
+  defp run_prepared(prepare) do
     config = Application.get_env(:context_bot, __MODULE__, [])
     service = Keyword.get(config, :service, DryRun)
     runtime = Keyword.get(config, :runtime, ContextBot.DryRun.Runtime)
@@ -27,7 +41,7 @@ defmodule Mix.Tasks.ContextBot.DryRun do
     LocalMigrate.ensure_migrated!()
     ensure_application_started!(runtime)
 
-    {invocation, disposition} = prepare!(service, post, question)
+    {invocation, disposition} = prepare!(prepare, service)
     print_identity(invocation, disposition)
 
     progress =
@@ -47,8 +61,6 @@ defmodule Mix.Tasks.ContextBot.DryRun do
       interrupts.remove(token)
     end
   end
-
-  def run(_arguments), do: Mix.raise("expected exactly a post and question")
 
   defp print_result(result, settled_cost) do
     case result do
@@ -100,8 +112,8 @@ defmodule Mix.Tasks.ContextBot.DryRun do
     end
   end
 
-  defp prepare!(service, post, question) do
-    case service.prepare(post, question, []) do
+  defp prepare!(prepare, service) do
+    case prepare.(service) do
       {:ok, %ContextBot.Workflow.Invocation{id: id} = invocation, disposition}
       when is_integer(id) and disposition in [:created, :attached] ->
         {invocation, disposition}

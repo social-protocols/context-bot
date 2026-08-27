@@ -105,6 +105,47 @@ defmodule ContextBot.Workflow.StoreTest do
     assert Repo.aggregate(Oban.Job, :count) == 1
   end
 
+  test "creates or attaches a question-only dry run at thread_ready with a research job" do
+    canonical = %{
+      version: 2,
+      text: "CONTEXT_BOT_THREAD_V2\n\n[invocation]\nText:\nWhat's missing?",
+      media: [],
+      contains_video: false
+    }
+
+    assert {:ok, created, :created} =
+             Store.create_or_attach_question_dry_run(
+               "What's missing?",
+               canonical,
+               @received_at,
+               &research_job/2
+             )
+
+    assert created.dry_run
+    assert created.target_uri == "local://context-bot/question"
+    assert created.stage == :thread_ready
+    assert created.canonical_thread == canonical.text
+    assert created.canonical_thread_version == "2"
+    assert created.canonical_media == []
+    assert created.contains_video == false
+    assert created.root_uri == nil
+    assert created.reply_record == nil
+
+    assert {:ok, attached, :attached} =
+             Store.create_or_attach_question_dry_run(
+               "What's missing?",
+               canonical,
+               @received_at,
+               &research_job/2
+             )
+
+    assert attached.id == created.id
+    assert Repo.aggregate(Invocation, :count) == 1
+    assert Repo.aggregate(Oban.Job, :count) == 1
+
+    assert [%Oban.Job{worker: "ContextBot.Workers.ResearchWorker"}] = Repo.all(Oban.Job)
+  end
+
   test "creates one operator-authorized live invocation and thread job atomically" do
     receipt = live_receipt("at://did:plc:actor/app.bsky.feed.post/live-create", "bafy-live")
 

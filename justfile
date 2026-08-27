@@ -64,8 +64,11 @@ db-reset:
     mkdir -p data
     mix ecto.reset
 
-dry-run post question:
-    ./dry-run.sh {{quote(post)}} {{quote(question)}}
+[positional-arguments]
+dry-run +args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ./dry-run.sh "$@"
 
 live-run invocation_url:
     ./live-run.sh {{quote(invocation_url)}}

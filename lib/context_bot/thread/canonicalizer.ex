@@ -47,6 +47,13 @@ defmodule ContextBot.Thread.Canonicalizer do
           current_cid: String.t()
         }
 
+  @type question_only_result :: %{
+          version: 2,
+          text: String.t(),
+          media: [map()],
+          contains_video: boolean()
+        }
+
   @type unsupported_result :: %{
           reason: :image_limit_exceeded,
           image_count: non_neg_integer(),
@@ -127,6 +134,21 @@ defmodule ContextBot.Thread.Canonicalizer do
       do: {:error, :target_unavailable}
 
   def build_dry_run(_response, _context), do: {:error, :invalid_thread}
+
+  @doc "Builds a local question subject with no parent, target post, or ancestors."
+  @spec build_question_only(String.t()) ::
+          {:ok, question_only_result()} | {:error, :invalid_input}
+  def build_question_only(question) when is_binary(question) and question != "" do
+    {:ok,
+     %{
+       version: 2,
+       text: Enum.join(["CONTEXT_BOT_THREAD_V2", render_dry_run_invocation(question)], "\n\n"),
+       media: [],
+       contains_video: false
+     }}
+  end
+
+  def build_question_only(_question), do: {:error, :invalid_input}
 
   defp available_post(%{
          "post" =>

@@ -24,6 +24,13 @@ defmodule Mix.Tasks.ContextBot.DryRunTest.Service do
     config[:prepare_result]
   end
 
+  def prepare_question(question, options) do
+    config = Application.fetch_env!(:context_bot, __MODULE__)
+    Events.record({:prepare_question, question, options})
+    send(config[:test_pid], {:prepare_question, question, options})
+    config[:prepare_question_result]
+  end
+
   def await(invocation, options) do
     config = Application.fetch_env!(:context_bot, __MODULE__)
     Events.record({:await, invocation.id, options})
@@ -208,15 +215,30 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
   end
 
   test "rejects wrong arity before starting runtime or creating state" do
-    assert_raise Mix.Error, ~r/exactly a post and question/, fn -> run([]) end
-    assert_raise Mix.Error, ~r/exactly a post and question/, fn -> run(["one"]) end
+    assert_raise Mix.Error, ~r/a question, or a post and question/, fn -> run([]) end
 
-    assert_raise Mix.Error, ~r/exactly a post and question/, fn ->
+    assert_raise Mix.Error, ~r/a question, or a post and question/, fn ->
       run(["one", "two", "three"])
     end
 
     refute_received :base_application_started
     refute_received {:prepare, _, _, _}
+    refute_received {:prepare_question, _, _}
+  end
+
+  test "rejects a lone post reference before starting runtime or creating state" do
+    for argument <- [
+          "at://did:plc:alice/app.bsky.feed.post/3abc",
+          "https://bsky.app/profile/alice.test/post/3abc"
+        ] do
+      error = assert_raise Mix.Error, fn -> run([argument]) end
+      assert error.message =~ "post reference also needs a question"
+      refute error.message =~ argument
+    end
+
+    refute_received :base_application_started
+    refute_received {:prepare, _, _, _}
+    refute_received {:prepare_question, _, _}
   end
 
   test "loads configuration without starting the application before validation" do
@@ -224,10 +246,14 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
   end
 
   test "just dry-run delegates to the signal-safe wrapper and retains dotenv loading" do
-    {recipe, 0} =
+    {two_arg, 0} =
       System.cmd("just", ["--dry-run", "dry-run", "post", "question"], stderr_to_stdout: true)
 
-    assert recipe == "./dry-run.sh 'post' 'question'\n"
+    {one_arg, 0} =
+      System.cmd("just", ["--dry-run", "dry-run", "What's missing?"], stderr_to_stdout: true)
+
+    assert two_arg =~ ~r{^\./dry-run\.sh "\$@"$}m
+    assert one_arg =~ ~r{^\./dry-run\.sh "\$@"$}m
     assert File.read!("justfile") =~ "set dotenv-load := true"
   end
 
@@ -314,6 +340,49 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     refute output =~ "\e"
     assert length(Regex.scan(~r/^dry_run_id=42$/m, output)) == 1
     assert length(Regex.scan(~r/^dry_run_disposition=created$/m, output)) == 1
+  end
+
+  test "a question-only command prepares local research without a post reference" do
+    invocation = %Invocation{
+      id: 54,
+      dry_run: true,
+      stage: :complete,
+      selected_reply: "A local question-only answer.",
+      anthropic_usage: %{
+        "totals" => %{"input_tokens" => 80, "output_tokens" => 12},
+        "response_count" => 1,
+        "tool_uses" => 1
+      }
+    }
+
+    Application.put_env(:context_bot, Service,
+      test_pid: self(),
+      prepare_question_result: {:ok, %{invocation | stage: :thread_ready}, :created},
+      await_result: {:ok, invocation}
+    )
+
+    assert :ok = run(["What's missing?"])
+
+    assert [
+             :base_application_started,
+             {:prepare_question, "What's missing?", []},
+             {:progress_start, 54, _progress_options},
+             {:interrupts_installed, _token},
+             {:owner_acquire, []},
+             {:workers_started, owner, []},
+             {:await, 54, _await_options},
+             {:runtime_stopped, owner},
+             {:progress_finish, 54},
+             {:interrupts_removed, _removed}
+           ] = Events.all()
+
+    assert owner == self()
+    refute Enum.any?(Events.all(), &match?({:prepare, _, _, _}, &1))
+
+    output = shell_output()
+    assert output =~ "dry_run_id=54"
+    assert output =~ "status=complete"
+    assert output =~ "answer=A local question-only answer."
   end
 
   test "prints explicit zero usage for a provider-free capability answer" do
