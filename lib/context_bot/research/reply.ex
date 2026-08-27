@@ -104,6 +104,19 @@ defmodule ContextBot.Research.Reply do
   def server_tool_context(_request, _additional_content), do: {:error, :invalid_content}
 
   @doc """
+  Returns the full writeup from the first dual-format assistant turn in a Messages request.
+
+  Length repair asks the model to return only compact Bluesky text, so callers that still need
+  the Standard.site document must recover it from the earlier research turn.
+  """
+  @spec full_response_from_messages(map() | nil) :: String.t() | nil
+  def full_response_from_messages(%{"messages" => messages}) when is_list(messages) do
+    Enum.find_value(messages, &assistant_full_response/1)
+  end
+
+  def full_response_from_messages(_messages), do: nil
+
+  @doc """
   Attempts to split text into two parts, each ≤300 graphemes and ≤3,000 bytes.
 
   Greedily packs as much as possible into part 1 (up to the 275 grapheme target),
@@ -706,6 +719,28 @@ defmodule ContextBot.Research.Reply do
            (is_binary(page_age) or is_nil(page_age))
 
   defp valid_web_search_result?(_result), do: false
+
+  defp assistant_full_response(%{"role" => "assistant", "content" => content}) do
+    case parse_dual_response(assistant_plain_text(content)) do
+      {:ok, full_response, _compact} -> full_response
+      :not_dual_format -> nil
+    end
+  end
+
+  defp assistant_full_response(_message), do: nil
+
+  defp assistant_plain_text(content) when is_binary(content), do: content
+
+  defp assistant_plain_text(content) when is_list(content) do
+    content
+    |> Enum.flat_map(fn
+      %{"type" => "text", "text" => text} when is_binary(text) -> [text]
+      _block -> []
+    end)
+    |> IO.iodata_to_binary()
+  end
+
+  defp assistant_plain_text(_content), do: ""
 
   defp classify_text(text) do
     case String.trim(text) do

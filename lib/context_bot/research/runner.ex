@@ -278,22 +278,28 @@ defmodule ContextBot.Research.Runner do
     case select_reply(decoded, invocation) do
       {:ok, full_response, text} ->
         {:ok,
-         %{
-           messages: invocation.anthropic_messages,
-           text: text,
-           full_response: full_response,
-           usage: usage_evidence(invocation, config),
-           validation: %{"result" => "valid", "repair_used" => repair_request?(invocation)}
-         }}
+         attach_full_response(
+           %{
+             messages: invocation.anthropic_messages,
+             text: text,
+             full_response: full_response,
+             usage: usage_evidence(invocation, config),
+             validation: %{"result" => "valid", "repair_used" => repair_request?(invocation)}
+           },
+           invocation
+         )}
 
       {:ok, text} ->
         {:ok,
-         %{
-           messages: invocation.anthropic_messages,
-           text: text,
-           usage: usage_evidence(invocation, config),
-           validation: %{"result" => "valid", "repair_used" => repair_request?(invocation)}
-         }}
+         attach_full_response(
+           %{
+             messages: invocation.anthropic_messages,
+             text: text,
+             usage: usage_evidence(invocation, config),
+             validation: %{"result" => "valid", "repair_used" => repair_request?(invocation)}
+           },
+           invocation
+         )}
 
       {:repairable, _text, _reasons} ->
         handle_repairable(invocation, decoded, config)
@@ -320,18 +326,21 @@ defmodule ContextBot.Research.Runner do
     with {:ok, text, _reasons} <- extract_repairable_text(content, invocation),
          {:ok, part1, part2} <- Reply.split_text(text) do
       {:ok,
-       %{
-         messages: invocation.anthropic_messages,
-         text: part1,
-         text_part2: part2,
-         usage: usage_evidence(invocation, config),
-         validation: %{
-           "result" => "split",
-           "repair_used" => true,
-           "part1_graphemes" => String.length(part1),
-           "part2_graphemes" => String.length(part2)
-         }
-       }}
+       attach_full_response(
+         %{
+           messages: invocation.anthropic_messages,
+           text: part1,
+           text_part2: part2,
+           usage: usage_evidence(invocation, config),
+           validation: %{
+             "result" => "split",
+             "repair_used" => true,
+             "part1_graphemes" => String.length(part1),
+             "part2_graphemes" => String.length(part2)
+           }
+         },
+         invocation
+       )}
     else
       _failed -> {:error, :invalid_repair}
     end
@@ -521,6 +530,20 @@ defmodule ContextBot.Research.Runner do
          ) do
       {:ok, checkpoint} -> {:ok, checkpoint}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp attach_full_response(%{full_response: full} = result, _invocation)
+       when is_binary(full) and byte_size(full) > 0,
+       do: result
+
+  defp attach_full_response(result, invocation) do
+    case Reply.full_response_from_messages(invocation.anthropic_messages) do
+      full when is_binary(full) and byte_size(full) > 0 ->
+        Map.put(result, :full_response, full)
+
+      _missing ->
+        result
     end
   end
 

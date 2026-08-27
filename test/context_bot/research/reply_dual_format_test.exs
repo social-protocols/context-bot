@@ -72,4 +72,41 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       assert text == "\n---COMPACT_REPLY---\nOnly compact part"
     end
   end
+
+  describe "full_response_from_messages/1" do
+    test "returns the full writeup from an earlier dual-format assistant turn" do
+      messages = %{
+        "messages" => [
+          %{"role" => "user", "content" => "thread"},
+          %{
+            "role" => "assistant",
+            "content" => [
+              %{
+                "type" => "text",
+                "text" => "Thorough markdown writeup.\n---COMPACT_REPLY---\nToo long compact"
+              }
+            ]
+          },
+          %{"role" => "user", "content" => "LENGTH_REPAIR\nReturn only the Bluesky reply text"}
+        ]
+      }
+
+      assert Reply.full_response_from_messages(messages) == "Thorough markdown writeup."
+    end
+
+    test "returns nil when no assistant turn used dual format" do
+      messages = %{
+        "messages" => [
+          %{"role" => "user", "content" => "thread"},
+          %{
+            "role" => "assistant",
+            "content" => [%{"type" => "text", "text" => "A single long reply"}]
+          }
+        ]
+      }
+
+      assert Reply.full_response_from_messages(messages) == nil
+      assert Reply.full_response_from_messages(nil) == nil
+    end
+  end
 end

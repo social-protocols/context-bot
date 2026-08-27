@@ -138,7 +138,7 @@ defmodule ContextBot.Workers.ResearchWorker do
 
     # Create Standard.site document if we have a full response
     {document_result, reader_url} =
-      create_standard_site_document(invocation, result, bot_did, created_at)
+      create_standard_site_document(invocation, result, bot_did, created_at, dependencies)
 
     # Build intent with reader_url if available
     intent_opts = if reader_url, do: [reader_url: reader_url], else: []
@@ -216,14 +216,22 @@ defmodule ContextBot.Workers.ResearchWorker do
     end
   end
 
-  defp create_standard_site_document(invocation, result, repo, created_at) do
+  defp create_standard_site_document(invocation, result, repo, created_at, dependencies) do
     full_response = Map.get(result, :full_response)
+    client = Map.fetch!(dependencies, :atproto_client)
 
     if full_response && byte_size(full_response) > 0 do
       # Ensure publication exists
-      case Publication.ensure_exists(repo, created_at) do
+      case Publication.ensure_exists(client, repo, created_at) do
         {:ok, publication_uri} ->
-          create_document_with_publication(invocation, result, repo, publication_uri, created_at)
+          create_document_with_publication(
+            invocation,
+            result,
+            client,
+            repo,
+            publication_uri,
+            created_at
+          )
 
         {:error, _reason} ->
           # Publication failed but don't block the reply
@@ -235,14 +243,21 @@ defmodule ContextBot.Workers.ResearchWorker do
     end
   end
 
-  defp create_document_with_publication(invocation, result, repo, publication_uri, created_at) do
+  defp create_document_with_publication(
+         invocation,
+         result,
+         client,
+         repo,
+         publication_uri,
+         created_at
+       ) do
     content = %{
       full_response: result.full_response,
       selected_reply: result.text,
       invocation_uri: invocation.invocation_uri
     }
 
-    case Document.create(repo, publication_uri, content, created_at) do
+    case Document.create(client, repo, publication_uri, content, created_at) do
       {:ok, doc_result} ->
         {doc_result, doc_result.reader_url}
 
@@ -364,6 +379,7 @@ defmodule ContextBot.Workers.ResearchWorker do
       runner: Keyword.get(config, :runner, Runner),
       runner_options: Keyword.get(config, :runner_options, []),
       settings: Keyword.get(config, :settings, Application.fetch_env!(:context_bot, :settings)),
+      atproto_client: Keyword.get(config, :atproto_client, ContextBot.ATProto.ReqClient),
       tid_generator: Keyword.get(config, :tid_generator, &TID.generate/1)
     }
   end

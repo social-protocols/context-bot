@@ -18,9 +18,9 @@ defmodule ContextBot.StandardSite.Publication do
   @doc """
   Ensures the publication record exists and returns its AT URI.
 
-  This operation is idempotent. If the record already exists with matching content,
-  returns success. If it exists with different content, returns an error.
-  If it doesn't exist, creates it.
+  This operation is idempotent. If the record already exists with matching identity
+  (`$type`, `url`, and `name`), returns success even when `createdAt` differs. If it
+  exists with different identity fields, returns an error. If it doesn't exist, creates it.
   """
   @spec ensure_exists(Client.t(), String.t(), DateTime.t()) :: result()
   def ensure_exists(client \\ ContextBot.ATProto.ReqClient, repo, created_at)
@@ -29,8 +29,12 @@ defmodule ContextBot.StandardSite.Publication do
     uri = "at://#{repo}/#{@collection}/#{@publication_rkey}"
 
     case client.get_record(repo, @collection, @publication_rkey) do
-      {:ok, _status, _headers, %{"value" => ^record}} ->
-        {:ok, uri}
+      {:ok, _status, _headers, %{"value" => existing}} when is_map(existing) ->
+        if publication_matches?(existing, record) do
+          {:ok, uri}
+        else
+          {:error, :publication_conflict}
+        end
 
       {:error, :record_not_found} ->
         case client.put_record(repo, @collection, @publication_rkey, record) do
@@ -52,6 +56,12 @@ defmodule ContextBot.StandardSite.Publication do
   @spec publication_uri(String.t()) :: String.t()
   def publication_uri(repo) when is_binary(repo) do
     "at://#{repo}/#{@collection}/#{@publication_rkey}"
+  end
+
+  defp publication_matches?(existing, desired) do
+    Map.get(existing, "$type") == desired["$type"] and
+      Map.get(existing, "url") == desired["url"] and
+      Map.get(existing, "name") == desired["name"]
   end
 
   defp build_record(created_at) do
