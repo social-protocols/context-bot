@@ -105,7 +105,7 @@ defmodule ContextBot.Workers.ResearchWorker do
       anthropic_usage: result.usage,
       full_response: Map.get(result, :full_response),
       selected_reply: result.text,
-      reply_validation: result.validation,
+      reply_validation: dry_run_validation(result),
       reply_repo: nil,
       reply_rkey: nil,
       reply_record: nil,
@@ -213,6 +213,16 @@ defmodule ContextBot.Workers.ResearchWorker do
 
       {:error, reason} ->
         fail_research(invocation, reason, created_at, token)
+    end
+  end
+
+  defp dry_run_validation(result) do
+    case Map.get(result, :text_part2) do
+      part2 when is_binary(part2) and part2 != "" ->
+        Map.put(result.validation || %{}, "text_part2", part2)
+
+      _missing ->
+        result.validation
     end
   end
 

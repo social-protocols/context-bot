@@ -4,7 +4,7 @@ defmodule ContextBot.Reply.Intent do
   """
 
   alias ContextBot.ATProto.Post
-  alias ContextBot.Research.ReplyLimits
+  alias ContextBot.Reply.PublicationPlan
   alias ContextBot.Workflow.Invocation
 
   @did_regex ~r/\Adid:[a-z0-9]+:[A-Za-z0-9._:%-]+\z/
@@ -83,13 +83,13 @@ defmodule ContextBot.Reply.Intent do
 
     with {:ok, reply_repo} <- publication_repo(bot_did),
          {:ok, root} <- root_ref(invocation) do
-      cond do
-        single_post_with_link?(text, remainder, reader_url) ->
-          freeze_single(text, reader_url, parent, root, created_at, tid_generator, reply_repo)
+      case PublicationPlan.decide(text, remainder, reader_url) do
+        {:single_with_link, compact} ->
+          freeze_single(compact, reader_url, parent, root, created_at, tid_generator, reply_repo)
 
-        link_only_part2?(text, reader_url) ->
+        {:link_only_part2, compact} ->
           freeze_with_link_part2(
-            text,
+            compact,
             reader_url,
             parent,
             root,
@@ -98,10 +98,10 @@ defmodule ContextBot.Reply.Intent do
             reply_repo
           )
 
-        is_binary(remainder) ->
+        {:body_split, compact, rest} ->
           freeze_body_split(
-            text,
-            remainder,
+            compact,
+            rest,
             parent,
             root,
             created_at,
@@ -109,21 +109,11 @@ defmodule ContextBot.Reply.Intent do
             reply_repo
           )
 
-        true ->
-          freeze_single(text, nil, parent, root, created_at, tid_generator, reply_repo)
+        {:single, compact} ->
+          freeze_single(compact, nil, parent, root, created_at, tid_generator, reply_repo)
       end
     end
   end
-
-  defp single_post_with_link?(text, nil, reader_url) when is_binary(reader_url),
-    do: ReplyLimits.fits_one_post?(text <> Post.link_suffix())
-
-  defp single_post_with_link?(_text, _remainder, _reader_url), do: false
-
-  defp link_only_part2?(text, reader_url) when is_binary(reader_url),
-    do: ReplyLimits.fits_one_post?(text)
-
-  defp link_only_part2?(_text, _reader_url), do: false
 
   defp freeze_single(text, reader_url, parent, root, created_at, tid_generator, reply_repo) do
     with {:ok, record} <- Post.build(text, reader_url, parent, root, created_at),
