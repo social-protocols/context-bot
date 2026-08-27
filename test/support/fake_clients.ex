@@ -27,6 +27,21 @@ defmodule FakeClientExisting do
   end
 end
 
+defmodule FakeClientExistingDifferentCreatedAt do
+  @moduledoc false
+
+  def get_record(_repo, _collection, _rkey) do
+    record = %{
+      "$type" => "site.standard.publication",
+      "url" => "https://getcontext.bot",
+      "name" => "Context Bot",
+      "createdAt" => DateTime.to_iso8601(~U[2026-08-25 12:00:00Z])
+    }
+
+    {:ok, 200, %{}, %{"value" => record}}
+  end
+end
+
 defmodule FakeClientMismatch do
   @moduledoc false
 
@@ -88,5 +103,17 @@ defmodule FakeDocClientNotFound do
 
   def get_record(_repo, _collection, _rkey) do
     {:error, :record_not_found}
+  end
+end
+
+defmodule FakeStandardSiteClient do
+  @moduledoc false
+
+  def get_record(_repo, _collection, _rkey) do
+    {:error, :record_not_found}
+  end
+
+  def put_record(_repo, _collection, _rkey, _record) do
+    {:ok, 200, %{}, %{}}
   end
 end

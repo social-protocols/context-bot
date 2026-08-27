@@ -17,6 +17,15 @@ defmodule ContextBot.StandardSite.PublicationTest do
       assert uri == "at://#{@repo}/site.standard.publication/context-bot"
     end
 
+    test "returns success when publication exists with a different createdAt" do
+      later = ~U[2026-08-27 18:00:00Z]
+
+      assert {:ok, uri} =
+               Publication.ensure_exists(FakeClientExistingDifferentCreatedAt, @repo, later)
+
+      assert uri == "at://#{@repo}/site.standard.publication/context-bot"
+    end
+
     test "returns error when publication exists with different content" do
       assert {:error, :publication_conflict} =
                Publication.ensure_exists(FakeClientMismatch, @repo, @created_at)
