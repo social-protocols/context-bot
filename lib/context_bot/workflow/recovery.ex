@@ -58,7 +58,7 @@ defmodule ContextBot.Workflow.Recovery do
     end
   rescue
     _database_or_state_error ->
-      Logger.error("context_bot_recovery", failure_reason: "recovery_failed")
+      Logger.error("context_bot_recovery", Map.to_list(%{failure_reason: "recovery_failed"}))
       {:error, :recovery_failed}
   end
 
