@@ -178,6 +178,7 @@ Each worktree maintains independent `deps/`, `_build/`, and `data/` directories.
 - Check the [README](README.md) for usage and deployment documentation
 - Review [AGENTS.md](AGENTS.md) for architecture and constraints
 - See [knowledge-base/learnings.md](knowledge-base/learnings.md) for distilled facts
+- Report vulnerabilities privately using [SECURITY.md](SECURITY.md); do not open a public issue for them
 - Open an issue for questions or clarifications
 
 ## License
