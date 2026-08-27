@@ -1054,10 +1054,46 @@ defmodule ContextBot.Research.RunnerTest do
     assert {:ok, result} = Runner.run(invocation, options())
     assert result.text == part1
     assert result.text_part2 == part2
+    refute Map.has_key?(result, :full_response)
     assert result.validation["result"] == "split"
     assert result.validation["repair_used"] == true
     assert result.validation["part1_graphemes"] == 150
     assert result.validation["part2_graphemes"] == 160
+
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    assert_received {:anthropic_call, _request, %{kind: :repair}, false}
+  end
+
+  test "a dual-format compact that still splits after repair keeps the original full response" do
+    invocation = invocation("dual-format-repair-split")
+    fixture = decoded_fixture("repair_success.json")
+    full = "Thorough markdown writeup with sources."
+    part1 = String.duplicate("a", 150)
+    part2 = String.duplicate("b", 160)
+    still_over_text = part1 <> "\n\n" <> part2
+    dual = full <> "\n---COMPACT_REPLY---\n" <> String.duplicate("c", 328)
+
+    primary =
+      put_in(fixture, ["primary", "content"], [%{"type" => "text", "text" => dual}])["primary"]
+
+    repair =
+      put_in(
+        fixture,
+        ["repair", "content"],
+        [%{"type" => "text", "text" => still_over_text}]
+      )["repair"]
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(primary))},
+      {:ok, envelope(200, Jason.encode!(repair))}
+    ])
+
+    assert {:ok, result} = Runner.run(invocation, options())
+    assert result.text == part1
+    assert result.text_part2 == part2
+    assert result.full_response == full
+    assert result.validation["result"] == "split"
+    assert result.validation["repair_used"] == true
 
     assert_received {:anthropic_call, _request, %{kind: :research}, false}
     assert_received {:anthropic_call, _request, %{kind: :repair}, false}
@@ -1122,6 +1158,7 @@ defmodule ContextBot.Research.RunnerTest do
 
     assert {:ok, result} = Runner.run(invocation, options())
     assert result.text == "A concise repaired answer."
+    assert result.full_response == full
     refute Map.has_key?(result, :text_part2)
     assert result.validation == %{"result" => "valid", "repair_used" => true}
     assert_received {:anthropic_call, _request, %{kind: :research}, false}
