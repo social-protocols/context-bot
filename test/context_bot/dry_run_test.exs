@@ -89,6 +89,51 @@ defmodule ContextBot.DryRunTest do
     assert Repo.aggregate(Oban.Job, :count) == 0
   end
 
+  test "question-only preparation skips post normalization and enqueues research" do
+    options = [post_reference: PostReference, resolver: :public_resolver, now: fn -> @now end]
+
+    assert {:ok, invocation, :created} = DryRun.prepare_question("What's missing?", options)
+    assert {:ok, same, :attached} = DryRun.prepare_question("What's missing?", options)
+    assert same.id == invocation.id
+
+    refute_received {:normalize, _, _}
+
+    assert invocation.dry_run
+    assert invocation.target_uri == "local://context-bot/question"
+    assert invocation.invocation_text == "What's missing?"
+    assert invocation.received_at == @now
+    assert invocation.stage == :thread_ready
+    assert invocation.canonical_thread_version == "2"
+    assert invocation.canonical_thread =~ "CONTEXT_BOT_THREAD_V2"
+    assert invocation.canonical_thread =~ "[invocation]\nText:\nWhat's missing?"
+    refute invocation.canonical_thread =~ "[target]"
+    refute invocation.canonical_thread =~ "[ancestor]"
+    assert invocation.canonical_media == []
+    assert invocation.contains_video == false
+    assert invocation.root_uri == nil
+    assert invocation.root_cid == nil
+    assert invocation.reply_record == nil
+    assert invocation.raw_notification["source"] == "local_question_dry_run"
+
+    assert [%Oban.Job{worker: "ContextBot.Workers.ResearchWorker", queue: "dry_research"}] =
+             Repo.all(Oban.Job)
+
+    assert [%Invocation{target_uri: "local://context-bot/question"}] = Repo.all(Invocation)
+  end
+
+  test "invalid question-only input creates no durable state and never normalizes a post" do
+    options = [post_reference: PostReference, resolver: :public_resolver]
+
+    assert {:error, :invalid_input} = DryRun.prepare_question("   ", options)
+
+    assert {:error, :invalid_input} =
+             DryRun.prepare_question(String.duplicate("x", 10_001), options)
+
+    refute_received {:normalize, _, _}
+    assert Repo.aggregate(Invocation, :count) == 0
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
   test "await reloads only the selected row through complete, failure, and budget deferral" do
     for {terminal, expected} <- [
           {:complete, :ok},

@@ -19,6 +19,7 @@ defmodule ContextBot.Workflow.Store do
   @terminal_statuses [:ineligible, :complete, :failed]
   @terminal_dry_run_stages [:complete, :failed, :ineligible]
   @maximum_dry_run_question_bytes 10_000
+  @question_target_uri "local://context-bot/question"
 
   @doc "Creates or attaches to one matching nonterminal local invocation atomically."
   @spec create_or_attach_dry_run(
@@ -37,6 +38,30 @@ defmodule ContextBot.Workflow.Store do
   end
 
   def create_or_attach_dry_run(_target_uri, _question, _received_at, _job_builder),
+    do: {:error, :invalid_input}
+
+  @doc "Creates or attaches to one matching nonterminal local question-only invocation atomically."
+  @spec create_or_attach_question_dry_run(
+          String.t(),
+          map(),
+          DateTime.t(),
+          (String.t(), String.t() -> Ecto.Changeset.t())
+        ) :: {:ok, Invocation.t(), :created | :attached} | {:error, :invalid_input}
+  def create_or_attach_question_dry_run(
+        question,
+        canonical,
+        %DateTime{} = received_at,
+        job_builder
+      )
+      when is_binary(question) and is_map(canonical) and is_function(job_builder, 2) do
+    if valid_question?(question) and valid_question_canonical?(canonical) do
+      create_or_attach_valid_question_dry_run(question, canonical, received_at, job_builder)
+    else
+      {:error, :invalid_input}
+    end
+  end
+
+  def create_or_attach_question_dry_run(_question, _canonical, _received_at, _job_builder),
     do: {:error, :invalid_input}
 
   @doc "Creates or attaches to one operator-selected public invocation atomically."
@@ -574,6 +599,12 @@ defmodule ContextBot.Workflow.Store do
       byte_size(question) <= @maximum_dry_run_question_bytes and String.trim(question) != ""
   end
 
+  defp valid_question_canonical?(canonical) do
+    canonical[:version] == 2 and is_binary(canonical[:text]) and canonical[:text] != "" and
+      String.valid?(canonical[:text]) and is_list(canonical[:media]) and
+      is_boolean(canonical[:contains_video])
+  end
+
   defp valid_nonempty_string?(value),
     do: is_binary(value) and value != "" and String.valid?(value)
 
@@ -742,6 +773,19 @@ defmodule ContextBot.Workflow.Store do
     |> normalize_dry_run_transaction()
   end
 
+  defp create_or_attach_valid_question_dry_run(question, canonical, received_at, job_builder) do
+    Repo.transaction(
+      fn ->
+        case attachable_dry_run(@question_target_uri, question) do
+          %Invocation{} = invocation -> {invocation, :attached}
+          nil -> insert_question_dry_run!(question, canonical, received_at, job_builder)
+        end
+      end,
+      mode: :immediate
+    )
+    |> normalize_dry_run_transaction()
+  end
+
   defp insert_dry_run!(target_uri, question, received_at, job_builder) do
     run_id = Ecto.UUID.generate()
     invocation_uri = "local://context-bot/dry-runs/#{run_id}"
@@ -763,6 +807,45 @@ defmodule ContextBot.Workflow.Store do
       received_at: received_at,
       status: :capturing_thread,
       stage: :capturing_thread
+    }
+
+    case Repo.insert(Invocation.changeset(%Invocation{}, attrs)) do
+      {:ok, invocation} ->
+        case Repo.insert(job_builder.(invocation_uri, notification_cid)) do
+          {:ok, _job} -> {invocation, :created}
+          {:error, reason} -> Repo.rollback(reason)
+        end
+
+      {:error, reason} ->
+        Repo.rollback(reason)
+    end
+  end
+
+  defp insert_question_dry_run!(question, canonical, received_at, job_builder) do
+    run_id = Ecto.UUID.generate()
+    invocation_uri = "local://context-bot/dry-runs/#{run_id}"
+    notification_cid = "local:#{run_id}"
+
+    attrs = %{
+      dry_run: true,
+      target_uri: @question_target_uri,
+      invocation_text: question,
+      invocation_uri: invocation_uri,
+      notification_cid: notification_cid,
+      current_cid: notification_cid,
+      actor_did: "local:operator",
+      raw_notification: %{
+        "source" => "local_question_dry_run",
+        "text" => question
+      },
+      raw_thread: %{"source" => "local_question_dry_run"},
+      canonical_thread: canonical.text,
+      canonical_thread_version: Integer.to_string(canonical.version),
+      canonical_media: canonical.media,
+      contains_video: canonical.contains_video,
+      received_at: received_at,
+      status: :thread_ready,
+      stage: :thread_ready
     }
 
     case Repo.insert(Invocation.changeset(%Invocation{}, attrs)) do

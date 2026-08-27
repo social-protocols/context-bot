@@ -61,7 +61,7 @@ Cursor cloud agents automatically install git hooks during environment setup. Th
 | `just typecheck` | Run Dialyzer. |
 | `just check` | Run the complete verification gate. |
 | `just db-create` / `db-migrate` / `db-reset` | Manage SQLite. |
-| `just dry-run <post> <question>` | Run the durable local-only thread/research path. |
+| `just dry-run [post] <question>` | Run the durable local-only research path; omit the post for a question-only subject. |
 | `just live-run <invocation-url>` | Process one selected direct mention using isolated SQLite and publish its reply. |
 | `just docker-build` | Build the production image locally. |
 | `just secrets` / `deploy` | Validate Bitwarden fields or deploy to Fly. |
@@ -74,7 +74,7 @@ Run `direnv exec . just check` before any completion claim. For release or deplo
 
 This is one Phoenix API application, not an umbrella. `ContextBot.Application` starts Repo and Finch always, and starts Oban, `ContextBot.ATProto.Session`, and `ContextBot.Mentions.Poller` only when the validated settings enable the bot. `GET /health` returns bounded operational aggregates and never stored content or credentials.
 
-The public pipeline is `Mentions.Poller` → `EligibilityWorker` → `ThreadWorker` → `ResearchWorker` → `ReplyWorker`; `DeferredWorker` repairs missing jobs and reconsiders bounded deferred work. The read-only local path is `just dry-run` → `ThreadWorker` → `ResearchWorker` and terminates at `complete` without reply construction. The explicit local public-write path is `just live-run` → `ThreadWorker` → `ResearchWorker` → `ReplyWorker`; it uses `data/live-demo.db` by default, starts no poller, bypasses only actor eligibility, and processes one selected direct mention. `Workflow.Store` and Ecto/SQLite own invocation checkpoints, leases, budget entries, exact bounded provider response envelopes, and any public frozen reply intent. Development and test databases live under ignored `data/`; Fly mounts `/data/context_bot.db`.
+The public pipeline is `Mentions.Poller` → `EligibilityWorker` → `ThreadWorker` → `ResearchWorker` → `ReplyWorker`; `DeferredWorker` repairs missing jobs and reconsiders bounded deferred work. The read-only local path is `just dry-run` → `ThreadWorker` → `ResearchWorker` for a selected public post, or `just dry-run` → `ResearchWorker` for a question-only local subject; both terminate at `complete` without reply construction. The explicit local public-write path is `just live-run` → `ThreadWorker` → `ResearchWorker` → `ReplyWorker`; it uses `data/live-demo.db` by default, starts no poller, bypasses only actor eligibility, and processes one selected direct mention. `Workflow.Store` and Ecto/SQLite own invocation checkpoints, leases, budget entries, exact bounded provider response envelopes, and any public frozen reply intent. Development and test databases live under ignored `data/`; Fly mounts `/data/context_bot.db`.
 
 External request behavior is one validated startup snapshot. Keep `APPVIEW_URL` pinned to the reviewed public AppView origin; keep the bounded poll interval/page cap, ATProto HTTP/session timeouts, thread-fetch timeout, Anthropic HTTP timeout/API version, and Anthropic server-tool versions runtime configurable through `ContextBot.Settings`. Malformed or out-of-range values must fail startup. The release image includes the SQLite CLI solely for explicitly authorized, read-only, aggregate Fly inspection with a busy timeout.
 

@@ -2,16 +2,18 @@ defmodule ContextBot.DryRun do
   @moduledoc """
   Creates and observes permanently local, durable context checks.
 
-  Creation only resolves a public post reference and inserts SQLite work. The Oban thread and
-  research queues perform provider I/O separately.
+  Creation either resolves a public post reference or builds a synthetic local question subject,
+  then inserts SQLite work. The Oban thread and research queues perform provider I/O separately.
+  Question-only runs skip thread fetch and enqueue research directly.
   """
 
   alias ContextBot.ATProto.PublicClient
   alias ContextBot.DryRun.PostReference
-  alias ContextBot.{Repo, Workflow.Store}
+  alias ContextBot.{Repo, Thread.Canonicalizer, Workflow.Store}
   alias ContextBot.Workflow.Invocation
 
   @thread_worker "ContextBot.Workers.ThreadWorker"
+  @research_worker "ContextBot.Workers.ResearchWorker"
   @maximum_question_bytes 10_000
   @default_timeout_ms 900_000
   @default_poll_interval_ms 250
@@ -33,6 +35,22 @@ defmodule ContextBot.DryRun do
   end
 
   def prepare(_post_reference, _question, _options), do: {:error, :invalid_input}
+
+  @spec prepare_question(String.t(), keyword()) ::
+          {:ok, Invocation.t(), :created | :attached} | {:error, atom()}
+  def prepare_question(question, options \\ [])
+
+  def prepare_question(question, options) when is_binary(question) and is_list(options) do
+    canonicalizer = Keyword.get(options, :canonicalizer, Canonicalizer)
+    now = Keyword.get(options, :now, &DateTime.utc_now/0)
+
+    with :ok <- validate_question(question),
+         {:ok, canonical} <- canonicalizer.build_question_only(question) do
+      Store.create_or_attach_question_dry_run(question, canonical, now.(), &research_job/2)
+    end
+  end
+
+  def prepare_question(_question, _options), do: {:error, :invalid_input}
 
   @spec await(Invocation.t(), keyword()) ::
           {:ok, Invocation.t()}
@@ -160,6 +178,14 @@ defmodule ContextBot.DryRun do
       %{"uri" => uri, "cid" => cid},
       worker: @thread_worker,
       queue: :dry_thread
+    )
+  end
+
+  defp research_job(uri, cid) do
+    Oban.Job.new(
+      %{"uri" => uri, "cid" => cid},
+      worker: @research_worker,
+      queue: :dry_research
     )
   end
 end

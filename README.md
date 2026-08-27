@@ -52,10 +52,11 @@ With `BOT_ENABLED=false`, an operator can run the real durable thread and resear
 
 ```bash
 export BITWARDEN_ITEM_ID="<Bitwarden item UUID>"
+just dry-run "What's missing?"
 just dry-run "https://bsky.app/profile/alice.example/post/3abc" "What's missing?"
 ```
 
-The post may also be a canonical `at://.../app.bsky.feed.post/...` URI. The command loads only `ANTHROPIC_API_KEY` from the Bitwarden item, resolves and fetches the post from the configured public AppView without authentication, stores the selected post plus ancestors and local question in SQLite, runs the normal budgeted Claude research worker, and prints a concise result and integer usage/cost summary. Bluesky access is read-only; Anthropic access is paid. `ANTHROPIC_DAILY_BUDGET_USD` must be present and nonzero.
+A single argument is the operator question. That path never fetches a Bluesky thread: it stores the question as a synthetic local subject, runs the normal budgeted Claude research worker, and prints a concise result. The two-argument form still accepts a `bsky.app` post URL or canonical `at://.../app.bsky.feed.post/...` URI, resolves and fetches that post from the configured public AppView without authentication, and stores the selected post plus ancestors and local question in SQLite. A lone `at://` or `bsky.app` post URL is rejected; it still needs a question. Both forms load only `ANTHROPIC_API_KEY` from the Bitwarden item. Bluesky access is read-only; Anthropic access is paid. `BOT_ENABLED` must be `false`, and `ANTHROPIC_DAILY_BUDGET_USD` must be present and nonzero.
 
 Context Bot sends at most four image or gallery items across the captured ancestor chain to Claude,
 ordered root-to-target and represented by validated `https://cdn.bsky.app` URL blocks. If any captured post
@@ -153,7 +154,7 @@ it reports the existing reply URL without another Claude request or Bluesky post
 | `just typecheck` | Run Dialyzer. |
 | `just check` | Run the complete local quality gate. |
 | `just db-create` / `db-migrate` / `db-reset` | Manage the local SQLite database. |
-| `just dry-run <post> <question>` | Run a durable local-only context check; reads Bluesky and may spend Anthropic budget. |
+| `just dry-run [post] <question>` | Run a durable local-only context check; omit the post for a question-only subject. May spend Anthropic budget. |
 | `just live-run <invocation-url>` | Process one real direct mention locally and publish its Bluesky reply. Explicit authorization required. |
 | `just reprocess <invocation-id>` | With the bot disabled and workers stopped, reopen a guarded provider-processing failure from its retained response; performs no external I/O. |
 | `just fly-reprocess <id>` | Reprocess one production invocation from its retained response on Fly. May publish a Bluesky reply. External authorization required. |

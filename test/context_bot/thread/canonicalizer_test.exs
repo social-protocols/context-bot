@@ -111,6 +111,25 @@ defmodule ContextBot.Thread.CanonicalizerTest do
     assert result.text =~ "A pale aurora over dark mountains"
   end
 
+  test "renders a question-only local subject without parent, target, or ancestors" do
+    assert {:ok, result} = Canonicalizer.build_question_only("What's missing?")
+
+    assert result == %{
+             version: 2,
+             text:
+               """
+               CONTEXT_BOT_THREAD_V2
+
+               [invocation]
+               Text:
+               What's missing?
+               """
+               |> String.trim(),
+             media: [],
+             contains_video: false
+           }
+  end
+
   test "numbers images root-to-invocation and recognizes record-with-media images" do
     thread = fixture("thread_ancestors.json")
 

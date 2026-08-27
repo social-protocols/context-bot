@@ -54,6 +54,25 @@ defmodule ContextBot.DryRun.PostReferenceTest do
     assert_received {:resolve_handle, "alice.example"}
   end
 
+  test "detects post-like single arguments without contacting a resolver" do
+    assert PostReference.looks_like_post_reference?("at://did:plc:alice/app.bsky.feed.post/3abc")
+    assert PostReference.looks_like_post_reference?("at://Alice.Example/app.bsky.feed.post/3abc")
+    assert PostReference.looks_like_post_reference?("at://not-even-valid")
+
+    assert PostReference.looks_like_post_reference?(
+             "https://bsky.app/profile/alice.example/post/3abc"
+           )
+
+    assert PostReference.looks_like_post_reference?(
+             "http://bsky.app/profile/alice.example/post/3abc"
+           )
+
+    refute PostReference.looks_like_post_reference?("What's missing?")
+    refute PostReference.looks_like_post_reference?("Explain at:// versus https.")
+    refute PostReference.looks_like_post_reference?("https://example.com/post/3abc")
+    refute_received {:resolve_handle, _handle}
+  end
+
   test "rejects malformed and ambiguous post references before resolution" do
     invalid = [
       "http://bsky.app/profile/alice.example/post/3abc",

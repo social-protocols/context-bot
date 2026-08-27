@@ -11,6 +11,14 @@ defmodule ContextBot.DryRun.PostReference do
   @web_post_path ~r/\A\/profile\/([^\/]+)\/post\/([^\/]+)\z/
   @handle_label ~r/\A[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\z/
 
+  @spec looks_like_post_reference?(String.t()) :: boolean()
+  def looks_like_post_reference?(input) when is_binary(input) do
+    trimmed = String.trim(input)
+    String.starts_with?(trimmed, "at://") or bsky_app_url?(trimmed)
+  end
+
+  def looks_like_post_reference?(_input), do: false
+
   @spec normalize(String.t(), module()) :: {:ok, String.t()} | {:error, term()}
   def normalize(input, resolver) when is_binary(input) and is_atom(resolver) do
     with :ok <- valid_input?(input),
@@ -42,6 +50,17 @@ defmodule ContextBot.DryRun.PostReference do
   end
 
   defp parse(_input), do: {:error, :invalid_post_reference}
+
+  defp bsky_app_url?(input) do
+    case URI.new(input) do
+      {:ok, %URI{scheme: scheme, host: host}} when scheme in ["http", "https"] ->
+        host == "bsky.app"
+
+      _invalid ->
+        String.starts_with?(input, "https://bsky.app/") or
+          String.starts_with?(input, "http://bsky.app/")
+    end
+  end
 
   defp parse_web_url(input) do
     with {:ok,

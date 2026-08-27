@@ -1,8 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "$#" -ne 2 ]]; then
-	printf 'dry-run: expected a post reference and question\n' >&2
+context_bot_looks_like_post_reference() {
+	case "$1" in
+	at://* | https://bsky.app/* | http://bsky.app/*)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
+if [[ "$#" -eq 1 ]]; then
+	if context_bot_looks_like_post_reference "$1"; then
+		printf 'dry-run: a post reference also needs a question\n' >&2
+		exit 64
+	fi
+elif [[ "$#" -ne 2 ]]; then
+	printf 'dry-run: expected a question, or a post and question\n' >&2
 	exit 64
 fi
 
@@ -36,7 +52,7 @@ context_bot_forward_interrupt() {
 trap context_bot_forward_interrupt INT TERM
 
 ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-} +B i" \
-	BOT_ENABLED=false mix context_bot.dry_run "$1" "$2" &
+	BOT_ENABLED=false mix context_bot.dry_run "$@" &
 
 if [[ "${CONTEXT_BOT_TEST_INTERRUPT_BEFORE_PID:-}" == "1" ]]; then
 	kill -INT "$BASHPID"
