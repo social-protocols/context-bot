@@ -325,6 +325,43 @@ defmodule ContextBot.ATProto.ReqClientTest do
              ReqClient.put_record(@bot_did, @collection, @rkey, frozen_record)
   end
 
+  test "putRecord skips lexicon validation for Standard.site collections" do
+    start_authenticated_session()
+    fixture = fixture("record.json")
+    response = fixture["put"]
+
+    for collection <- ["site.standard.publication", "site.standard.document"] do
+      record = %{"$type" => collection, "createdAt" => "2026-08-27T00:00:00.000000Z"}
+
+      Req.Test.expect(ReqClient, fn conn ->
+        assert_request(conn, :post, "pds.test", "/xrpc/com.atproto.repo.putRecord")
+        assert conn.body_params["collection"] == collection
+        assert conn.body_params["validate"] == false
+        refute conn.body_params["validate"] == true
+        Req.Test.json(conn, response)
+      end)
+
+      assert {:ok, 200, _headers, ^response} =
+               ReqClient.put_record(@bot_did, collection, "context-bot", record)
+    end
+  end
+
+  test "putRecord still requires lexicon validation for app.bsky posts" do
+    start_authenticated_session()
+    fixture = fixture("record.json")
+    frozen_record = fixture["get"]["value"]
+    response = fixture["put"]
+
+    Req.Test.expect(ReqClient, fn conn ->
+      assert conn.body_params["collection"] == @collection
+      assert conn.body_params["validate"] == true
+      Req.Test.json(conn, response)
+    end)
+
+    assert {:ok, 200, _headers, ^response} =
+             ReqClient.put_record(@bot_did, @collection, @rkey, frozen_record)
+  end
+
   test "an access-token 401 refreshes and retries exactly once" do
     start_authenticated_session(refresh?: true)
     response = fixture("notifications.json")
@@ -436,7 +473,11 @@ defmodule ContextBot.ATProto.ReqClientTest do
       {400, [], %{"error" => "ExpiredToken"}, {:error, :unauthorized}},
       {400, [], %{"error" => "InvalidToken"}, {:error, :unauthorized}},
       {409, [], %{"error" => "InvalidSwap"}, {:error, :invalid_swap}},
-      {422, [], %{"error" => "InvalidRequest"}, {:error, {:permanent, 422}}}
+      {422, [],
+       %{"error" => "InvalidRequest", "message" => "Lexicon not found: site.standard.document"},
+       {:error,
+        {:permanent, 422,
+         %{"error" => "InvalidRequest", "message" => "Lexicon not found: site.standard.document"}}}}
     ]
 
     Enum.each(responses, fn {status, headers, body, expected} ->

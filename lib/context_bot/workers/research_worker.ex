@@ -10,7 +10,7 @@ defmodule ContextBot.Workers.ResearchWorker do
 
   import Ecto.Query
 
-  alias ContextBot.ATProto.TID
+  alias ContextBot.ATProto.{Client, TID}
   alias ContextBot.{Operations, Repo}
   alias ContextBot.Reply.Intent
   alias ContextBot.Research.Runner
@@ -140,7 +140,7 @@ defmodule ContextBot.Workers.ResearchWorker do
     bot_did = dependencies.settings.bot_did
 
     # Create Standard.site document if we have a full response
-    {document_result, reader_url} =
+    {document_result, reader_url, document_error} =
       create_standard_site_document(invocation, result, bot_did, created_at, dependencies)
 
     # Build intent with reader_url if available
@@ -187,7 +187,7 @@ defmodule ContextBot.Workers.ResearchWorker do
           publication_claimed_at: nil,
           defer_until: nil,
           failure_category: nil,
-          failure_detail: nil,
+          failure_detail: document_error,
           research_claim_token: nil,
           research_claimed_at: nil,
           completed_at: nil,
@@ -246,13 +246,12 @@ defmodule ContextBot.Workers.ResearchWorker do
             created_at
           )
 
-        {:error, _reason} ->
-          # Publication failed but don't block the reply
-          {nil, nil}
+        {:error, reason} ->
+          fail_standard_site(invocation, "site.standard.publication", reason)
       end
     else
       # No full response, skip document creation
-      {nil, nil}
+      {nil, nil, nil}
     end
   end
 
@@ -272,13 +271,32 @@ defmodule ContextBot.Workers.ResearchWorker do
 
     case Document.create(client, repo, publication_uri, content, created_at) do
       {:ok, doc_result} ->
-        {doc_result, doc_result.reader_url}
+        {doc_result, doc_result.reader_url, nil}
 
-      {:error, _reason} ->
-        # Document creation failed but don't block the reply
-        {nil, nil}
+      {:error, reason} ->
+        fail_standard_site(invocation, "site.standard.document", reason)
     end
   end
+
+  defp fail_standard_site(invocation, collection, reason) do
+    Operations.log_standard_site(invocation, collection: collection, reason: reason)
+    {nil, nil, standard_site_failure_detail(collection, reason)}
+  end
+
+  defp standard_site_failure_detail(collection, reason) do
+    fields = Client.error_fields(reason)
+
+    %{
+      "reason" => "standard_site_document_failed",
+      "collection" => collection
+    }
+    |> maybe_put_failure_field("status", fields[:status_code])
+    |> maybe_put_failure_field("error", fields[:atproto_error] || fields[:failure_reason])
+    |> maybe_put_failure_field("message", fields[:message])
+  end
+
+  defp maybe_put_failure_field(detail, _key, nil), do: detail
+  defp maybe_put_failure_field(detail, key, value), do: Map.put(detail, key, value)
 
   defp document_uri(nil), do: nil
   defp document_uri(%{uri: uri}), do: uri

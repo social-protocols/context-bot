@@ -7,7 +7,7 @@ defmodule ContextBot.Operations do
 
   require Logger
 
-  alias ContextBot.ATProto.Session
+  alias ContextBot.ATProto.{Client, Session}
   alias ContextBot.Repo
   alias ContextBot.Research.BudgetEntry
   alias ContextBot.Settings
@@ -72,6 +72,25 @@ defmodule ContextBot.Operations do
     }
 
     Logger.info("context_bot_attempt", Map.to_list(payload))
+    :ok
+  end
+
+  @spec log_standard_site(Invocation.t(), keyword()) :: :ok
+  def log_standard_site(%Invocation{id: id, stage: stage}, attributes)
+      when is_integer(id) and id > 0 and is_atom(stage) and is_list(attributes) do
+    fields = Client.error_fields(Keyword.get(attributes, :reason))
+
+    payload = %{
+      invocation_id: id,
+      stage: Atom.to_string(stage),
+      collection: safe_collection(Keyword.get(attributes, :collection)),
+      status_code: fields[:status_code],
+      failure_reason: fields[:failure_reason],
+      atproto_error: fields[:atproto_error],
+      atproto_message: fields[:message]
+    }
+
+    Logger.warning("context_bot_standard_site", Map.to_list(payload))
     :ok
   end
 
@@ -231,6 +250,13 @@ defmodule ContextBot.Operations do
     |> Failure.category()
     |> Atom.to_string()
   end
+
+  @nsid ~r/\A[a-z][a-z0-9-]{0,62}(\.[a-z][a-z0-9-]{0,62})+\z/
+  defp safe_collection(collection) when is_binary(collection) do
+    if Regex.match?(@nsid, collection), do: collection
+  end
+
+  defp safe_collection(_collection), do: nil
 
   defp positive_timeout(value) when is_integer(value) and value > 0, do: value
   defp positive_timeout(_invalid), do: @default_session_timeout_ms

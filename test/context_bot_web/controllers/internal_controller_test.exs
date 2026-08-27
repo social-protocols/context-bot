@@ -372,6 +372,41 @@ defmodule ContextBotWeb.InternalControllerTest do
       assert body =~ "https://bsky.app/profile/did:plc:bot/post/reply1"
     end
 
+    test "shows the document failure in the error column without inventing a reader URL", %{
+      conn: conn
+    } do
+      {:ok, inv} =
+        %Invocation{}
+        |> Invocation.changeset(%{
+          dry_run: false,
+          invocation_uri: "at://did:plc:test/app.bsky.feed.post/abc123",
+          notification_cid: "cid1",
+          current_cid: "cid1",
+          actor_did: "did:plc:test",
+          actor_handle: "test.bsky.social",
+          raw_notification: %{},
+          received_at: ~U[2026-08-26 10:00:00Z],
+          status: :complete,
+          stage: :complete,
+          failure_detail: %{
+            "reason" => "standard_site_document_failed",
+            "collection" => "site.standard.document",
+            "status" => 400,
+            "error" => "InvalidRequest"
+          }
+        })
+        |> Repo.insert()
+
+      conn = get(conn, "/invocations")
+      body = html_response(conn, 200)
+
+      assert body =~ "standard_site_document_failed"
+      assert body =~ "&mdash;"
+      refute body =~ "standard-reader.app"
+      refute body =~ ~s(>full response</a>)
+      assert Repo.get!(Invocation, inv.id).standard_site_document_uri == nil
+    end
+
     test "shows an em dash instead of a full-response link when none exists", %{conn: conn} do
       {:ok, _inv} =
         %Invocation{}

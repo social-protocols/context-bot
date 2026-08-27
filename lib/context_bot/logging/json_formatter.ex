@@ -8,7 +8,7 @@ defmodule ContextBot.Logging.JSONFormatter do
     input_tokens output_tokens cache_creation_input_tokens cache_read_input_tokens
     tool_uses web_search_uses cost_microdollars failure_category failure_reason
     request_id method path status status_code examined resumed terminalized unchanged remaining_ms
-    media_disposition image_count action
+    media_disposition image_count action collection atproto_error atproto_message
   )a)
 
   @numeric_metadata MapSet.new(~w(
@@ -23,12 +23,15 @@ defmodule ContextBot.Logging.JSONFormatter do
   )a)
 
   @safe_messages MapSet.new(
-                   ~w(context_bot_attempt context_bot_startup_recovery context_bot_interrupt_recovery)
+                   ~w(context_bot_attempt context_bot_startup_recovery context_bot_interrupt_recovery context_bot_standard_site)
                  )
   @media_dispositions MapSet.new(~w(supported video_unsupported image_limit_exceeded))
   @token ~r/\A[a-z][a-z0-9_-]{0,127}\z/
   @worker ~r/\AElixir\.[A-Za-z0-9_.]{1,240}\z|\A[A-Z][A-Za-z0-9_.]{1,247}\z/
   @request_id ~r/\A[A-Za-z0-9_-]{1,128}\z/
+  @nsid ~r/\A[a-z][a-z0-9-]{0,62}(\.[a-z][a-z0-9-]{0,62})+\z/
+  @atproto_error ~r/\A[A-Za-z][A-Za-z0-9]{0,63}\z/
+  @atproto_message ~r/\A[A-Za-z0-9][A-Za-z0-9 .,:;\/_-]{0,159}\z/
 
   @spec format(map(), map()) :: IO.chardata()
   def format(%{level: level, msg: message, meta: metadata}, _config)
@@ -76,6 +79,9 @@ defmodule ContextBot.Logging.JSONFormatter do
   defp safe_named_metadata(:request_id, value), do: safe_regex(value, @request_id)
   defp safe_named_metadata(:method, value), do: safe_method(value)
   defp safe_named_metadata(:path, "/health"), do: {:ok, "/health"}
+  defp safe_named_metadata(:collection, value), do: safe_regex(value, @nsid)
+  defp safe_named_metadata(:atproto_error, value), do: safe_regex(value, @atproto_error)
+  defp safe_named_metadata(:atproto_message, value), do: safe_regex(value, @atproto_message)
 
   defp safe_named_metadata(:media_disposition, value) do
     if MapSet.member?(@media_dispositions, value), do: {:ok, value}, else: :error

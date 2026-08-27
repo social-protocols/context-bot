@@ -117,3 +117,58 @@ defmodule FakeStandardSiteClient do
     {:ok, 200, %{}, %{}}
   end
 end
+
+defmodule FakeStandardSiteTrackingClient do
+  @moduledoc false
+
+  def get_record(_repo, collection, rkey) do
+    send(self(), {:standard_site_get, collection, rkey})
+    {:error, :record_not_found}
+  end
+
+  def put_record(_repo, collection, rkey, record) do
+    send(self(), {:standard_site_put, collection, rkey, record})
+    {:ok, 200, %{}, %{}}
+  end
+end
+
+defmodule FakeStandardSiteLexiconUnknown do
+  @moduledoc false
+
+  def get_record(_repo, _collection, _rkey) do
+    {:error, :record_not_found}
+  end
+
+  def put_record(_repo, collection, _rkey, _record) do
+    {:error,
+     {:permanent, 400,
+      %{
+        "error" => "InvalidRequest",
+        "message" => "Lexicon not found: #{collection}"
+      }}}
+  end
+end
+
+defmodule FakePublicationExistsDocumentFails do
+  @moduledoc false
+
+  def get_record(_repo, "site.standard.publication", _rkey) do
+    record = %{
+      "$type" => "site.standard.publication",
+      "url" => "https://getcontext.bot",
+      "name" => "Context Bot",
+      "createdAt" => DateTime.to_iso8601(~U[2026-08-25 12:00:00Z])
+    }
+
+    {:ok, 200, %{}, %{"value" => record}}
+  end
+
+  def put_record(_repo, "site.standard.document", _rkey, _record) do
+    {:error,
+     {:permanent, 400,
+      %{
+        "error" => "InvalidRequest",
+        "message" => "Lexicon not found: site.standard.document"
+      }}}
+  end
+end
