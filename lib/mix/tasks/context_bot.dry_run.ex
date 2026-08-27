@@ -6,7 +6,7 @@ defmodule Mix.Tasks.ContextBot.DryRun do
   import Ecto.Query
 
   alias ContextBot.{DryRun, LocalMigrate, Repo, Settings}
-  alias ContextBot.DryRun.{Interrupts, PostReference, Progress}
+  alias ContextBot.DryRun.{Interrupts, PostReference, Progress, ResultPrinter}
   alias ContextBot.Research.BudgetEntry
 
   @requirements ["app.config"]
@@ -189,17 +189,9 @@ defmodule Mix.Tasks.ContextBot.DryRun do
   end
 
   defp print_complete(invocation, cost_microdollars) do
-    totals = get_in(invocation.anthropic_usage || %{}, ["totals"]) || %{}
-
-    Mix.shell().info("status=complete")
-    Mix.shell().info("answer=#{one_line(invocation.selected_reply)}")
-
-    Mix.shell().info(
-      "usage input_tokens=#{integer(totals["input_tokens"])} " <>
-        "output_tokens=#{integer(totals["output_tokens"])} " <>
-        "tool_uses=#{integer((invocation.anthropic_usage || %{})["tool_uses"])} " <>
-        "cost_microdollars=#{integer(cost_microdollars)}"
-    )
+    Enum.each(ResultPrinter.format_complete(invocation, cost_microdollars), fn line ->
+      Mix.shell().info(line)
+    end)
   end
 
   defp install_interrupts!(interrupts, progress_module, progress) do
@@ -412,19 +404,6 @@ defmodule Mix.Tasks.ContextBot.DryRun do
     |> Enum.reject(&is_nil/1)
     |> Enum.sum()
   end
-
-  defp one_line(value) when is_binary(value) do
-    value
-    |> String.replace(~r/\x1B\[[0-?]*[ -\/]*[@-~]/, "")
-    |> String.replace(~r/[\x00-\x1F\x7F-\x9F]/u, " ")
-    |> String.replace(~r/\s+/u, " ")
-    |> String.trim()
-  end
-
-  defp one_line(_value), do: ""
-
-  defp integer(value) when is_integer(value) and value >= 0, do: value
-  defp integer(_value), do: 0
 
   defp safe_prepare_error({:transient, _detail}), do: "public_service_unavailable"
   defp safe_prepare_error({:rate_limited, _retry_after}), do: "public_service_rate_limited"

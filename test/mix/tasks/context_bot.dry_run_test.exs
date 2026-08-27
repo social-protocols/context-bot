@@ -329,6 +329,10 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     assert output =~ "dry_run_disposition=created"
     assert output =~ "status=complete"
     assert output =~ "answer=A concise tested answer."
+    assert output =~ "Post 1:"
+    assert output =~ "A concise tested\nanswer."
+    assert output =~ "(full response) link: none"
+    refute output =~ "Full response:"
     assert output =~ "input_tokens=120"
     assert output =~ "output_tokens=30"
     assert output =~ "tool_uses=2"
@@ -340,6 +344,42 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     refute output =~ "\e"
     assert length(Regex.scan(~r/^dry_run_id=42$/m, output)) == 1
     assert length(Regex.scan(~r/^dry_run_disposition=created$/m, output)) == 1
+  end
+
+  test "a completed two-arg dry run prints the full writeup, posts, and link placement" do
+    compact = "Short Bluesky summary."
+    full = "Line one of the writeup.\n\nLine two with sources."
+
+    invocation = %Invocation{
+      id: 55,
+      dry_run: true,
+      stage: :complete,
+      selected_reply: compact,
+      full_response: full,
+      anthropic_usage: %{
+        "totals" => %{"input_tokens" => 40, "output_tokens" => 9},
+        "response_count" => 1,
+        "tool_uses" => 0
+      }
+    }
+
+    Application.put_env(:context_bot, Service,
+      test_pid: self(),
+      prepare_result: {:ok, %{invocation | stage: :capturing_thread}, :created},
+      await_result: {:ok, invocation}
+    )
+
+    assert :ok = run(["https://bsky.app/profile/example.test/post/3abc", "What's missing?"])
+
+    output = shell_output()
+    assert output =~ "status=complete"
+    assert output =~ "answer=#{compact}"
+    assert output =~ "Full response:"
+    assert output =~ full
+    assert output =~ "Post 1:"
+    assert output =~ compact <> " (full response)"
+    assert output =~ "(full response) link: Post 1"
+    refute_received {:prepare_question, _, _}
   end
 
   test "a question-only command prepares local research without a post reference" do
@@ -383,6 +423,43 @@ defmodule Mix.Tasks.ContextBot.DryRunTest do
     assert output =~ "dry_run_id=54"
     assert output =~ "status=complete"
     assert output =~ "answer=A local question-only answer."
+  end
+
+  test "a completed question-only dry run prints the full writeup, posts, and link placement" do
+    compact = String.duplicate("a", 285)
+    full = "Question-only writeup with method and sources."
+
+    invocation = %Invocation{
+      id: 56,
+      dry_run: true,
+      stage: :complete,
+      selected_reply: compact,
+      full_response: full,
+      anthropic_usage: %{
+        "totals" => %{"input_tokens" => 11, "output_tokens" => 4},
+        "response_count" => 1,
+        "tool_uses" => 0
+      }
+    }
+
+    Application.put_env(:context_bot, Service,
+      test_pid: self(),
+      prepare_question_result: {:ok, %{invocation | stage: :thread_ready}, :created},
+      await_result: {:ok, invocation}
+    )
+
+    assert :ok = run(["What's missing?"])
+
+    output = shell_output()
+    assert output =~ "status=complete"
+    assert output =~ "Full response:"
+    assert output =~ full
+    assert output =~ "Post 1:"
+    assert output =~ compact
+    assert output =~ "Post 2:"
+    assert output =~ "full response"
+    assert output =~ "(full response) link: Post 2 (link alone)"
+    refute Enum.any?(Events.all(), &match?({:prepare, _, _, _}, &1))
   end
 
   test "prints explicit zero usage for a provider-free capability answer" do

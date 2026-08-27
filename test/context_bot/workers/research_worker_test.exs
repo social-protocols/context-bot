@@ -261,6 +261,49 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert Repo.aggregate(Oban.Job, :count) == 0
   end
 
+  test "a dry-run split stores the remainder for local display without a reply intent" do
+    invocation =
+      invocation("dry-split", :thread_ready, %{
+        dry_run: true,
+        target_uri: "at://did:plc:target/app.bsky.feed.post/selected",
+        invocation_text: "Is this fair?"
+      })
+
+    part1 = String.duplicate("a", 150)
+    part2 = String.duplicate("b", 160)
+
+    configure_runner(
+      {:ok,
+       runner_result()
+       |> Map.put(:text, part1)
+       |> Map.put(:text_part2, part2)
+       |> Map.put(:full_response, "Thorough markdown writeup.")
+       |> Map.put(:validation, %{
+         "result" => "split",
+         "repair_used" => true,
+         "part1_graphemes" => 150,
+         "part2_graphemes" => 160
+       })}
+    )
+
+    configure_worker(
+      settings: Settings.load(anthropic_daily_budget_usd: "20.000000"),
+      reply_job_builder: fn _invocation -> flunk("dry run constructed a reply job") end,
+      tid_generator: fn _timestamp -> flunk("dry run constructed a publication key") end
+    )
+
+    assert :ok = perform(invocation)
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert persisted.selected_reply == part1
+    assert persisted.full_response == "Thorough markdown writeup."
+    assert persisted.reply_validation["text_part2"] == part2
+    assert persisted.reply_record == nil
+    assert persisted.reply_part2_record == nil
+    assert persisted.reply_rkey == nil
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
   test "logs a research attempt without provider or invocation content" do
     invocation = invocation("logged-research", :thread_ready)
     configure_runner({:ok, runner_result()})
