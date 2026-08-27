@@ -214,6 +214,10 @@ defmodule ContextBot.ATProto.ReqClient do
 
   defp normalize_response({:ok, %Req.Response{status: 401}}), do: {:error, :unauthorized}
 
+  defp normalize_response({:ok, %Req.Response{status: status, body: %{"error" => error}}})
+       when status in 400..499 and error in ["InvalidToken", "ExpiredToken"],
+       do: {:error, :unauthorized}
+
   defp normalize_response({:ok, %Req.Response{status: 429, headers: headers}}) do
     {:error, {:rate_limited, first_header(headers, "retry-after")}}
   end

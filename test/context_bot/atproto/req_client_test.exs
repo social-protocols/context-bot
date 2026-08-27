@@ -342,6 +342,23 @@ defmodule ContextBot.ATProto.ReqClientTest do
     assert {:ok, 200, _headers, ^response} = ReqClient.list_notifications(nil)
   end
 
+  test "an access-token 400 ExpiredToken refreshes and retries exactly once" do
+    start_authenticated_session(refresh?: true)
+    response = fixture("notifications.json")
+
+    Req.Test.expect(ReqClient, fn conn ->
+      assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer test-access-jwt-one"]
+      conn |> Plug.Conn.put_status(400) |> Req.Test.json(%{"error" => "ExpiredToken"})
+    end)
+
+    Req.Test.expect(ReqClient, fn conn ->
+      assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer test-access-jwt-two"]
+      Req.Test.json(conn, response)
+    end)
+
+    assert {:ok, 200, _headers, ^response} = ReqClient.list_notifications(nil)
+  end
+
   test "an empty JSON 401 still refreshes and retries exactly once" do
     response = fixture("notifications.json")
     start_authenticated_session(refresh?: true)
@@ -416,6 +433,8 @@ defmodule ContextBot.ATProto.ReqClientTest do
        {:error, {:rate_limited, "17"}}},
       {503, [], %{"error" => "UpstreamFailure"}, {:error, {:transient, 503}}},
       {400, [], %{"error" => "RecordNotFound"}, {:error, :record_not_found}},
+      {400, [], %{"error" => "ExpiredToken"}, {:error, :unauthorized}},
+      {400, [], %{"error" => "InvalidToken"}, {:error, :unauthorized}},
       {409, [], %{"error" => "InvalidSwap"}, {:error, :invalid_swap}},
       {422, [], %{"error" => "InvalidRequest"}, {:error, {:permanent, 422}}}
     ]
