@@ -138,4 +138,14 @@ EOF
 
 run_dashboard_with_fakes
 
+fly_toml=$(cat "$project_root/fly.toml")
+[[ "$fly_toml" == *'kill_signal = "SIGTERM"'* ]] || fail "fly.toml does not set kill_signal SIGTERM"
+[[ "$fly_toml" == *"kill_timeout = 300"* ]] || fail "fly.toml does not set kill_timeout 300"
+
+server_script=$(cat "$project_root/rel/overlays/bin/server")
+[[ "$server_script" == *"forward_term"* ]] || fail "release server does not forward shutdown signals"
+[[ "$server_script" == *"INT TERM"* ]] || fail "release server does not trap INT and TERM"
+[[ "$server_script" == *"+B i"* ]] || fail "release server does not ignore the Erlang BREAK menu"
+[[ "$server_script" == *"kill -TERM"* ]] || fail "release server does not forward SIGTERM to the BEAM"
+
 printf 'fly wrapper tests passed\n'

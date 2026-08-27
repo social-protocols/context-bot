@@ -79,9 +79,11 @@ A research HTTP call may take up to five minutes, and the foreground command wai
 minutes for the durable workflow. Ctrl-C and SIGTERM clear progress, pause new dry-run dispatch, and
 give executing work its configured shutdown grace period. The printed `dry_run_id` remains the
 recovery handle. On the next startup, deterministic work resumes automatically. An Anthropic attempt
-that was sent but has no committed response envelope is never replayed: its budget becomes
-indeterminate and the invocation fails with `interrupted_after_send`, because replay could double
-spend while the first request may already have been billed.
+that was sent but has no committed response envelope is not failed forever: recovery waits until
+`sent_at + ANTHROPIC_HTTP_TIMEOUT_MS`, then starts a **new** budget attempt (the original row stays
+indeterminate). That can double-charge if Anthropic later completed the first call; a clean SIGTERM
+drain should make it rare. Fly `kill_timeout` is 300s (the platform max, equal to the HTTP timeout)
+and Oban's shutdown grace period matches it.
 
 If a complete provider response was retained but a local decoder or validator bug incorrectly
 marked the invocation failed, an operator can explicitly reopen it without repeating paid research:
@@ -91,8 +93,10 @@ just reprocess 42
 ```
 
 The command fails closed unless invocation 42 is a provider-response failure with a complete,
-successful retained envelope and no ambiguous provider attempt. Run it only with
-`BOT_ENABLED=false` and no Context Bot runtime already active against the same SQLite database. The
+successful retained envelope and no in-flight unrecorded attempt still inside the Anthropic HTTP
+timeout, or it is `interrupted_after_send` after that timeout (a new attempt is allowed then). Run
+it only with `BOT_ENABLED=false` and no Context Bot runtime already active against the same SQLite
+database. The
 command starts only the database dependencies, returns the invocation to durable pending work, and
 does not start Oban, the mention poller, an ATProto session, or the full application. It therefore
 does not contact Anthropic or Bluesky. Start the normal runtime afterward, or rerun the matching

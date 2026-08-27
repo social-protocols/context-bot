@@ -208,6 +208,25 @@ defmodule ContextBot.Workflow.ReprocessorTest do
              Reprocessor.reprocess(missing_envelope.id, now: @now)
   end
 
+  test "reopens interrupted_after_send after the HTTP timeout without a recorded envelope" do
+    invocation = interrupted_invocation("interrupt-elapsed")
+    _entry = unrecorded_attempt(invocation)
+    later = DateTime.add(@now, 301, :second)
+
+    assert {:ok, reopened} = Reprocessor.reprocess(invocation.id, now: later)
+    assert reopened.stage == :thread_ready
+    assert reopened.failure_detail == nil
+    assert [_job] = research_jobs(invocation)
+  end
+
+  test "refuses interrupted_after_send while the original HTTP timeout is still open" do
+    invocation = interrupted_invocation("interrupt-inflight")
+    _entry = unrecorded_attempt(invocation)
+
+    assert {:error, :ambiguous_provider_attempt} =
+             Reprocessor.reprocess(invocation.id, now: @now)
+  end
+
   test "rejects any exposed attempt whose response was not retained" do
     invocation = reprocessable_invocation(true, "ambiguous")
     recorded = recorded_attempt(invocation, "recorded")
@@ -296,6 +315,15 @@ defmodule ContextBot.Workflow.ReprocessorTest do
       completed_at: @now
     })
     |> Repo.insert!()
+  end
+
+  defp interrupted_invocation(suffix) do
+    suffix
+    |> then(&reprocessable_invocation(true, &1))
+    |> Invocation.transition_changeset(%{
+      failure_detail: %{"reason" => "interrupted_after_send"}
+    })
+    |> Repo.update!()
   end
 
   defp recorded_attempt(invocation, suffix \\ "latest") do

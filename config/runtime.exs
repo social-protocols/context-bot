@@ -15,7 +15,8 @@ config :context_bot, Oban,
     research: settings.queue_concurrency,
     reply: settings.queue_concurrency,
     maintenance: settings.queue_concurrency
-  ]
+  ],
+  shutdown_grace_period: ContextBot.Settings.shutdown_grace_period_ms(settings)
 
 anthropic_api_key =
   case System.get_env("ANTHROPIC_API_KEY") do

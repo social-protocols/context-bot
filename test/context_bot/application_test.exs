@@ -23,7 +23,12 @@ defmodule ContextBot.ApplicationTest do
              {StartupRecovery, []},
              {Oban, oban_options},
              {Session, [timeout: 12_345]},
-             {Poller, [poll_interval_ms: 23_456, page_cap: 7]}
+             {Poller,
+              [
+                name: Poller,
+                poll_interval_ms: 23_456,
+                page_cap: 7
+              ]}
            ] = Application.bot_children(settings)
 
     assert oban_options == Elixir.Application.fetch_env!(:context_bot, Oban)
@@ -32,6 +37,10 @@ defmodule ContextBot.ApplicationTest do
              Supervisor.init(Application.bot_children(settings), strategy: :one_for_one)
 
     assert Enum.map(child_specs, & &1.id) == [StartupRecovery, Oban, Session, Poller]
+  end
+
+  test "prep_stop drains admission before the supervisor stops Oban" do
+    assert :state == Application.prep_stop(:state)
   end
 
   test "a disabled bot does not supervise bot-only children" do

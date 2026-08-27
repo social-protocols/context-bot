@@ -396,7 +396,7 @@ defmodule ContextBot.Research.RunnerTest do
     assert attempt_key == reserved.attempt_key
   end
 
-  test "a crash after sent becomes terminal without another provider call" do
+  test "a crash after sent waits out the HTTP timeout without another provider call" do
     invocation = invocation("crash-sent")
     Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
 
@@ -409,27 +409,71 @@ defmodule ContextBot.Research.RunnerTest do
     assert [%BudgetEntry{state: :sent, response_recorded_at: nil}] = Repo.all(BudgetEntry)
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
 
-    assert {:error, :interrupted_after_send} = Runner.run(invocation, options(crash: crash))
+    assert {:wait, 300_000} = Runner.run(invocation, options(crash: crash))
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
 
-    assert [{:research, :indeterminate}] ==
+    assert [{:research, :sent}] ==
              Enum.map(
                Repo.all(from entry in BudgetEntry, order_by: entry.id),
                &{&1.kind, &1.state}
              )
   end
 
-  test "an older ambiguous attempt blocks a newer legacy reservation" do
+  test "a crash after sent starts a new attempt once the HTTP timeout has elapsed" do
+    invocation = invocation("crash-sent-elapsed")
+    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+
+    crash = crash_once(:after_sent)
+
+    assert_raise RuntimeError, "injected crash after_sent", fn ->
+      Runner.run(invocation, options(crash: crash))
+    end
+
+    assert [%BudgetEntry{state: :sent, response_recorded_at: nil, attempt_key: first_key}] =
+             Repo.all(BudgetEntry)
+
+    later = DateTime.add(@now, 300_001, :millisecond)
+
+    assert {:ok, _result} = Runner.run(invocation, options(crash: crash, now: fn -> later end))
+    assert_received {:anthropic_call, _request, %{kind: :retry}, false}
+
+    assert [
+             {:research, :indeterminate, ^first_key},
+             {:retry, :settled, retry_key}
+           ] =
+             Enum.map(
+               Repo.all(from entry in BudgetEntry, order_by: entry.id),
+               &{&1.kind, &1.state, &1.attempt_key}
+             )
+
+    assert retry_key != first_key
+  end
+
+  test "an older unrecorded attempt inside the timeout does not send a newer reservation" do
     invocation = invocation("legacy-ambiguous-before-reserved")
 
     ambiguous = insert_budget_entry(invocation, 1, :research, :sent)
     reserved = insert_budget_entry(invocation, 2, :retry, :reserved)
     Process.put(:runner_client_results, [])
 
-    assert {:error, :interrupted_after_send} = Runner.run(invocation, options())
+    assert {:wait, 300_000} = Runner.run(invocation, options())
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+    assert Repo.reload!(ambiguous).state == :sent
+    assert Repo.reload!(reserved).state == :reserved
+  end
+
+  test "an older unrecorded attempt past the timeout lets the reserved retry send once" do
+    invocation = invocation("legacy-ambiguous-elapsed")
+    ambiguous = insert_budget_entry(invocation, 1, :research, :sent)
+    reserved = insert_budget_entry(invocation, 2, :retry, :reserved)
+    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+    later = DateTime.add(@now, 300_001, :millisecond)
+
+    assert {:ok, _result} = Runner.run(invocation, options(now: fn -> later end))
+    assert_received {:anthropic_call, _request, %{kind: :retry}, false}
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
     assert Repo.reload!(ambiguous).state == :indeterminate
-    assert Repo.reload!(reserved).state == :reserved
+    assert Repo.reload!(reserved).state == :settled
   end
 
   test "a crash after HTTP return but before persistence never replays" do
@@ -451,10 +495,10 @@ defmodule ContextBot.Research.RunnerTest do
     assert [%BudgetEntry{state: :sent, response_recorded_at: nil}] = Repo.all(BudgetEntry)
     assert_received {:anthropic_call, _request, %{kind: :research}, false}
 
-    assert {:error, :interrupted_after_send} = Runner.run(invocation, options(crash: crash))
+    assert {:wait, 300_000} = Runner.run(invocation, options(crash: crash))
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
 
-    assert [{:research, :indeterminate}] ==
+    assert [{:research, :sent}] ==
              Enum.map(
                Repo.all(from entry in BudgetEntry, order_by: entry.id),
                &{&1.kind, &1.state}
@@ -570,7 +614,7 @@ defmodule ContextBot.Research.RunnerTest do
     assert attempt_key == reserved.attempt_key
   end
 
-  test "a new owner terminalizes an exposed attempt without replay" do
+  test "a new owner waits out an exposed attempt instead of replaying it" do
     invocation = invocation("stale-sent")
     Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
     crash = crash_once(:after_sent)
@@ -585,11 +629,11 @@ defmodule ContextBot.Research.RunnerTest do
     assert {:error, :stale_claim} = Runner.run(invocation, options(crash: crash))
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
 
-    assert {:error, :interrupted_after_send} =
+    assert {:wait, 300_000} =
              Runner.run(invocation, options(claim_token: "new-owner", crash: crash))
 
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
-    assert Enum.map(Repo.all(BudgetEntry), & &1.state) == [:indeterminate]
+    assert Enum.map(Repo.all(BudgetEntry), & &1.state) == [:sent]
   end
 
   test "a takeover after the sent marker stops the stale owner before POST" do
@@ -1303,7 +1347,8 @@ defmodule ContextBot.Research.RunnerTest do
       anthropic_web_search_tool_type: "web_search_20260318",
       anthropic_web_fetch_tool_type: "web_fetch_20260318",
       max_response_bytes: 8_000,
-      max_storage_bytes: 1_000_000
+      max_storage_bytes: 1_000_000,
+      anthropic_http_timeout_ms: 300_000
     }
   end
 

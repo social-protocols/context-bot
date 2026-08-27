@@ -5,6 +5,8 @@ defmodule ContextBot.Application do
 
   use Application
 
+  alias ContextBot.Runtime.Drain
+
   @impl true
   def start(_type, _args) do
     settings = Application.fetch_env!(:context_bot, :settings)
@@ -33,6 +35,12 @@ defmodule ContextBot.Application do
     :ok
   end
 
+  @impl true
+  def prep_stop(state) do
+    _ = Drain.begin()
+    state
+  end
+
   @doc false
   def bot_children(settings) do
     if ContextBot.Settings.bot_enabled?(settings) do
@@ -41,7 +49,9 @@ defmodule ContextBot.Application do
         {Oban, Application.fetch_env!(:context_bot, Oban)},
         {ContextBot.ATProto.Session, timeout: settings.atproto_session_timeout_ms},
         {ContextBot.Mentions.Poller,
-         poll_interval_ms: settings.poll_interval_ms, page_cap: settings.notification_page_cap}
+         name: ContextBot.Mentions.Poller,
+         poll_interval_ms: settings.poll_interval_ms,
+         page_cap: settings.notification_page_cap}
       ]
     else
       []

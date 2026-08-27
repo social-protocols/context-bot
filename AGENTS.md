@@ -88,6 +88,7 @@ Preserve these POC invariants:
 - treat `dry_run = true` as permanently non-publishable: use only unauthenticated public AppView reads, skip eligibility/mention rates, retain all Anthropic spending and safety limits, and never create a reply intent or publication claim;
 - treat `eligibility_method = "operator_live_demo"` as authorization for only the explicitly selected public invocation: keep `dry_run = false`, retain spending and publication safeguards, use an isolated database, and never start polling;
 - freeze one repository/rkey/record reply intent, fence research and publication with leases, and reconcile ambiguous PDS writes rather than allocating a second reply;
+- on SIGTERM, stop poller/admission work and let in-flight research and reply finish within Fly's 300s kill_timeout; a sent Anthropic attempt without an envelope waits out `ANTHROPIC_HTTP_TIMEOUT_MS` then starts a new budget attempt rather than remaining `interrupted_after_send` forever;
 - keep failures finite and credential-free, and recover durable work oldest-first with bounded scans.
 
 ## Testing guidance

@@ -17,7 +17,14 @@ defmodule ContextBot.Research.Budget do
   @type claim_token :: String.t() | nil
 
   @spec unrecorded_exposed_attempt(Invocation.t()) :: BudgetEntry.t() | nil
-  def unrecorded_exposed_attempt(%Invocation{id: invocation_id}) do
+  def unrecorded_exposed_attempt(%Invocation{} = invocation) do
+    invocation
+    |> unrecorded_exposed_attempts()
+    |> List.first()
+  end
+
+  @spec unrecorded_exposed_attempts(Invocation.t()) :: [BudgetEntry.t()]
+  def unrecorded_exposed_attempts(%Invocation{id: invocation_id}) do
     BudgetEntry
     |> join(:left, [entry], envelope in ResponseEnvelope,
       on: envelope.budget_entry_id == entry.id
@@ -28,8 +35,16 @@ defmodule ContextBot.Research.Budget do
         entry.state in [:sent, :indeterminate] and is_nil(envelope.id)
     )
     |> order_by([entry], asc: entry.id)
-    |> limit(1)
-    |> Repo.one()
+    |> Repo.all()
+  end
+
+  @spec mark_unrecorded_exposed_indeterminate(Invocation.t()) :: :ok
+  def mark_unrecorded_exposed_indeterminate(%Invocation{} = invocation) do
+    invocation
+    |> unrecorded_exposed_attempts()
+    |> Enum.each(&mark_entry_indeterminate/1)
+
+    :ok
   end
 
   @spec reserve_next(

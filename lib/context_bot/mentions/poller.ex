@@ -21,11 +21,12 @@ defmodule ContextBot.Mentions.Poller do
           max_pending: pos_integer(),
           page_cap: pos_integer(),
           poll_interval_ms: pos_integer(),
-          draining?: boolean()
+          draining?: boolean(),
+          accepting?: boolean()
         }
 
   def start_link(options \\ []) do
-    GenServer.start_link(__MODULE__, options, name: Keyword.get(options, :name))
+    GenServer.start_link(__MODULE__, options, Keyword.take(options, [:name]))
   end
 
   @doc """
@@ -33,6 +34,12 @@ defmodule ContextBot.Mentions.Poller do
   """
   @spec poll_now(GenServer.server()) :: :ok
   def poll_now(server), do: send(server, :poll)
+
+  @doc """
+  Stops scheduling new notification drains. The current drain, if any, finishes.
+  """
+  @spec stop_accepting(GenServer.server()) :: :ok
+  def stop_accepting(server), do: GenServer.call(server, :stop_accepting)
 
   @doc false
   @spec idle?(GenServer.server()) :: boolean()
@@ -50,7 +57,8 @@ defmodule ContextBot.Mentions.Poller do
       max_pending: Keyword.get(options, :max_pending, settings.max_pending),
       page_cap: Keyword.get(options, :page_cap, settings.notification_page_cap),
       poll_interval_ms: Keyword.get(options, :poll_interval_ms, settings.poll_interval_ms),
-      draining?: false
+      draining?: false,
+      accepting?: true
     }
 
     if Keyword.get(options, :start_immediately, true), do: send(self(), :poll)
@@ -60,7 +68,12 @@ defmodule ContextBot.Mentions.Poller do
   @impl true
   def handle_call(:idle?, _from, state), do: {:reply, not state.draining?, state}
 
+  def handle_call(:stop_accepting, _from, state),
+    do: {:reply, :ok, %{state | accepting?: false}}
+
   @impl true
+  def handle_info(:poll, %{accepting?: false} = state), do: {:noreply, state}
+
   def handle_info(:poll, %{draining?: true} = state), do: {:noreply, state}
 
   def handle_info(:poll, state) do

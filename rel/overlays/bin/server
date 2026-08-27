@@ -1,5 +1,34 @@
 #!/bin/sh
 set -eu
 
+# Fly's default kill_signal is SIGINT, which the BEAM does not trap. This
+# wrapper stays PID 1, ignores the BREAK menu, and forwards INT/TERM as SIGTERM
+# so OTP/Oban can drain in-flight research HTTP within kill_timeout.
 /app/bin/migrate
-PHX_SERVER=true exec /app/bin/context_bot start
+
+ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-+B i}"
+export ELIXIR_ERL_OPTIONS
+export PHX_SERVER=true
+
+/app/bin/context_bot start &
+pid=$!
+
+forward_term() {
+	trap '' INT TERM
+	kill -TERM "$pid" 2>/dev/null || true
+	set +e
+	wait "$pid"
+	status=$?
+	set -e
+	exit "$status"
+}
+
+trap forward_term INT TERM
+
+set +e
+wait "$pid"
+status=$?
+set -e
+
+trap - INT TERM
+exit "$status"

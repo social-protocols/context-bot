@@ -9,12 +9,15 @@ defmodule ContextBot.Research.Runner do
 
   import Ecto.Query
 
+  require Logger
+
   alias ContextBot.Repo
 
   alias ContextBot.Research.{
     AnthropicClient,
     Budget,
     BudgetEntry,
+    InterruptRecovery,
     Pricing,
     Reply,
     Request,
@@ -36,6 +39,7 @@ defmodule ContextBot.Research.Runner do
 
   @spec run(Invocation.t(), keyword() | map()) ::
           {:ok, result()}
+          | {:wait, pos_integer()}
           | {:deferred, DateTime.t(), BudgetEntry.kind()}
           | {:error, atom() | {atom(), term()}}
   def run(%Invocation{} = invocation, options) do
@@ -51,21 +55,29 @@ defmodule ContextBot.Research.Runner do
 
   defp resume(invocation, config) do
     invocation = Repo.reload!(invocation)
+    timeout_ms = config.settings.anthropic_http_timeout_ms
+    now = now(config)
 
-    case config.budget.unrecorded_exposed_attempt(invocation) do
-      nil -> resume_attempt(invocation, latest_attempt(invocation), config)
-      ambiguous -> terminalize_ambiguous_attempt(ambiguous, config)
+    case InterruptRecovery.in_flight_attempt(invocation, now, timeout_ms) do
+      {_entry, remaining} ->
+        {:wait, remaining}
+
+      nil ->
+        with :ok <- mark_lost_unrecorded(invocation, config) do
+          resume_attempt(invocation, latest_attempt(invocation), config)
+        end
     end
   end
 
-  defp terminalize_ambiguous_attempt(%BudgetEntry{state: :indeterminate}, _config),
-    do: {:error, :interrupted_after_send}
-
-  defp terminalize_ambiguous_attempt(%BudgetEntry{} = entry, config) do
-    case config.budget.mark_unrecorded_indeterminate(entry, now(config), config.claim_token) do
-      {:ok, _indeterminate} -> {:error, :interrupted_after_send}
-      {:error, :stale_claim} -> {:error, :stale_claim}
-    end
+  defp mark_lost_unrecorded(invocation, config) do
+    invocation
+    |> Budget.unrecorded_exposed_attempts()
+    |> Enum.reduce_while(:ok, fn entry, :ok ->
+      case config.budget.mark_unrecorded_indeterminate(entry, now(config), config.claim_token) do
+        {:ok, _entry} -> {:cont, :ok}
+        {:error, :stale_claim} -> {:halt, {:error, :stale_claim}}
+      end
+    end)
   end
 
   defp resume_attempt(invocation, nil, config),
@@ -80,29 +92,44 @@ defmodule ContextBot.Research.Runner do
   end
 
   defp resume_attempt(
-         _invocation,
-         %BudgetEntry{state: :sent, response_recorded_at: nil} = entry,
+         invocation,
+         %BudgetEntry{state: state} = entry,
          config
-       ) do
-    case config.budget.reconcile_attempt(entry, now(config), config.claim_token) do
-      {:indeterminate, _indeterminate} -> {:error, :interrupted_after_send}
-      {:error, :stale_claim} -> {:error, :stale_claim}
-      _unexpected -> {:error, :invalid_attempt_state}
+       )
+       when state in [:sent, :indeterminate] do
+    case stored_response(invocation, entry.attempt_key, config) do
+      nil -> start_replacement_attempt(invocation, entry, config)
+      response -> process_recorded(invocation, entry, response, config)
     end
   end
-
-  defp resume_attempt(
-         _invocation,
-         %BudgetEntry{state: :indeterminate, response_recorded_at: nil},
-         _config
-       ),
-       do: {:error, :interrupted_after_send}
 
   defp resume_attempt(invocation, %BudgetEntry{} = entry, config) do
     case stored_response(invocation, entry.attempt_key, config) do
       nil -> {:error, :invalid_attempt_state}
       response -> process_recorded(invocation, entry, response, config)
     end
+  end
+
+  defp start_replacement_attempt(invocation, entry, config) do
+    with {:ok, _lost} <- mark_lost_attempt(entry, config) do
+      Logger.info(
+        "context_bot_interrupt_recovery",
+        Map.to_list(%{
+          invocation_id: invocation.id,
+          action: :new_attempt,
+          remaining_ms: 0,
+          attempt_kind: entry.kind
+        })
+      )
+
+      start_attempt(Repo.reload!(invocation), :retry, config)
+    end
+  end
+
+  defp mark_lost_attempt(%BudgetEntry{state: :indeterminate}, _config), do: {:ok, :already_lost}
+
+  defp mark_lost_attempt(%BudgetEntry{} = entry, config) do
+    config.budget.mark_unrecorded_indeterminate(entry, now(config), config.claim_token)
   end
 
   defp start_attempt(invocation, kind, config) do

@@ -2,14 +2,18 @@ defmodule ContextBot.Workflow.Recovery do
   @moduledoc """
   Reconciles abandoned workflow jobs from durable SQLite state.
 
-  Provider-exposed research is never replayed unless its complete response envelope was already
-  committed. Dry and public invocations always remain on their respective queues.
+  Provider-exposed research is never replayed while its HTTP timeout window is
+  still open. After that window, a lost sent-without-envelope attempt stays
+  indeterminate and a new reservation may be created. Dry and public invocations
+  always remain on their respective queues.
   """
 
   import Ecto.Query
 
+  require Logger
+
   alias ContextBot.Repo
-  alias ContextBot.Research.{Budget, BudgetEntry, ResponseEnvelope}
+  alias ContextBot.Research.{Budget, BudgetEntry, InterruptRecovery, ResponseEnvelope}
   alias ContextBot.Workflow.Invocation
 
   @candidate_stages [
@@ -46,9 +50,10 @@ defmodule ContextBot.Workflow.Recovery do
     if config.workflow == :dry_run do
       recover_dry_pages(config, options)
     else
-      config.batch_size
-      |> candidate_query()
-      |> Repo.all()
+      in_progress = config.batch_size |> candidate_query() |> Repo.all()
+
+      in_progress
+      |> Kernel.++(recoverable_failed(config, :all))
       |> recover_candidates(options)
     end
   rescue
@@ -60,7 +65,9 @@ defmodule ContextBot.Workflow.Recovery do
     drain_dry_pages(nil, boundary_id, config, options, empty_summary())
   end
 
-  defp drain_dry_pages(_cursor, nil, _config, _options, summary), do: {:ok, summary}
+  defp drain_dry_pages(_cursor, nil, config, options, summary) do
+    recover_dry_failed(config, options, summary)
+  end
 
   defp drain_dry_pages(cursor, boundary_id, config, options, summary) do
     candidates =
@@ -74,8 +81,14 @@ defmodule ContextBot.Workflow.Recovery do
     if length(candidates) == config.batch_size do
       drain_dry_pages(List.last(candidates).id, boundary_id, config, options, summary)
     else
-      {:ok, summary}
+      recover_dry_failed(config, options, summary)
     end
+  end
+
+  defp recover_dry_failed(config, options, summary) do
+    failed = recoverable_failed(config, :dry_run)
+    {:ok, failed_summary} = recover_candidates(failed, options)
+    {:ok, merge_summary(summary, failed_summary)}
   end
 
   defp recover_candidates(candidates, options) do
@@ -137,6 +150,36 @@ defmodule ContextBot.Workflow.Recovery do
   defp after_id(query, nil), do: query
   defp after_id(query, id), do: where(query, [invocation], invocation.id > ^id)
 
+  defp recoverable_failed(config, :dry_run) do
+    config.batch_size
+    |> recoverable_failed_query()
+    |> where([invocation], invocation.dry_run)
+    |> Repo.all()
+  end
+
+  defp recoverable_failed(config, :all) do
+    config.batch_size
+    |> recoverable_failed_query()
+    |> where([invocation], not invocation.dry_run)
+    |> Repo.all()
+  end
+
+  defp recoverable_failed_query(batch_size) do
+    Invocation
+    |> where(
+      [invocation],
+      invocation.stage == :failed and invocation.failure_category == :provider_response and
+        is_nil(invocation.reply_uri)
+    )
+    |> order_by(
+      [invocation],
+      asc: invocation.recovery_checked_at,
+      asc: invocation.received_at,
+      asc: invocation.id
+    )
+    |> limit(^batch_size)
+  end
+
   defp dry_boundary_id do
     Invocation
     |> candidate_stages()
@@ -159,6 +202,10 @@ defmodule ContextBot.Workflow.Recovery do
       )
 
     result
+  end
+
+  defp recover_locked(%Invocation{stage: :failed} = invocation, config) do
+    recover_failed(invocation, config)
   end
 
   defp recover_locked(%Invocation{stage: stage}, _config) when stage not in @candidate_stages,
@@ -200,14 +247,7 @@ defmodule ContextBot.Workflow.Recovery do
 
   defp recover_stage(%Invocation{stage: stage} = invocation, job, work, config)
        when stage in [:thread_ready, :researching] do
-    case Budget.unrecorded_exposed_attempt(invocation) do
-      %BudgetEntry{} = entry ->
-        mark_budget_indeterminate(entry)
-        terminalize(invocation, job, :provider_response, "interrupted_after_send", config.now)
-
-      nil ->
-        recover_safe_research(invocation, job, work, config)
-    end
+    recover_research(invocation, job, work, config)
   end
 
   defp recover_stage(%Invocation{stage: stage} = invocation, job, work, config)
@@ -232,17 +272,57 @@ defmodule ContextBot.Workflow.Recovery do
     :resumed
   end
 
+  defp recover_failed(%Invocation{} = invocation, config) do
+    cond do
+      InterruptRecovery.published?(invocation) ->
+        mark_checked(invocation, config.now)
+        :unchanged
+
+      InterruptRecovery.replayable_recorded_response?(invocation) and
+          InterruptRecovery.can_restart_research?(invocation) ->
+        work = research_work(invocation)
+        job = latest_job(invocation, work.worker)
+        reopen_for_replay(invocation, job, work, config)
+
+      InterruptRecovery.interrupted_after_send?(invocation) and
+          InterruptRecovery.can_restart_research?(invocation) ->
+        work = research_work(invocation)
+        job = latest_job(invocation, work.worker)
+        recover_research(invocation, job, work, config)
+
+      true ->
+        mark_checked(invocation, config.now)
+        :unchanged
+    end
+  end
+
+  defp recover_research(invocation, job, work, config) do
+    timeout_ms = config.settings.anthropic_http_timeout_ms
+
+    case InterruptRecovery.in_flight_attempt(invocation, config.now, timeout_ms) do
+      {entry, remaining} ->
+        park_research(invocation, job, work, config, remaining, entry)
+
+      nil ->
+        recover_safe_research(invocation, job, work, config)
+    end
+  end
+
   defp recover_safe_research(invocation, job, work, config) do
+    lost = Budget.unrecorded_exposed_attempts(invocation)
+    Budget.mark_unrecorded_exposed_indeterminate(invocation)
+
     case latest_budget_entry(invocation) do
-      %BudgetEntry{state: state} = entry when state in [:sent, :indeterminate] ->
+      %BudgetEntry{} = entry ->
         if response_envelope?(entry) do
-          resume_research(invocation, job, work, config.now)
+          reopen_for_replay(invocation, job, work, config)
         else
-          mark_budget_indeterminate(entry)
-          terminalize(invocation, job, :provider_response, "interrupted_after_send", config.now)
+          log_lost_attempts(invocation, lost)
+          resume_research(invocation, job, work, config.now)
         end
 
       _safe_or_unexposed ->
+        log_lost_attempts(invocation, lost)
         resume_research(invocation, job, work, config.now)
     end
   end
@@ -370,26 +450,76 @@ defmodule ContextBot.Workflow.Recovery do
 
   defp resume_research(invocation, job, work, now) do
     invocation
-    |> Invocation.transition_changeset(%{
-      status: :thread_ready,
-      stage: :thread_ready,
-      research_claim_token: nil,
-      research_claimed_at: nil,
-      recovery_checked_at: now
-    })
+    |> Invocation.transition_changeset(reopen_research_attrs(now, :thread_ready))
     |> Repo.update!()
 
     make_available(job, invocation, work, now)
     :resumed
   end
 
-  defp mark_budget_indeterminate(%BudgetEntry{state: :sent} = entry) do
-    entry
-    |> BudgetEntry.changeset(%{state: :indeterminate, settled_microdollars: nil})
+  defp park_research(invocation, job, work, config, remaining, entry) do
+    scheduled_at = DateTime.add(config.now, remaining, :millisecond)
+
+    invocation
+    |> Invocation.transition_changeset(reopen_research_attrs(config.now, :researching))
     |> Repo.update!()
+
+    make_available(job, invocation, work, config.now, scheduled_at)
+    log_interrupt_recovery(invocation, entry, :wait_for_timeout, remaining)
+    :resumed
   end
 
-  defp mark_budget_indeterminate(%BudgetEntry{state: :indeterminate}), do: :ok
+  defp reopen_for_replay(invocation, job, work, config) do
+    invocation
+    |> Invocation.transition_changeset(reopen_research_attrs(config.now, :thread_ready))
+    |> Repo.update!()
+
+    make_available(job, invocation, work, config.now)
+    log_interrupt_recovery(invocation, latest_budget_entry(invocation), :replay_envelope, 0)
+    :resumed
+  end
+
+  defp reopen_research_attrs(now, stage) do
+    %{
+      status: stage,
+      stage: stage,
+      research_claim_token: nil,
+      research_claimed_at: nil,
+      failure_category: nil,
+      failure_detail: nil,
+      completed_at: nil,
+      recovery_checked_at: now
+    }
+  end
+
+  defp research_work(%Invocation{dry_run: dry_run}) do
+    %{
+      worker: "ContextBot.Workers.ResearchWorker",
+      queue: if(dry_run, do: :dry_research, else: :research)
+    }
+  end
+
+  defp log_lost_attempts(_invocation, []), do: :ok
+
+  defp log_lost_attempts(invocation, [entry | _rest]) do
+    log_interrupt_recovery(invocation, entry, :new_attempt, 0)
+  end
+
+  defp log_interrupt_recovery(invocation, entry, action, remaining_ms) do
+    payload = %{
+      invocation_id: invocation.id,
+      action: action,
+      remaining_ms: remaining_ms
+    }
+
+    payload =
+      case entry do
+        %BudgetEntry{kind: kind} -> Map.put(payload, :attempt_kind, kind)
+        _missing -> payload
+      end
+
+    Logger.info("context_bot_interrupt_recovery", Map.to_list(payload))
+  end
 
   defp terminalize(invocation, job, category, reason, now) do
     invocation
@@ -417,26 +547,38 @@ defmodule ContextBot.Workflow.Recovery do
     |> Repo.update!()
   end
 
-  defp make_available(nil, invocation, work, _now) do
-    %{"uri" => invocation.invocation_uri, "cid" => invocation.notification_cid}
-    |> Oban.Job.new(
+  defp make_available(job, invocation, work, now),
+    do: make_available(job, invocation, work, now, now)
+
+  defp make_available(nil, invocation, work, now, scheduled_at) do
+    opts = [
       worker: work.worker,
       queue: work.queue,
       unique: [period: :infinity, fields: [:worker, :args], states: :incomplete]
-    )
+    ]
+
+    opts =
+      if DateTime.compare(scheduled_at, now) == :gt do
+        Keyword.put(opts, :scheduled_at, scheduled_at)
+      else
+        opts
+      end
+
+    %{"uri" => invocation.invocation_uri, "cid" => invocation.notification_cid}
+    |> Oban.Job.new(opts)
     |> Repo.insert!()
   end
 
-  defp make_available(%Oban.Job{state: state}, invocation, work, now)
+  defp make_available(%Oban.Job{state: state}, invocation, work, now, scheduled_at)
        when state not in @active_job_states,
-       do: make_available(nil, invocation, work, now)
+       do: make_available(nil, invocation, work, now, scheduled_at)
 
-  defp make_available(job, _invocation, work, now) do
+  defp make_available(job, _invocation, work, now, scheduled_at) do
     job
     |> Ecto.Changeset.change(%{
-      state: "available",
+      state: scheduled_state(scheduled_at, now),
       queue: Atom.to_string(work.queue),
-      scheduled_at: now,
+      scheduled_at: scheduled_at,
       attempted_at: nil,
       attempted_by: [],
       cancelled_at: nil,
@@ -444,6 +586,10 @@ defmodule ContextBot.Workflow.Recovery do
       discarded_at: nil
     })
     |> Repo.update!()
+  end
+
+  defp scheduled_state(scheduled_at, now) do
+    if DateTime.compare(scheduled_at, now) == :gt, do: "scheduled", else: "available"
   end
 
   defp discard(nil, _now), do: :ok
