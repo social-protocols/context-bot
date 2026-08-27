@@ -189,6 +189,113 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert persisted.reply_part2_record["text"] == part2
   end
 
+  test "creates a missing publication then a document and freezes the reader URL" do
+    invocation = invocation("full-response-compact", :thread_ready)
+
+    configure_runner(
+      {:ok, runner_result() |> Map.put(:full_response, "Thorough markdown writeup.")}
+    )
+
+    configure_worker(atproto_client: FakeStandardSiteTrackingClient)
+
+    assert :ok = perform(invocation)
+    persisted = Repo.reload!(invocation)
+
+    assert_received {:standard_site_get, "site.standard.publication", "context-bot"}
+    assert_received {:standard_site_put, "site.standard.publication", "context-bot", pub_record}
+    assert pub_record["$type"] == "site.standard.publication"
+
+    assert_received {:standard_site_put, "site.standard.document", doc_rkey, doc_record}
+    assert is_binary(doc_rkey) and doc_rkey != ""
+    assert doc_record["$type"] == "site.standard.document"
+    assert doc_record["textContent"] == "Thorough markdown writeup."
+
+    assert persisted.full_response == "Thorough markdown writeup."
+
+    assert persisted.standard_site_document_uri ==
+             "at://#{@bot_did}/site.standard.document/#{doc_rkey}"
+
+    assert persisted.standard_site_document_rkey == doc_rkey
+    assert persisted.failure_detail == nil
+    assert persisted.reply_record["text"] == "Frozen concise context. (full response)"
+    assert [facet] = persisted.reply_record["facets"]
+
+    assert hd(facet["features"])["uri"] ==
+             "https://standard-reader.app/a/#{@bot_did}/#{doc_rkey}"
+  end
+
+  test "records a visible document failure and omits the reader URL when publication create fails" do
+    invocation = invocation("publication-lexicon-unknown", :thread_ready)
+
+    configure_runner(
+      {:ok, runner_result() |> Map.put(:full_response, "Thorough markdown writeup.")}
+    )
+
+    configure_worker(atproto_client: FakeStandardSiteLexiconUnknown)
+    previous_level = Logger.level()
+    Logger.configure(level: :warning)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    log =
+      capture_log(
+        [level: :warning, formatter: {ContextBot.Logging.JSONFormatter, %{}}],
+        fn -> assert :ok = perform(invocation) end
+      )
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :reply_ready
+    assert persisted.full_response == "Thorough markdown writeup."
+    assert persisted.standard_site_document_uri == nil
+    assert persisted.standard_site_document_rkey == nil
+    assert persisted.failure_category == nil
+    assert persisted.failure_detail["reason"] == "standard_site_document_failed"
+    assert persisted.failure_detail["collection"] == "site.standard.publication"
+    assert persisted.failure_detail["status"] == 400
+    assert persisted.failure_detail["error"] == "InvalidRequest"
+    assert persisted.failure_detail["message"] == "Lexicon not found: site.standard.publication"
+    assert persisted.reply_record["text"] == "Frozen concise context."
+    refute Map.has_key?(persisted.reply_record, "facets")
+    assert [%Oban.Job{worker: "ContextBot.Workers.ReplyWorker"}] = Repo.all(Oban.Job)
+
+    decoded = Jason.decode!(log)
+    assert decoded["message"] == "context_bot_standard_site"
+    assert decoded["invocation_id"] == invocation.id
+    assert decoded["collection"] == "site.standard.publication"
+    assert decoded["status_code"] == 400
+    assert decoded["atproto_error"] == "InvalidRequest"
+    assert decoded["failure_reason"] == "permanent"
+    assert decoded["atproto_message"] == "Lexicon not found: site.standard.publication"
+    refute log =~ invocation.invocation_uri
+    refute log =~ "Thorough markdown writeup"
+  end
+
+  test "records a visible document failure when the publication exists but document create fails" do
+    invocation = invocation("document-lexicon-unknown", :thread_ready)
+
+    configure_runner(
+      {:ok, runner_result() |> Map.put(:full_response, "Thorough markdown writeup.")}
+    )
+
+    configure_worker(atproto_client: FakePublicationExistsDocumentFails)
+
+    log =
+      capture_log(
+        [level: :warning, formatter: {ContextBot.Logging.JSONFormatter, %{}}],
+        fn -> assert :ok = perform(invocation) end
+      )
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :reply_ready
+    assert persisted.standard_site_document_uri == nil
+    assert persisted.failure_detail["collection"] == "site.standard.document"
+    assert persisted.failure_detail["status"] == 400
+    assert persisted.failure_detail["error"] == "InvalidRequest"
+    assert persisted.reply_record["text"] == "Frozen concise context."
+    refute Map.has_key?(persisted.reply_record, "facets")
+    assert log =~ "context_bot_standard_site"
+    assert log =~ "site.standard.document"
+  end
+
   test "publishes a Standard.site document and link-only part 2 when a split keeps a full response" do
     invocation = invocation("split-full-response", :thread_ready)
     part1 = String.duplicate("a", 150)

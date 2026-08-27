@@ -138,6 +138,9 @@ defmodule ContextBot.Workers.ThreadWorker do
   defp handle_fetch({:error, {:permanent, _status}}, invocation, _dependencies),
     do: fail_thread(invocation, "target_unavailable")
 
+  defp handle_fetch({:error, {:permanent, _status, _detail}}, invocation, _dependencies),
+    do: fail_thread(invocation, "target_unavailable")
+
   defp handle_fetch({:ok, status, _headers, _invalid_body}, invocation, _dependencies)
        when status in 200..299,
        do: fail_thread(invocation, "invalid_thread")

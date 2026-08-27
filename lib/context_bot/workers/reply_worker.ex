@@ -140,7 +140,13 @@ defmodule ContextBot.Workers.ReplyWorker do
       {:error, {:permanent, 403}} ->
         fail_auth(invocation, token, dependencies.now.())
 
+      {:error, {:permanent, 403, _detail}} ->
+        fail_auth(invocation, token, dependencies.now.())
+
       {:error, {:permanent, _status}} ->
+        fail_conflict(invocation, token, "publication_rejected", dependencies.now.())
+
+      {:error, {:permanent, _status, _detail}} ->
         fail_conflict(invocation, token, "publication_rejected", dependencies.now.())
 
       {:error, reason} ->
@@ -205,7 +211,13 @@ defmodule ContextBot.Workers.ReplyWorker do
       {:error, {:permanent, 403}} ->
         :auth
 
+      {:error, {:permanent, 403, _detail}} ->
+        :auth
+
       {:error, {:permanent, _status}} ->
+        :invalid
+
+      {:error, {:permanent, _status, _detail}} ->
         :invalid
 
       {:error, reason} ->

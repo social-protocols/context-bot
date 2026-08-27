@@ -12,6 +12,22 @@ defmodule ContextBot.StandardSite.PublicationTest do
       assert uri == "at://#{@repo}/site.standard.publication/context-bot"
     end
 
+    test "looks up the publication then creates it when getRecord is RecordNotFound" do
+      assert {:ok, uri} =
+               Publication.ensure_exists(FakeStandardSiteTrackingClient, @repo, @created_at)
+
+      assert uri == "at://#{@repo}/site.standard.publication/context-bot"
+      assert_received {:standard_site_get, "site.standard.publication", "context-bot"}
+
+      assert_received {:standard_site_put, "site.standard.publication", "context-bot", record}
+
+      assert record["$type"] == "site.standard.publication"
+      assert record["url"] == "https://getcontext.bot"
+      assert record["name"] == "Context Bot"
+      assert record["createdAt"] == DateTime.to_iso8601(@created_at)
+      refute_received {:standard_site_put, "site.standard.publication", _, _}
+    end
+
     test "returns success when publication already exists with same content" do
       assert {:ok, uri} = Publication.ensure_exists(FakeClientExisting, @repo, @created_at)
       assert uri == "at://#{@repo}/site.standard.publication/context-bot"

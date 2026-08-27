@@ -91,14 +91,7 @@ defmodule ContextBot.ATProto.ReqClient do
     authenticated_request(
       method: :post,
       url: pds_url() <> "/xrpc/com.atproto.repo.putRecord",
-      json: %{
-        "repo" => repo,
-        "collection" => collection,
-        "rkey" => rkey,
-        "record" => record,
-        "validate" => true,
-        "swapRecord" => nil
-      }
+      json: put_record_payload(repo, collection, rkey, record)
     )
   end
 
@@ -231,6 +224,10 @@ defmodule ContextBot.ATProto.ReqClient do
   defp normalize_response({:ok, %Req.Response{body: %{"error" => "InvalidSwap"}}}),
     do: {:error, :invalid_swap}
 
+  defp normalize_response({:ok, %Req.Response{status: status, body: body}})
+       when status in 400..499,
+       do: {:error, {:permanent, status, atproto_error_fields(body)}}
+
   defp normalize_response({:ok, %Req.Response{status: status}}),
     do: {:error, {:permanent, status}}
 
@@ -267,6 +264,37 @@ defmodule ContextBot.ATProto.ReqClient do
         byte_size(label) <= 63 and Regex.match?(@hostname_label_regex, label)
       end) and
       Regex.match?(~r/[a-z]/, List.last(labels))
+  end
+
+  defp put_record_payload(repo, collection, rkey, record) do
+    %{
+      "repo" => repo,
+      "collection" => collection,
+      "rkey" => rkey,
+      "record" => record,
+      "validate" => lexicon_validate?(collection),
+      "swapRecord" => nil
+    }
+  end
+
+  # Known app lexicons require schema validation. Standard.site records use custom
+  # lexicons the hosted PDS does not resolve, so skip remote schema validation.
+  defp lexicon_validate?("site.standard." <> _rest), do: false
+  defp lexicon_validate?(_collection), do: true
+
+  defp atproto_error_fields(body) when is_map(body) do
+    %{}
+    |> put_binary_field(body, "error")
+    |> put_binary_field(body, "message")
+  end
+
+  defp atproto_error_fields(_body), do: %{}
+
+  defp put_binary_field(fields, body, key) do
+    case Map.get(body, key) do
+      value when is_binary(value) and value != "" -> Map.put(fields, key, value)
+      _missing -> fields
+    end
   end
 
   defp maybe_put_cursor(pairs, nil), do: pairs

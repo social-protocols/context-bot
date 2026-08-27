@@ -94,7 +94,10 @@ defmodule ContextBot.Logging.JSONFormatterTest do
       method: "GET",
       path: "/health",
       status: 200,
-      status_code: 200
+      status_code: 200,
+      collection: "site.standard.document",
+      atproto_error: "InvalidRequest",
+      atproto_message: "Lexicon not found: site.standard.document"
     }
 
     decoded =
@@ -104,6 +107,31 @@ defmodule ContextBot.Logging.JSONFormatterTest do
       |> Jason.decode!()
 
     assert decoded["message"] == "context_bot_interrupt_recovery"
+
+    standard_site =
+      %{
+        level: :warning,
+        msg: {:string, "context_bot_standard_site"},
+        meta: %{
+          time: 0,
+          invocation_id: 9,
+          collection: "site.standard.publication",
+          status_code: 400,
+          atproto_error: "InvalidRequest",
+          atproto_message: "Lexicon not found: site.standard.publication",
+          failure_reason: :permanent
+        }
+      }
+      |> JSONFormatter.format(%{})
+      |> IO.iodata_to_binary()
+      |> Jason.decode!()
+
+    assert standard_site["message"] == "context_bot_standard_site"
+    assert standard_site["collection"] == "site.standard.publication"
+    assert standard_site["status_code"] == 400
+    assert standard_site["atproto_error"] == "InvalidRequest"
+    assert standard_site["atproto_message"] == "Lexicon not found: site.standard.publication"
+    assert standard_site["failure_reason"] == "permanent"
 
     for {key, value} <- Map.delete(metadata, :time) do
       assert decoded[Atom.to_string(key)] == normalize(value)
