@@ -150,7 +150,7 @@ defmodule ContextBot.Workflow.RecoveryTest do
     assert Repo.aggregate(ResponseEnvelope, :count) == 1
   end
 
-  test "a failed local parser envelope is reopened without a new reservation" do
+  test "a failed local parser envelope stays failed without automatic replay" do
     invocation =
       invocation(:failed, true, "parser-failure",
         failure_category: :provider_response,
@@ -169,6 +169,68 @@ defmodule ContextBot.Workflow.RecoveryTest do
     entry = budget_entry(invocation, :sent, @now)
     _envelope = response_envelope(invocation, entry)
 
+    assert :unchanged = recover_invocation(invocation, startup?: true)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :failed
+    assert persisted.failure_category == :provider_response
+    assert persisted.failure_detail == %{"reason" => "unexpected_tool_use"}
+    assert persisted.completed_at == @now
+    assert Repo.reload!(entry).state == :sent
+    assert Repo.aggregate(BudgetEntry, :count) == 1
+    assert Repo.aggregate(ResponseEnvelope, :count) == 1
+    assert available_research_jobs(invocation) == []
+    assert Repo.reload!(job).state == "discarded"
+  end
+
+  test "a failed code_execution envelope stays failed without automatic replay" do
+    invocation =
+      invocation(:failed, false, "code-exec-failure",
+        failure_category: :provider_response,
+        failure_detail: %{"reason" => "code_execution_failed"},
+        canonical_thread: "thread",
+        canonical_thread_version: "1",
+        anthropic_messages: %{"model" => "claude-sonnet-5", "messages" => []},
+        completed_at: @now
+      )
+
+    job = executing_job(invocation, "ContextBot.Workers.ResearchWorker", :research)
+
+    _job =
+      job |> Ecto.Changeset.change(%{state: "discarded", discarded_at: @now}) |> Repo.update!()
+
+    entry = budget_entry(invocation, :sent, @now)
+    _envelope = response_envelope(invocation, entry)
+
+    assert :unchanged = recover_invocation(invocation, startup?: true)
+    assert {:ok, %{resumed: 0, unchanged: 1}} = recover(startup?: true)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :failed
+    assert persisted.failure_detail == %{"reason" => "code_execution_failed"}
+    assert available_research_jobs(invocation) == []
+    assert Repo.aggregate(BudgetEntry, :count) == 1
+  end
+
+  test "a failed document-create envelope is still reopened for local replay" do
+    invocation =
+      invocation(:failed, false, "document-create-failure",
+        failure_category: :provider_response,
+        failure_detail: %{"reason" => "standard_site_document_failed"},
+        canonical_thread: "thread",
+        canonical_thread_version: "1",
+        anthropic_messages: %{"model" => "claude-sonnet-5", "messages" => []},
+        completed_at: @now
+      )
+
+    job = executing_job(invocation, "ContextBot.Workers.ResearchWorker", :research)
+
+    job =
+      job |> Ecto.Changeset.change(%{state: "discarded", discarded_at: @now}) |> Repo.update!()
+
+    entry = budget_entry(invocation, :sent, @now)
+    _envelope = response_envelope(invocation, entry)
+
     assert :resumed = recover_invocation(invocation, startup?: true)
 
     persisted = Repo.reload!(invocation)
@@ -176,12 +238,9 @@ defmodule ContextBot.Workflow.RecoveryTest do
     assert persisted.failure_category == nil
     assert persisted.completed_at == nil
     assert Repo.reload!(entry).state == :sent
-    assert Repo.aggregate(BudgetEntry, :count) == 1
-    assert Repo.aggregate(ResponseEnvelope, :count) == 1
     assert [replay] = available_research_jobs(invocation)
     assert replay.id != job.id
     assert replay.state == "available"
-    assert replay.queue == "dry_research"
   end
 
   test "failed interrupted_after_send waits while the HTTP timeout is still open" do

@@ -36,6 +36,7 @@ defmodule ContextBot.Workflow.ReprocessorTest do
     assert [job] = research_jobs(invocation)
     assert job.state == "available"
     assert job.queue == "dry_research"
+    refute Map.has_key?(job.args, "new_attempt")
   end
 
   test "uses the public research queue for a public invocation" do
@@ -239,6 +240,31 @@ defmodule ContextBot.Workflow.ReprocessorTest do
 
     assert {:error, :missing_recorded_response} =
              Reprocessor.reprocess(missing_envelope.id, now: @now)
+  end
+
+  test "starts a new paid attempt for code_execution_failed instead of envelope replay" do
+    invocation = reprocessable_invocation(true, "code-exec-new-attempt")
+
+    invocation =
+      invocation
+      |> Invocation.transition_changeset(%{
+        failure_detail: %{"reason" => "code_execution_failed"}
+      })
+      |> Repo.update!()
+
+    entry = recorded_attempt(invocation)
+    envelope = recorded_envelope(invocation, entry)
+
+    assert {:ok, reopened} = Reprocessor.reprocess(invocation.id, now: @now)
+    assert reopened.stage == :thread_ready
+    assert reopened.failure_detail == nil
+    assert Repo.get!(BudgetEntry, entry.id).state == :settled
+    assert Repo.get!(ResponseEnvelope, envelope.id).raw_body == envelope.raw_body
+    assert [job] = research_jobs(invocation)
+    assert job.state == "available"
+    assert job.queue == "dry_research"
+    assert job.args["new_attempt"] == true
+    assert is_binary(job.args["reprocess_token"])
   end
 
   test "reopens interrupted_after_send after the HTTP timeout without a recorded envelope" do

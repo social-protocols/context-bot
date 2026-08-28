@@ -771,6 +771,33 @@ defmodule ContextBot.Research.ReplyTest do
     end)
   end
 
+  test "treats max_uses_exceeded web-tool errors as completed turns" do
+    for {tool_name, result_type} <- [
+          {"web_search", "web_search_tool_result"},
+          {"web_fetch", "web_fetch_tool_result"}
+        ] do
+      content = [
+        %{
+          "type" => "server_tool_use",
+          "id" => "server-call-1",
+          "name" => tool_name,
+          "input" => %{}
+        },
+        %{
+          "type" => result_type,
+          "tool_use_id" => "server-call-1",
+          "content" => %{
+            "type" => "#{tool_name}_tool_result_error",
+            "error_code" => "max_uses_exceeded"
+          }
+        },
+        text("publishable after cap")
+      ]
+
+      assert Reply.select(content, :end_turn) == {:ok, "publishable after cap"}
+    end
+  end
+
   test "rejects unrecognized or malformed server-tool result variants" do
     malformed_variants = [
       {"web_search", "web_search_tool_result", [%{"type" => "future_search_result"}]},

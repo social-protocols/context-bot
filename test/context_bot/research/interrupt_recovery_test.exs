@@ -41,6 +41,31 @@ defmodule ContextBot.Research.InterruptRecoveryTest do
              failure_detail: %{"reason" => "unexpected_tool_use"}
            })
 
+    assert InterruptRecovery.deterministic_parse_hard_fail?(%Invocation{
+             failure_category: :provider_response,
+             failure_detail: %{"reason" => "unexpected_tool_use"}
+           })
+
+    assert InterruptRecovery.deterministic_parse_hard_fail?(%Invocation{
+             failure_category: :provider_response,
+             failure_detail: %{"reason" => "code_execution_failed"}
+           })
+
+    assert InterruptRecovery.code_execution_failed?(%Invocation{
+             failure_category: :provider_response,
+             failure_detail: %{"reason" => "code_execution_failed"}
+           })
+
+    refute InterruptRecovery.deterministic_parse_hard_fail?(%Invocation{
+             failure_category: :provider_response,
+             failure_detail: %{"reason" => "interrupted_after_send"}
+           })
+
+    refute InterruptRecovery.deterministic_parse_hard_fail?(%Invocation{
+             failure_category: :provider_response,
+             failure_detail: %{"reason" => "standard_site_document_failed"}
+           })
+
     assert InterruptRecovery.published?(%Invocation{
              reply_uri: "at://did:plc:bot/app.bsky.feed.post/rkey"
            })

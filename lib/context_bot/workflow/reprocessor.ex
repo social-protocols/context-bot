@@ -1,12 +1,14 @@
 defmodule ContextBot.Workflow.Reprocessor do
   @moduledoc """
   Reopens a local provider-processing failure when its paid response is durably replayable,
-  or when `interrupted_after_send` has waited out the Anthropic HTTP timeout.
+  when `interrupted_after_send` has waited out the Anthropic HTTP timeout, or when
+  `code_execution_failed` needs a new paid attempt instead of envelope replay.
 
   This is an explicit operator action, not ordinary orphan recovery. It never reopens an
   unrecorded provider attempt that is still inside the HTTP timeout window, never
   performs provider or ATProto I/O itself, and never clears a published `reply_uri` to
-  allocate a second Bluesky TID.
+  allocate a second Bluesky TID. Automatic recover_failed does not start that new
+  attempt.
   """
 
   import Ecto.Query
@@ -48,13 +50,19 @@ defmodule ContextBot.Workflow.Reprocessor do
     validate_invocation!(invocation)
     reject_in_flight!(invocation, now)
 
-    if lost_interrupt?(invocation) do
-      enqueue_reopen(invocation, now)
-    else
-      entry = latest_attempt(invocation) || Repo.rollback(:missing_recorded_response)
-      envelope = recorded_response(entry) || Repo.rollback(:missing_recorded_response)
-      validate_response!(entry, envelope)
-      enqueue_reopen(invocation, now)
+    cond do
+      lost_interrupt?(invocation) ->
+        enqueue_reopen(invocation, now)
+
+      InterruptRecovery.code_execution_failed?(invocation) and
+          InterruptRecovery.can_restart_research?(invocation) ->
+        enqueue_reopen(invocation, now, new_attempt: true)
+
+      true ->
+        entry = latest_attempt(invocation) || Repo.rollback(:missing_recorded_response)
+        envelope = recorded_response(entry) || Repo.rollback(:missing_recorded_response)
+        validate_response!(entry, envelope)
+        enqueue_reopen(invocation, now)
     end
   end
 
@@ -81,7 +89,7 @@ defmodule ContextBot.Workflow.Reprocessor do
     end
   end
 
-  defp enqueue_reopen(invocation, now) do
+  defp enqueue_reopen(invocation, now, opts \\ []) do
     reopened =
       invocation
       |> Invocation.transition_changeset(%{
@@ -108,7 +116,7 @@ defmodule ContextBot.Workflow.Reprocessor do
       |> Repo.update!()
 
     reopened
-    |> research_job()
+    |> research_job(opts)
     |> Repo.insert!()
 
     reopened
@@ -163,14 +171,22 @@ defmodule ContextBot.Workflow.Reprocessor do
     Repo.get_by(ResponseEnvelope, budget_entry_id: entry_id)
   end
 
-  defp research_job(%Invocation{} = invocation) do
+  defp research_job(%Invocation{} = invocation, opts) do
     queue = if invocation.dry_run, do: :dry_research, else: :research
 
-    %{
+    args = %{
       "uri" => invocation.invocation_uri,
       "cid" => invocation.notification_cid,
       "reprocess_token" => Ecto.UUID.generate()
     }
-    |> ResearchWorker.new(queue: queue)
+
+    args =
+      if Keyword.get(opts, :new_attempt, false) do
+        Map.put(args, "new_attempt", true)
+      else
+        args
+      end
+
+    ResearchWorker.new(args, queue: queue)
   end
 end

@@ -1034,20 +1034,152 @@ defmodule ContextBot.Research.RunnerTest do
     assert length(responses(invocation)) == 2
   end
 
-  test "fails before continuation when aggregate server-tool use exceeds its cap" do
-    invocation = invocation("tool-cap")
-    fixture = decoded_fixture("unknown_blocks.json")
-    Process.put(:runner_client_results, [{:ok, envelope(200, Jason.encode!(fixture))}])
+  test "still selects a reply when web_search hits max_uses_exceeded" do
+    invocation = invocation("search-cap-hit")
+    fixture = decoded_fixture("tool_success.json")
 
+    body =
+      put_in(fixture, ["content"], [
+        %{
+          "type" => "server_tool_use",
+          "id" => "srvtoolu_search_1",
+          "name" => "web_search",
+          "input" => %{"query" => "first source"}
+        },
+        %{
+          "type" => "web_search_tool_result",
+          "tool_use_id" => "srvtoolu_search_1",
+          "content" => [
+            %{
+              "type" => "web_search_result",
+              "url" => "https://example.test/first",
+              "title" => "First",
+              "encrypted_content" => "opaque",
+              "page_age" => nil
+            }
+          ]
+        },
+        %{
+          "type" => "server_tool_use",
+          "id" => "srvtoolu_search_2",
+          "name" => "web_search",
+          "input" => %{"query" => "one more"}
+        },
+        %{
+          "type" => "web_search_tool_result",
+          "tool_use_id" => "srvtoolu_search_2",
+          "content" => %{
+            "type" => "web_search_tool_result_error",
+            "error_code" => "max_uses_exceeded"
+          }
+        },
+        %{"type" => "text", "text" => "Useful context from primary sources."}
+      ])
+
+    Process.put(:runner_client_results, [{:ok, envelope(200, Jason.encode!(body))}])
     settings = Map.put(settings(), :max_web_search_uses, 1)
 
-    assert {:error, :tool_use_limit_exceeded} =
-             Runner.run(invocation, options(settings: settings))
-
+    assert {:ok, result} = Runner.run(invocation, options(settings: settings))
+    assert result.text == "Useful context from primary sources."
+    assert result.usage["tool_use_counts"] == %{"web_fetch" => 0, "web_search" => 2}
     assert_received {:anthropic_call, _request, %{kind: :research}, false}
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
-    assert [stored] = responses(invocation)
-    assert stored.raw_body == Jason.encode!(fixture)
+  end
+
+  test "still selects a reply when web_fetch hits max_uses_exceeded" do
+    invocation = invocation("fetch-cap-hit")
+    fixture = decoded_fixture("tool_success.json")
+
+    body =
+      put_in(fixture, ["content"], [
+        %{
+          "type" => "server_tool_use",
+          "id" => "srvtoolu_fetch_1",
+          "name" => "web_fetch",
+          "input" => %{"url" => "https://example.test/page"}
+        },
+        %{
+          "type" => "web_fetch_tool_result",
+          "tool_use_id" => "srvtoolu_fetch_1",
+          "content" => %{
+            "type" => "web_fetch_tool_result_error",
+            "error_code" => "max_uses_exceeded"
+          }
+        },
+        %{"type" => "text", "text" => "Useful context from primary sources."}
+      ])
+
+    Process.put(:runner_client_results, [{:ok, envelope(200, Jason.encode!(body))}])
+    settings = Map.put(settings(), :max_web_fetch_uses, 1)
+
+    assert {:ok, result} = Runner.run(invocation, options(settings: settings))
+    assert result.text == "Useful context from primary sources."
+    assert result.usage["tool_use_counts"] == %{"web_fetch" => 1, "web_search" => 0}
+  end
+
+  test "operator force_new_attempt starts a new POST instead of replaying a failed code_execution envelope" do
+    invocation = invocation("code-exec-new-attempt")
+    fixture = decoded_fixture("tool_success.json")
+
+    failed =
+      put_in(fixture, ["content"], [
+        %{
+          "type" => "server_tool_use",
+          "id" => "srvtoolu_code_1",
+          "name" => "code_execution",
+          "input" => %{"code" => "web_search({'query': 'Yosemite'})"}
+        },
+        %{
+          "type" => "code_execution_tool_result",
+          "tool_use_id" => "srvtoolu_code_1",
+          "content" => %{
+            "type" => "code_execution_result",
+            "stdout" => "",
+            "stderr" => "TypeError",
+            "return_code" => 1,
+            "content" => []
+          }
+        },
+        %{"type" => "text", "text" => "must not publish"}
+      ])
+
+    Process.put(:runner_client_results, [{:ok, envelope(200, Jason.encode!(failed))}])
+
+    assert {:error, :code_execution_failed} = Runner.run(invocation, options())
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+
+    success = decoded_fixture("tool_success.json")
+    Process.put(:runner_client_results, [{:ok, envelope(200, Jason.encode!(success))}])
+
+    assert {:error, :code_execution_failed} =
+             Runner.run(Repo.reload!(invocation), options())
+
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+
+    assert {:ok, result} =
+             Runner.run(Repo.reload!(invocation), options(force_new_attempt: true))
+
+    assert result.text == "Useful context from primary sources."
+    assert_received {:anthropic_call, _request, %{kind: :retry}, false}
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+    assert length(responses(invocation)) == 2
+  end
+
+  test "force_new_attempt still waits out an in-flight send without a second POST" do
+    invocation = invocation("force-new-inflight")
+    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+    crash = crash_once(:after_sent)
+
+    assert_raise RuntimeError, "injected crash after_sent", fn ->
+      Runner.run(invocation, options(crash: crash))
+    end
+
+    assert {:wait, 300_000} =
+             Runner.run(invocation, options(crash: crash, force_new_attempt: true))
+
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+    assert Enum.map(Repo.all(BudgetEntry), & &1.state) == [:sent]
   end
 
   test "sends exactly one cached repair for an over-limit normal completion" do

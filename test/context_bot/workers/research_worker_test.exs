@@ -103,6 +103,24 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert Repo.aggregate(Oban.Job, :count) == 1
   end
 
+  test "forwards operator new_attempt as a runner force_new_attempt option" do
+    invocation = invocation("new-attempt-flag", :thread_ready)
+    configure_runner({:ok, runner_result()})
+    configure_worker()
+
+    assert :ok =
+             ResearchWorker.perform(%Oban.Job{
+               args: %{
+                 "uri" => invocation.invocation_uri,
+                 "cid" => invocation.notification_cid,
+                 "new_attempt" => true
+               }
+             })
+
+    assert_received {:runner_called, :researching, options, false}
+    assert Keyword.get(options, :force_new_attempt) == true
+  end
+
   test "atomically freezes all research evidence and exact reply intent before queuing publication" do
     invocation = invocation("success", :thread_ready)
     configure_runner({:ok, runner_result()})

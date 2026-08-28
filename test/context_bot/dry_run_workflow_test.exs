@@ -56,12 +56,13 @@ defmodule ContextBot.DryRunWorkflowTest do
       assert conn.body_params["output_config"] == %{"effort" => "medium"}
 
       assert [search, fetch] = conn.body_params["tools"]
-      assert search["max_uses"] == 2
+      assert search["max_uses"] == 5
       assert search["response_inclusion"] == "excluded"
-      refute Map.has_key?(search, "allowed_callers")
+      assert search["allowed_callers"] == ["direct"]
       assert fetch["max_uses"] == 2
       assert fetch["max_content_tokens"] == 10_000
       assert fetch["response_inclusion"] == "excluded"
+      assert fetch["allowed_callers"] == ["direct"]
       refute Map.has_key?(fetch, "use_cache")
 
       assert [message] = conn.body_params["messages"]

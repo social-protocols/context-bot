@@ -88,9 +88,11 @@ Preserve these POC invariants:
 - treat `dry_run = true` as permanently non-publishable: use only unauthenticated public AppView reads, skip eligibility/mention rates, retain all Anthropic spending and safety limits, and never create a reply intent or publication claim;
 - treat `eligibility_method = "operator_live_demo"` as authorization for only the explicitly selected public invocation: keep `dry_run = false`, retain spending and publication safeguards, use an isolated database, and never start polling;
 - freeze one repository/rkey/record reply intent, fence research and publication with leases, and reconcile ambiguous PDS writes rather than allocating a second reply;
-- treat a failed `code_execution` or `bash_code_execution` result (non-zero `return_code`, documented tool-result error, or timeout) as a terminal `provider_response`; do not compact, split, or publish;
+- send `web_search`/`web_fetch` with `allowed_callers: ["direct"]` and do not declare a `code_execution` tool; treat a failed `code_execution` or `bash_code_execution` result (non-zero `return_code`, documented tool-result error, or timeout) as a terminal `provider_response`; do not compact, split, or publish;
+- treat in-band `max_uses_exceeded` web-tool errors as a completed search/fetch turn and still select compact/`full_response` from that envelope;
 - on SIGTERM, stop poller/admission work and let in-flight research and reply finish within Fly's 300s kill_timeout; a sent Anthropic attempt without an envelope waits out `ANTHROPIC_HTTP_TIMEOUT_MS` then starts a new budget attempt rather than remaining `interrupted_after_send` forever;
-- keep failures finite and credential-free, and recover durable work oldest-first with bounded scans.
+- recover durable work oldest-first with bounded scans; automatic `recover_failed` reopens interruptions and locally retryable envelopes, not deterministic parser hard-fails (`code_execution_failed`, `unexpected_tool_use`, and other parser reasons that will not change on replay); operator reprocess of `code_execution_failed` starts a new paid attempt;
+- keep failures finite and credential-free.
 
 ## Testing guidance
 
