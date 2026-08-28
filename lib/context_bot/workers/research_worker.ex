@@ -61,7 +61,7 @@ defmodule ContextBot.Workers.ResearchWorker do
 
   defp logged_run(invocation, job, token, dependencies) do
     started_at = System.monotonic_time(:millisecond)
-    result = run(invocation, token, dependencies)
+    result = run(invocation, job, token, dependencies)
 
     Operations.log_attempt(invocation,
       attempt_kind: :research,
@@ -73,11 +73,12 @@ defmodule ContextBot.Workers.ResearchWorker do
     result
   end
 
-  defp run(invocation, token, dependencies) do
+  defp run(invocation, job, token, dependencies) do
     options =
       dependencies.runner_options
       |> put_runner_setting(dependencies.settings)
       |> put_runner_claim(token)
+      |> put_force_new_attempt(job)
 
     case dependencies.runner.run(invocation, options) do
       {:ok, result} ->
@@ -449,6 +450,16 @@ defmodule ContextBot.Workers.ResearchWorker do
 
   defp put_runner_claim(options, token) when is_map(options),
     do: Map.put(options, :claim_token, token)
+
+  defp put_force_new_attempt(options, %Oban.Job{args: %{"new_attempt" => true}})
+       when is_list(options),
+       do: Keyword.put(options, :force_new_attempt, true)
+
+  defp put_force_new_attempt(options, %Oban.Job{args: %{"new_attempt" => true}})
+       when is_map(options),
+       do: Map.put(options, :force_new_attempt, true)
+
+  defp put_force_new_attempt(options, _job), do: options
 
   defp snooze_seconds(remaining_ms) when is_integer(remaining_ms) and remaining_ms <= 0, do: 1
 

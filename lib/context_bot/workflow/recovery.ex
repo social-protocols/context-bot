@@ -5,7 +5,9 @@ defmodule ContextBot.Workflow.Recovery do
   Provider-exposed research is never replayed while its HTTP timeout window is
   still open. After that window, a lost sent-without-envelope attempt stays
   indeterminate and a new reservation may be created. Dry and public invocations
-  always remain on their respective queues.
+  always remain on their respective queues. Deterministic parser hard-fails stay
+  failed until an explicit operator reprocess; automatic recovery does not loop
+  them.
   """
 
   import Ecto.Query
@@ -281,7 +283,8 @@ defmodule ContextBot.Workflow.Recovery do
         :unchanged
 
       InterruptRecovery.replayable_recorded_response?(invocation) and
-          InterruptRecovery.can_restart_research?(invocation) ->
+        InterruptRecovery.can_restart_research?(invocation) and
+          not InterruptRecovery.deterministic_parse_hard_fail?(invocation) ->
         work = research_work(invocation)
         job = latest_job(invocation, work.worker)
         reopen_for_replay(invocation, job, work, config)

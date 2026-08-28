@@ -16,10 +16,9 @@ defmodule ContextBot.Research.Reply do
   @hard_max_graphemes ReplyLimits.hard_max_graphemes()
   @max_bytes ReplyLimits.max_bytes()
   @web_server_tools ~w(web_search web_fetch)
-  # Dated web_search/web_fetch auto-provision code execution for dynamic filtering. Claude may
-  # then call web_search() from the interpreter instead of emitting native server_tool_use
-  # web_search/web_fetch blocks. Usage can still show web_search_requests while the envelope
-  # contains only code_execution pairs. Pairing those blocks is required protocol; a failed
+  # Dated web_search/web_fetch default `allowed_callers` to auto-provisioned code execution.
+  # Requests pin `allowed_callers: ["direct"]` so searches are native `server_tool_use` only.
+  # If an envelope still contains a code-execution pair, pairing is required protocol; a failed
   # execution (non-zero return_code, *_tool_result_error, or timeout) is a hard failure.
   @code_execution_tools ~w(code_execution bash_code_execution text_editor_code_execution)
   @code_execution_runtime_tools ~w(code_execution bash_code_execution)

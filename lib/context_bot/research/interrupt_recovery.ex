@@ -7,6 +7,11 @@ defmodule ContextBot.Research.InterruptRecovery do
   After the window, the original attempt is treated as lost and a new reservation
   may be created. That can double-charge if Anthropic later completed the first
   call; a clean drain should make that rare.
+
+  Automatic recover_failed reopens interruptions and locally retryable envelope
+  work. It does not reopen deterministic parser hard-fails; those stay failed
+  until an operator reprocess. `code_execution_failed` reprocess starts a new
+  paid attempt instead of replaying the failed envelope.
   """
 
   import Ecto.Query
@@ -16,6 +21,25 @@ defmodule ContextBot.Research.InterruptRecovery do
   alias ContextBot.Workflow.Invocation
 
   @type action :: :wait_for_timeout | :new_attempt | :replay_envelope
+
+  # Local parser outcomes that cannot change on replay of the same retained envelope.
+  # Automatic recover_failed must not reopen these; operator reprocess may.
+  @parse_hard_fail_reasons MapSet.new([
+                             "code_execution_failed",
+                             "empty_reply",
+                             "invalid_content",
+                             "invalid_repair",
+                             "malformed_provider_response",
+                             "max_tokens",
+                             "model_context_window_exceeded",
+                             "pause_turn",
+                             "pending_tool_use",
+                             "refusal",
+                             "tool_use",
+                             "unexpected_content_block",
+                             "unexpected_stop_reason",
+                             "unexpected_tool_use"
+                           ])
 
   @spec remaining_ms(BudgetEntry.t() | nil, DateTime.t(), pos_integer()) :: non_neg_integer()
   def remaining_ms(%BudgetEntry{sent_at: %DateTime{} = sent_at}, %DateTime{} = now, timeout_ms)
@@ -60,6 +84,25 @@ defmodule ContextBot.Research.InterruptRecovery do
       do: true
 
   def can_restart_research?(_invocation), do: false
+
+  @spec deterministic_parse_hard_fail?(Invocation.t()) :: boolean()
+  def deterministic_parse_hard_fail?(%Invocation{
+        failure_category: :provider_response,
+        failure_detail: %{"reason" => reason}
+      })
+      when is_binary(reason),
+      do: MapSet.member?(@parse_hard_fail_reasons, reason)
+
+  def deterministic_parse_hard_fail?(_invocation), do: false
+
+  @spec code_execution_failed?(Invocation.t()) :: boolean()
+  def code_execution_failed?(%Invocation{
+        failure_category: :provider_response,
+        failure_detail: %{"reason" => "code_execution_failed"}
+      }),
+      do: true
+
+  def code_execution_failed?(_invocation), do: false
 
   @spec replayable_recorded_response?(Invocation.t()) :: boolean()
   def replayable_recorded_response?(%Invocation{id: invocation_id}) do

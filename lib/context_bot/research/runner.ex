@@ -92,7 +92,18 @@ defmodule ContextBot.Research.Runner do
     end
   end
 
-  defp resume_attempt(
+  defp resume_attempt(invocation, %BudgetEntry{} = entry, %{force_new_attempt: true} = config) do
+    case stored_response(invocation, entry.attempt_key, config) do
+      nil -> resume_recorded_or_replace(invocation, entry, config)
+      _recorded -> start_forced_new_attempt(invocation, entry, config)
+    end
+  end
+
+  defp resume_attempt(invocation, %BudgetEntry{} = entry, config) do
+    resume_recorded_or_replace(invocation, entry, config)
+  end
+
+  defp resume_recorded_or_replace(
          invocation,
          %BudgetEntry{state: state} = entry,
          config
@@ -104,11 +115,25 @@ defmodule ContextBot.Research.Runner do
     end
   end
 
-  defp resume_attempt(invocation, %BudgetEntry{} = entry, config) do
+  defp resume_recorded_or_replace(invocation, %BudgetEntry{} = entry, config) do
     case stored_response(invocation, entry.attempt_key, config) do
       nil -> {:error, :invalid_attempt_state}
       response -> process_recorded(invocation, entry, response, config)
     end
+  end
+
+  defp start_forced_new_attempt(invocation, entry, config) do
+    Logger.info(
+      "context_bot_interrupt_recovery",
+      Map.to_list(%{
+        invocation_id: invocation.id,
+        action: :new_attempt,
+        remaining_ms: 0,
+        attempt_kind: entry.kind
+      })
+    )
+
+    start_attempt(Repo.reload!(invocation), :retry, config)
   end
 
   defp start_replacement_attempt(invocation, entry, config) do
@@ -246,7 +271,7 @@ defmodule ContextBot.Research.Runner do
          :ok <- safely_settled(settled),
          :ok <- crash(config, :after_settlement, settled),
          {:ok, invocation} <- checkpoint_usage(invocation, config) do
-      classify_message(invocation, settled, decoded, config)
+      classify_stop_reason(invocation, settled, decoded, config)
     end
   end
 
@@ -292,12 +317,6 @@ defmodule ContextBot.Research.Runner do
       start_attempt(Repo.reload!(invocation), :retry, config)
     else
       {:error, :provider_retries_exhausted}
-    end
-  end
-
-  defp classify_message(invocation, entry, decoded, config) do
-    with :ok <- within_tool_caps(invocation, config) do
-      classify_stop_reason(invocation, entry, decoded, config)
     end
   end
 
@@ -676,18 +695,6 @@ defmodule ContextBot.Research.Runner do
     end)
   end
 
-  defp within_tool_caps(invocation, config) do
-    responses = config.store.anthropic_responses(invocation)
-    counts = responses |> decoded_responses() |> tool_use_counts()
-
-    if counts["web_search"] <= config.settings.max_web_search_uses and
-         counts["web_fetch"] <= config.settings.max_web_fetch_uses do
-      :ok
-    else
-      {:error, :tool_use_limit_exceeded}
-    end
-  end
-
   defp tool_use_counts(decoded_responses) do
     Enum.reduce(
       decoded_responses,
@@ -827,6 +834,7 @@ defmodule ContextBot.Research.Runner do
       client: Keyword.get(options, :client, AnthropicClient),
       crash: Keyword.get(options, :crash, fn _point, _value -> :ok end),
       decoder: Keyword.get(options, :decoder, &Jason.decode/1),
+      force_new_attempt: Keyword.get(options, :force_new_attempt, false),
       max_http_retries: settings.anthropic_max_http_retries,
       now: Keyword.get(options, :now, &DateTime.utc_now/0),
       pricing: Pricing.fetch!(settings.anthropic_pricing_version),

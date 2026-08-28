@@ -133,12 +133,14 @@ defmodule ContextBot.Research.Request do
         %{
           "type" => web_search_tool_type,
           "name" => "web_search",
+          "allowed_callers" => ["direct"],
           "response_inclusion" => "excluded",
           "max_uses" => max_web_search_uses
         },
         %{
           "type" => web_fetch_tool_type,
           "name" => "web_fetch",
+          "allowed_callers" => ["direct"],
           "response_inclusion" => "excluded",
           "max_uses" => max_web_fetch_uses,
           "max_content_tokens" => max_web_fetch_content_tokens,

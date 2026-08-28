@@ -23,7 +23,7 @@ defmodule ContextBot.Research.RequestTest do
     ]
   }
 
-  test "builds the pinned non-streaming Sonnet request with dynamically filtered web tools" do
+  test "builds the pinned non-streaming Sonnet request with native-only web tools" do
     request =
       Request.initial(@canonical_thread, %{
         model_id: "claude-sonnet-5-test-pin",
@@ -53,12 +53,14 @@ defmodule ContextBot.Research.RequestTest do
              %{
                "type" => "web_search_20270809",
                "name" => "web_search",
+               "allowed_callers" => ["direct"],
                "response_inclusion" => "excluded",
                "max_uses" => 4
              },
              %{
                "type" => "web_fetch_20270809",
                "name" => "web_fetch",
+               "allowed_callers" => ["direct"],
                "response_inclusion" => "excluded",
                "max_uses" => 3,
                "max_content_tokens" => 24_000,
@@ -70,8 +72,6 @@ defmodule ContextBot.Research.RequestTest do
     refute Map.has_key?(request, "top_p")
     refute Map.has_key?(request, "top_k")
     refute Map.has_key?(request["thinking"], "display")
-    refute Map.has_key?(Enum.at(request["tools"], 0), "allowed_callers")
-    refute Map.has_key?(Enum.at(request["tools"], 1), "allowed_callers")
     refute Map.has_key?(Enum.at(request["tools"], 1), "use_cache")
   end
 

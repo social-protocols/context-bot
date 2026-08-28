@@ -1,7 +1,7 @@
 # Anthropic cost and interruption recovery
 
 **Date:** 2026-08-10  
-**Updated:** 2026-08-27  
+**Updated:** 2026-08-28  
 **TL;DR:** Server-side research may bill far more input than the visible prompt or answer suggests.
 Bound ordinary research aggressively. Drain deploys so in-flight Anthropic HTTP can finish. If a
 sent attempt has no envelope, wait out `ANTHROPIC_HTTP_TIMEOUT_MS` and then start a **new** budget
@@ -37,7 +37,7 @@ the HTTP timeout elapses, then starting a **new** reservation, is the accepted c
 
 ## Findings
 
-- Ordinary defaults are medium effort, 4,096 output tokens, two searches, two fetches, 10,000 fetched
+- Ordinary defaults are medium effort, 4,096 output tokens, five searches, two fetches, 10,000 fetched
   content tokens, and one tool continuation. The request asks for only enough research to support a
   defensible 300-character answer.
 - Tool responses are excluded from the returned Anthropic payload, but can still affect provider
@@ -50,7 +50,8 @@ the HTTP timeout elapses, then starting a **new** reservation, is the accepted c
   not POST. After the window, the old row stays indeterminate and a new attempt may be reserved.
 - Failed `provider_response/interrupted_after_send` is reopened with the same matrix, including
   operator `just reprocess` / `just fly-reprocess` after the timeout. Replayable retained envelopes
-  still reprocess locally with no new POST.
+  still reprocess locally with no new POST, except `code_execution_failed`, which starts a **new**
+  paid attempt. Automatic recover_failed does not reopen deterministic parser hard-fails.
 - Permanent non-replayable failures (eligibility, unauthorized/session, publication_conflict when a
   `reply_uri` already exists, user/policy skips) are not auto-retried. A set `reply_uri` never
   allocates a second post.

@@ -20,8 +20,9 @@ successful tool result, then published a compact reply that "reads as satire".
 
 Anthropic's current web tools (`web_search_20260209` / `web_fetch_20260209` and later)
 auto-provision code execution for dynamic filtering. They also support programmatic tool
-calling from that interpreter. Context Bot omits `allowed_callers: ["direct"]` so filtering
-can run. The model can therefore invoke `web_search()` inside a cell instead of emitting a
+calling from that interpreter. Context Bot now sets `allowed_callers: ["direct"]` so
+`web_search`/`web_fetch` are native `server_tool_use` only. Historical envelopes may still
+contain in-sandbox searches. The model can invoke `web_search()` inside a cell instead of emitting a
 top-level `server_tool_use` named `web_search`. Nested search/fetch with
 `response_inclusion: excluded` is invisible as outer blocks; only the code-execution pair
 remains. A later cell can fail with encrypted stdout and `return_code=1` while the model still
@@ -46,6 +47,8 @@ Official behavior:
 - Do not hard-fail `return_code=0` with real stdout that merely reports a negative finding.
 - Do not disable code execution: success and failure are distinguishable from the documented
   result fields.
-- Prefer native `web_search` / `web_fetch` in the system prompt. Do not add undeclared tools,
-  `allowed_callers`, `tool_search`, advisor, or MCP.
+- Prefer native `web_search` / `web_fetch` in the system prompt. Pin `allowed_callers: ["direct"]`.
+  Do not add an undeclared `code_execution` tool, `tool_search`, advisor, or MCP.
 - Leave unknown `server_tool_use` fail-closed as `:unexpected_tool_use`.
+- Automatic recover_failed must not reopen `code_execution_failed`. Operator reprocess starts a
+  new paid attempt rather than replaying that envelope.
