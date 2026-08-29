@@ -210,15 +210,8 @@ defmodule ContextBot.Funding do
   defp ensure_handle(%{did: did} = account, labeler_did, client)
        when is_binary(did) and is_binary(labeler_did) do
     case client.get_profile(did, labeler_did) do
-      {:ok, status, _headers, %{"handle" => handle}}
-      when status in 200..299 and is_binary(handle) ->
-        case normalize_handle(handle) do
-          normalized when is_binary(normalized) -> {:ok, %{account | handle: normalized}}
-          nil -> {:ok, account}
-        end
-
-      {:ok, status, _headers, _body} when is_integer(status) and status in 200..299 ->
-        {:ok, account}
+      {:ok, status, _headers, body} when status in 200..299 ->
+        {:ok, assign_handle(account, profile_handle(body))}
 
       {:ok, status, _headers, _body} when is_integer(status) ->
         {:error, :identity_unavailable}
@@ -229,6 +222,16 @@ defmodule ContextBot.Funding do
   end
 
   defp ensure_handle(account, _labeler_did, _client), do: {:ok, account}
+
+  defp assign_handle(account, handle) do
+    case normalize_handle(handle) do
+      normalized when is_binary(normalized) -> %{account | handle: normalized}
+      nil -> account
+    end
+  end
+
+  defp profile_handle(%{"handle" => handle}), do: handle
+  defp profile_handle(_body), do: nil
 
   defp reply_refs(%{"record" => %{"reply" => reply}}) when is_map(reply), do: {:ok, reply}
   defp reply_refs(_notification), do: :none

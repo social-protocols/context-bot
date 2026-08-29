@@ -220,19 +220,17 @@ defmodule ContextBot.Eligibility do
     keys = settings.funding_keys
     accounts = Funding.thread_accounts(context[:notification], actor_did, observed_handle)
 
-    cond do
-      keys == [] or accounts == [] ->
-        Funding.community_payer()
+    if keys == [] or accounts == [] do
+      Funding.community_payer()
+    else
+      case resolve_funding_accounts(accounts, keys, settings, client) do
+        {:ok, resolved} ->
+          chooser = context[:choose] || (&Enum.random/1)
+          Funding.payer_attrs(Funding.select(resolved, keys, chooser))
 
-      true ->
-        case resolve_funding_accounts(accounts, keys, settings, client) do
-          {:ok, resolved} ->
-            chooser = context[:choose] || (&Enum.random/1)
-            Funding.payer_attrs(Funding.select(resolved, keys, chooser))
-
-          {:error, _reason} ->
-            Funding.community_payer()
-        end
+        {:error, _reason} ->
+          Funding.community_payer()
+      end
     end
   end
 
