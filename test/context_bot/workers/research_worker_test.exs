@@ -265,6 +265,23 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert markdown =~ "`model`: claude-sonnet-5"
     assert markdown =~ "canonical thread"
     assert markdown =~ "Hidden model reasoning is not available"
+    assert markdown =~ "[Continue this conversation in Claude](https://claude.ai/new?q="
+
+    reader_url = "https://standard-reader.app/a/#{@bot_did}/#{doc_rkey}"
+
+    assert [_, href] =
+             Regex.run(
+               ~r/\[Continue this conversation in Claude\]\((https:\/\/claude\.ai\/new\?q=[^)]+)\)/,
+               markdown
+             )
+
+    %URI{query: query} = URI.parse(href)
+    assert %{"q" => starter} = URI.decode_query(query)
+    assert starter =~ reader_url
+    refute starter =~ "Thorough markdown writeup."
+    refute starter =~ Request.system_prompt()
+    refute href =~ "attachment="
+    refute href =~ "claude://"
 
     assert persisted.full_response == "Thorough markdown writeup."
 

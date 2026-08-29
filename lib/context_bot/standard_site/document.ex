@@ -3,7 +3,8 @@ defmodule ContextBot.StandardSite.Document do
   Builds and publishes Standard.site document records containing full research responses.
 
   New documents use the invoking question as Reader `title`/`description` and open the
-  Markpub body with an Asked block. Existing published records are not rewritten.
+  Markpub body with an Asked block plus a Claude continue link. Existing published
+  records are not rewritten.
   """
 
   alias ContextBot.ATProto.{Client, TID}
@@ -11,6 +12,8 @@ defmodule ContextBot.StandardSite.Document do
 
   @collection "site.standard.document"
   @reader_base_url "https://standard-reader.app/a"
+  @claude_new_url "https://claude.ai/new"
+  @continue_link_text "Continue this conversation in Claude"
   @parameter_order [
     "anthropic-version",
     "model",
@@ -40,7 +43,8 @@ defmodule ContextBot.StandardSite.Document do
           required(:user_message) => %{required(String.t()) => term()},
           optional(:asked_text) => String.t(),
           optional(:parent_uri) => String.t() | nil,
-          optional(:document_title) => String.t() | nil
+          optional(:document_title) => String.t() | nil,
+          optional(:document_reader_url) => String.t()
         }
 
   @type result ::
@@ -64,12 +68,19 @@ defmodule ContextBot.StandardSite.Document do
              is_map(content) and is_struct(created_at, DateTime) do
     with :ok <- validate_public_inputs(content) do
       rkey = TID.generate(DateTime.to_unix(created_at, :microsecond))
-      record = build_record(publication_uri, content, created_at)
+      document_url = reader_url(repo, rkey)
+
+      record =
+        build_record(
+          publication_uri,
+          Map.put(content, :document_reader_url, document_url),
+          created_at
+        )
 
       case client.put_record(repo, @collection, rkey, record) do
         {:ok, _status, _headers, _body} ->
           uri = "at://#{repo}/#{@collection}/#{rkey}"
-          {:ok, %{uri: uri, rkey: rkey, reader_url: reader_url(repo, rkey)}}
+          {:ok, %{uri: uri, rkey: rkey, reader_url: document_url}}
 
         {:error, reason} ->
           {:error, reason}
@@ -152,6 +163,10 @@ defmodule ContextBot.StandardSite.Document do
   Requires a prompt-document reader URL, prompt identity/hash, the allowlisted
   Messages API parameters, and the canonical user message. Missing prompt inputs
   are a create error; they are never omitted from a published full response.
+
+  New documents also include a `claude.ai/new?q=` continue link whose starter
+  prompt names this document's Standard Reader URL. The writeup and system
+  prompt are not copied into the query string.
   """
   @spec format_markdown(document_content()) :: String.t()
   def format_markdown(
@@ -168,6 +183,8 @@ defmodule ContextBot.StandardSite.Document do
 
     """
     #{PageCopy.asked_markdown(content)}
+
+    #{continue_markdown(content)}
 
     # Research Analysis
 
@@ -204,6 +221,39 @@ defmodule ContextBot.StandardSite.Document do
     ```
     #{format_images(user_message)}
     """
+  end
+
+  defp continue_markdown(content) do
+    case document_reader_url(content) do
+      url when is_binary(url) ->
+        "[#{@continue_link_text}](#{claude_continue_href(url)})"
+
+      _missing ->
+        ""
+    end
+  end
+
+  defp claude_continue_href(reader_url) do
+    "#{@claude_new_url}?q=#{URI.encode_www_form(continue_starter_prompt(reader_url))}"
+  end
+
+  defp continue_starter_prompt(reader_url) do
+    """
+    Please fetch and use this public Context Bot research page as prior context: #{reader_url}
+
+    Then wait for my follow-up. Do not summarize unless I ask.
+    """
+    |> String.trim()
+  end
+
+  defp document_reader_url(content) when is_map(content) do
+    case Map.get(content, :document_reader_url) || Map.get(content, "document_reader_url") do
+      url when is_binary(url) and url != "" ->
+        if String.starts_with?(url, "#{@reader_base_url}/"), do: url, else: nil
+
+      _missing ->
+        nil
+    end
   end
 
   defp validate_public_inputs(%{
