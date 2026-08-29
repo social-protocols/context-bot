@@ -225,7 +225,10 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
       })
 
     configure_runner(
-      {:ok, runner_result() |> Map.put(:full_response, "Thorough markdown writeup.")}
+      {:ok,
+       runner_result()
+       |> Map.put(:full_response, "Thorough markdown writeup.")
+       |> Map.put(:document_title, "What Is That Bird?")}
     )
 
     configure_worker(atproto_client: FakeStandardSiteTrackingClient)
@@ -248,13 +251,14 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert doc_rkey != prompt_rkey
     assert doc_record["$type"] == "site.standard.document"
     assert doc_record["textContent"] == "Thorough markdown writeup."
-    assert doc_record["title"] == "What bird is that?"
-    assert doc_record["description"] == "What bird is that?"
+    assert doc_record["title"] == "What Is That Bird?"
+    assert doc_record["description"] == "@getcontext.bot What bird is that?"
     refute doc_record["title"] =~ "Context on"
+    refute doc_record["description"] == "What bird is that?"
 
     markdown = doc_record["content"]["text"]["markdown"]
     assert markdown =~ "## Asked"
-    assert markdown =~ "What bird is that?"
+    assert markdown =~ "@getcontext.bot What bird is that?"
     assert markdown =~ "https://bsky.app/profile/did:plc:actor/post/full-response-compact"
     assert markdown =~ "https://bsky.app/profile/did:plc:bob/post/3parentrkey12"
     assert markdown =~ "Thorough markdown writeup."

@@ -2,9 +2,9 @@ defmodule ContextBot.StandardSite.Document do
   @moduledoc """
   Builds and publishes Standard.site document records containing full research responses.
 
-  New documents use the invoking question as Reader `title`/`description` and open the
-  Markpub body with an Asked block plus a Claude continue link. Existing published
-  records are not rewritten.
+  New documents use a short topic summary as Reader `title`, the invoking-post
+  text as written as `description`, and open the Markpub body with an Asked block
+  plus a Claude continue link. Existing published records are not rewritten.
   """
 
   alias ContextBot.ATProto.{Client, TID}
