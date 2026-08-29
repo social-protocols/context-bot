@@ -13,8 +13,8 @@ defmodule ContextBot.Workers.ResearchWorker do
   alias ContextBot.ATProto.{Client, TID}
   alias ContextBot.{Operations, Repo}
   alias ContextBot.Reply.Intent
-  alias ContextBot.Research.Runner
-  alias ContextBot.StandardSite.{Document, Publication}
+  alias ContextBot.Research.{Request, Runner}
+  alias ContextBot.StandardSite.{Document, PromptDocument, Publication}
   alias ContextBot.Workflow.{Invocation, Store}
 
   @reply_worker "ContextBot.Workers.ReplyWorker"
@@ -285,7 +285,8 @@ defmodule ContextBot.Workers.ResearchWorker do
             client,
             repo,
             publication_uri,
-            created_at
+            created_at,
+            dependencies.settings
           )
 
         {:error, reason} ->
@@ -302,13 +303,38 @@ defmodule ContextBot.Workers.ResearchWorker do
          client,
          repo,
          publication_uri,
-         created_at
+         created_at,
+         settings
        ) do
-    content = %{
-      full_response: result.full_response,
-      selected_reply: result.text,
-      invocation_uri: invocation.invocation_uri
-    }
+    case PromptDocument.ensure_exists(client, repo, publication_uri, created_at) do
+      {:ok, prompt_doc} ->
+        create_full_response_document(
+          invocation,
+          result,
+          client,
+          repo,
+          publication_uri,
+          created_at,
+          prompt_doc,
+          settings
+        )
+
+      {:error, reason} ->
+        fail_standard_site(invocation, "site.standard.document", reason)
+    end
+  end
+
+  defp create_full_response_document(
+         invocation,
+         result,
+         client,
+         repo,
+         publication_uri,
+         created_at,
+         prompt_doc,
+         settings
+       ) do
+    content = full_response_content(invocation, result, prompt_doc, settings)
 
     case Document.create(client, repo, publication_uri, content, created_at) do
       {:ok, doc_result} ->
@@ -317,6 +343,27 @@ defmodule ContextBot.Workers.ResearchWorker do
       {:error, reason} ->
         fail_standard_site(invocation, "site.standard.document", reason)
     end
+  end
+
+  defp full_response_content(invocation, result, prompt_doc, settings) do
+    request = Map.get(result, :messages) || invocation.anthropic_messages || %{}
+
+    projection =
+      Request.public_projection(request, %{
+        anthropic_api_version: settings.anthropic_api_version,
+        research_max_tokens: settings.anthropic_research_max_tokens,
+        canonical_thread: invocation.canonical_thread,
+        canonical_media: invocation.canonical_media || []
+      })
+
+    %{
+      full_response: result.full_response,
+      selected_reply: result.text,
+      invocation_uri: invocation.invocation_uri,
+      prompt: Map.put(projection.prompt, :reader_url, prompt_doc.reader_url),
+      parameters: projection.parameters,
+      user_message: projection.user_message
+    }
   end
 
   defp fail_standard_site(invocation, collection, reason) do

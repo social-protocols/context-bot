@@ -65,6 +65,10 @@ defmodule ContextBot.Research.Request do
           | %{required(:version) => 2, required(:text) => String.t(), required(:media) => [map()]}
           | %{required(String.t()) => term()}
 
+  @prompt_id "CONTEXT_BOT_SYSTEM_V5"
+  @prompt_semantic_version "5.0.0"
+  @public_cdn_prefix "https://cdn.bsky.app/"
+
   @type config :: %{
           required(:model_id) => String.t(),
           required(:effort) => :low | :medium | :high,
@@ -75,6 +79,50 @@ defmodule ContextBot.Research.Request do
           required(:web_search_tool_type) => String.t(),
           required(:web_fetch_tool_type) => String.t()
         }
+
+  @type projection_opts :: %{
+          required(:anthropic_api_version) => String.t(),
+          optional(:research_max_tokens) => pos_integer(),
+          optional(:canonical_thread) => String.t(),
+          optional(:canonical_media) => [map()]
+        }
+
+  @type public_projection :: %{
+          prompt: %{id: String.t(), semantic_version: String.t(), sha256: String.t()},
+          parameters: %{optional(String.t()) => term()},
+          user_message: %{required(String.t()) => term()},
+          continuation: boolean(),
+          length_repair: boolean()
+        }
+
+  @doc "Versioned system prompt sent as the Messages `system` field."
+  @spec system_prompt() :: String.t()
+  def system_prompt, do: @system_prompt
+
+  @doc "User turn appended for compact-reply length repair."
+  @spec length_repair_prompt() :: String.t()
+  def length_repair_prompt, do: @length_repair
+
+  @spec system_prompt_id() :: String.t()
+  def system_prompt_id, do: @prompt_id
+
+  @spec system_prompt_semantic_version() :: String.t()
+  def system_prompt_semantic_version, do: @prompt_semantic_version
+
+  @spec system_prompt_sha256() :: String.t()
+  def system_prompt_sha256, do: sha256_hex(@system_prompt)
+
+  @spec length_repair_sha256() :: String.t()
+  def length_repair_sha256, do: sha256_hex(@length_repair)
+
+  @doc """
+  Stable Standard.site document rkey for the current system-prompt bytes.
+  """
+  @spec system_prompt_rkey() :: String.t()
+  def system_prompt_rkey do
+    id_slug = @prompt_id |> String.downcase() |> String.replace("_", "-")
+    "prompt-#{id_slug}-#{String.slice(system_prompt_sha256(), 0, 16)}"
+  end
 
   @doc """
   Builds the first Messages request from a versioned canonical thread.
@@ -203,5 +251,218 @@ defmodule ContextBot.Research.Request do
     request
     |> Map.put("max_tokens", repair_max_tokens)
     |> Map.put("messages", appended_messages)
+  end
+
+  @doc """
+  Public, credential-free projection of the Messages request we actually sent.
+
+  Includes the versioned system-prompt identity, allowlisted API parameters,
+  and the first user message (canonical thread). Never copies secrets, headers,
+  or hidden reasoning blocks.
+  """
+  @spec public_projection(map(), projection_opts()) :: public_projection()
+  def public_projection(request, opts) when is_map(request) and is_map(opts) do
+    system = system_from(request)
+    repair? = length_repair?(request)
+
+    %{
+      prompt: %{
+        id: prompt_id_from(system),
+        semantic_version: semantic_version_from(system),
+        sha256: sha256_hex(system)
+      },
+      parameters: parameters_from(request, opts, repair?),
+      user_message: user_message_from(request, opts),
+      continuation: continuation?(request, repair?),
+      length_repair: repair?
+    }
+  end
+
+  defp system_from(%{"system" => system}) when is_binary(system) and system != "", do: system
+  defp system_from(_request), do: @system_prompt
+
+  defp prompt_id_from(system) do
+    system
+    |> first_line()
+    |> case do
+      "" -> @prompt_id
+      line -> line
+    end
+  end
+
+  defp semantic_version_from(system) do
+    case Regex.run(~r/V(\d+)\s*$/i, first_line(system)) do
+      [_, number] -> "#{number}.0.0"
+      _missing -> @prompt_semantic_version
+    end
+  end
+
+  defp first_line(text) do
+    text
+    |> String.split("\n", parts: 2)
+    |> hd()
+    |> String.trim()
+  end
+
+  defp parameters_from(request, opts, repair?) do
+    %{}
+    |> put_present("anthropic-version", opt(opts, :anthropic_api_version))
+    |> put_present("model", request["model"])
+    |> put_max_tokens(request, opts, repair?)
+    |> put_present("effort", effort_from(request))
+    |> put_present("thinking", nested_type(request["thinking"]))
+    |> put_present("tool_choice", nested_type(request["tool_choice"]))
+    |> put_present("cache_control", nested_type(request["cache_control"]))
+    |> put_present("stream", request["stream"])
+    |> put_present("tools", tools_from(request["tools"]))
+    |> Map.put("continuation", continuation?(request, repair?))
+    |> Map.put("length_repair", repair?)
+  end
+
+  defp put_max_tokens(parameters, request, opts, true) do
+    parameters
+    |> put_present("max_tokens", opt(opts, :research_max_tokens) || request["max_tokens"])
+    |> put_present("research_max_tokens", opt(opts, :research_max_tokens))
+    |> put_present("length_repair_max_tokens", request["max_tokens"])
+  end
+
+  defp put_max_tokens(parameters, request, _opts, false),
+    do: put_present(parameters, "max_tokens", request["max_tokens"])
+
+  defp effort_from(%{"output_config" => %{"effort" => effort}}) when is_binary(effort),
+    do: effort
+
+  defp effort_from(_request), do: nil
+
+  defp nested_type(%{"type" => type}) when is_binary(type), do: type
+  defp nested_type(_value), do: nil
+
+  defp tools_from(tools) when is_list(tools) do
+    Enum.map(tools, fn
+      tool when is_map(tool) ->
+        %{}
+        |> put_present("type", tool["type"])
+        |> put_present("name", tool["name"])
+        |> put_present("allowed_callers", tool["allowed_callers"])
+        |> put_present("response_inclusion", tool["response_inclusion"])
+        |> put_present("max_uses", tool["max_uses"])
+        |> put_present("max_content_tokens", tool["max_content_tokens"])
+
+      _other ->
+        %{"omitted" => true}
+    end)
+  end
+
+  defp tools_from(_tools), do: nil
+
+  defp user_message_from(request, opts) do
+    case first_user_content(request) do
+      nil -> fallback_user_message(opts)
+      content when is_binary(content) -> %{"text" => content, "images" => []}
+      content when is_list(content) -> content_blocks(content)
+    end
+  end
+
+  defp fallback_user_message(opts) do
+    text = opt(opts, :canonical_thread)
+
+    images =
+      opts
+      |> opt(:canonical_media)
+      |> List.wrap()
+      |> Enum.flat_map(&public_media_image/1)
+
+    %{"text" => text || "", "images" => images}
+  end
+
+  defp content_blocks(blocks) do
+    {texts, images} =
+      Enum.reduce(blocks, {[], []}, fn block, {texts, images} ->
+        case public_content_block(block) do
+          {:text, text} -> {texts ++ [text], images}
+          {:image, url} -> {texts, images ++ [%{"url" => url}]}
+          :omit -> {texts, images}
+        end
+      end)
+
+    %{"text" => Enum.join(texts, "\n\n"), "images" => images}
+  end
+
+  defp public_content_block(%{"type" => "text", "text" => text}) when is_binary(text),
+    do: {:text, text}
+
+  defp public_content_block(%{"type" => "image", "source" => %{"type" => "url", "url" => url}})
+       when is_binary(url) do
+    case public_image_url(url) do
+      nil -> :omit
+      public_url -> {:image, public_url}
+    end
+  end
+
+  defp public_content_block(_block), do: :omit
+
+  defp public_media_image(%{"type" => "image", "url" => url}) when is_binary(url) do
+    case public_image_url(url) do
+      nil -> []
+      public_url -> [%{"url" => public_url}]
+    end
+  end
+
+  defp public_media_image(_media), do: []
+
+  defp public_image_url(url) do
+    if String.starts_with?(url, @public_cdn_prefix), do: url
+  end
+
+  defp first_user_content(%{"messages" => messages}) when is_list(messages) do
+    Enum.find_value(messages, fn
+      %{"role" => "user", "content" => content} -> content
+      _other -> nil
+    end)
+  end
+
+  defp first_user_content(_request), do: nil
+
+  defp last_user_content(%{"messages" => messages}) when is_list(messages) do
+    messages
+    |> Enum.reverse()
+    |> Enum.find_value(fn
+      %{"role" => "user", "content" => content} -> content
+      _other -> nil
+    end)
+  end
+
+  defp last_user_content(_request), do: nil
+
+  defp length_repair?(request) do
+    case last_user_content(request) do
+      content when is_binary(content) -> String.starts_with?(content, "LENGTH_REPAIR")
+      _other -> false
+    end
+  end
+
+  defp continuation?(request, repair?) do
+    assistant_count =
+      request
+      |> Map.get("messages", [])
+      |> List.wrap()
+      |> Enum.count(&match?(%{"role" => "assistant"}, &1))
+
+    minimum = if repair?, do: 1, else: 0
+    assistant_count > minimum
+  end
+
+  defp opt(opts, key) when is_atom(key) do
+    Map.get(opts, key) || Map.get(opts, Atom.to_string(key))
+  end
+
+  defp put_present(map, _key, nil), do: map
+  defp put_present(map, _key, ""), do: map
+  defp put_present(map, key, value), do: Map.put(map, key, value)
+
+  defp sha256_hex(text) when is_binary(text) do
+    :sha256
+    |> :crypto.hash(text)
+    |> Base.encode16(case: :lower)
   end
 end

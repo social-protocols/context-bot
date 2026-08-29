@@ -10,11 +10,33 @@ defmodule ContextBot.StandardSite.Document do
 
   @collection "site.standard.document"
   @reader_base_url "https://standard-reader.app/a"
+  @parameter_order [
+    "anthropic-version",
+    "model",
+    "max_tokens",
+    "effort",
+    "thinking",
+    "tool_choice",
+    "cache_control",
+    "stream",
+    "continuation",
+    "length_repair",
+    "research_max_tokens",
+    "length_repair_max_tokens"
+  ]
 
   @type document_content :: %{
           required(:full_response) => String.t(),
           required(:selected_reply) => String.t(),
-          required(:invocation_uri) => String.t()
+          required(:invocation_uri) => String.t(),
+          required(:prompt) => %{
+            required(:id) => String.t(),
+            required(:semantic_version) => String.t(),
+            required(:sha256) => String.t(),
+            required(:reader_url) => String.t()
+          },
+          required(:parameters) => %{optional(String.t()) => term()},
+          required(:user_message) => %{required(String.t()) => term()}
         }
 
   @type result ::
@@ -36,16 +58,18 @@ defmodule ContextBot.StandardSite.Document do
       )
       when is_binary(repo) and is_binary(publication_uri) and
              is_map(content) and is_struct(created_at, DateTime) do
-    rkey = TID.generate(DateTime.to_unix(created_at, :microsecond))
-    record = build_record(publication_uri, content, created_at)
+    with :ok <- validate_public_inputs(content) do
+      rkey = TID.generate(DateTime.to_unix(created_at, :microsecond))
+      record = build_record(publication_uri, content, created_at)
 
-    case client.put_record(repo, @collection, rkey, record) do
-      {:ok, _status, _headers, _body} ->
-        uri = "at://#{repo}/#{@collection}/#{rkey}"
-        {:ok, %{uri: uri, rkey: rkey, reader_url: reader_url(repo, rkey)}}
+      case client.put_record(repo, @collection, rkey, record) do
+        {:ok, _status, _headers, _body} ->
+          uri = "at://#{repo}/#{@collection}/#{rkey}"
+          {:ok, %{uri: uri, rkey: rkey, reader_url: reader_url(repo, rkey)}}
 
-      {:error, reason} ->
-        {:error, reason}
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
@@ -115,16 +139,26 @@ defmodule ContextBot.StandardSite.Document do
     }
   end
 
-  defp title_from_invocation(invocation_uri) do
-    # Extract a short title from the invocation URI
-    # e.g., "at://did:plc:abc123.../app.bsky.feed.post/3k..." -> "Context on 3k..."
-    case String.split(invocation_uri, "/") do
-      [_, _, _, _, rkey] -> "Context on #{String.slice(rkey, 0..7)}..."
-      _ -> "Context Research"
-    end
-  end
+  @doc """
+  Markdown published on the Standard Reader full-response page.
 
-  defp format_markdown(%{full_response: full_response, selected_reply: selected_reply}) do
+  Requires a prompt-document reader URL, prompt identity/hash, the allowlisted
+  Messages API parameters, and the canonical user message. Missing prompt inputs
+  are a create error; they are never omitted from a published full response.
+  """
+  @spec format_markdown(document_content()) :: String.t()
+  def format_markdown(
+        %{
+          full_response: full_response,
+          selected_reply: selected_reply,
+          prompt: prompt,
+          parameters: parameters,
+          user_message: user_message
+        } = content
+      )
+      when is_binary(full_response) and is_binary(selected_reply) do
+    :ok = validate_public_inputs(content)
+
     """
     # Research Analysis
 
@@ -135,6 +169,149 @@ defmodule ContextBot.StandardSite.Document do
     ## Summary
 
     #{selected_reply}
+
+    ---
+
+    ## How this response was produced
+
+    Prompt template: [#{prompt.id}](#{prompt.reader_url})
+    Semantic version: `#{prompt.semantic_version}`
+    SHA-256: `#{prompt.sha256}`
+
+    Hidden model reasoning is not available and is not part of this page. The same
+    prompt and parameters do not guarantee an identical Claude response.
+
+    ### Messages API parameters
+
+    #{format_parameters(parameters)}
+
+    #{format_tools(parameters)}
+    ### Canonical thread
+
+    The first user message sent to the Messages API:
+
+    ```
+    #{user_message_text(user_message)}
+    ```
+    #{format_images(user_message)}
     """
+  end
+
+  defp title_from_invocation(invocation_uri) do
+    # Extract a short title from the invocation URI
+    # e.g., "at://did:plc:abc123.../app.bsky.feed.post/3k..." -> "Context on 3k..."
+    case String.split(invocation_uri, "/") do
+      [_, _, _, _, rkey] -> "Context on #{String.slice(rkey, 0..7)}..."
+      _ -> "Context Research"
+    end
+  end
+
+  defp validate_public_inputs(%{
+         prompt: prompt,
+         parameters: parameters,
+         user_message: user_message
+       })
+       when is_map(prompt) and is_map(parameters) and is_map(user_message) do
+    with :ok <- validate_prompt(prompt) do
+      validate_user_message(user_message)
+    end
+  end
+
+  defp validate_public_inputs(_content), do: {:error, :prompt_inputs_missing}
+
+  defp validate_prompt(%{id: id, semantic_version: version, sha256: sha256, reader_url: url})
+       when is_binary(id) and id != "" and is_binary(version) and version != "" and
+              is_binary(sha256) and sha256 != "" and is_binary(url) and
+              byte_size(url) > 0 do
+    if String.starts_with?(url, "#{@reader_base_url}/") do
+      :ok
+    else
+      {:error, :prompt_inputs_missing}
+    end
+  end
+
+  defp validate_prompt(_prompt), do: {:error, :prompt_inputs_missing}
+
+  defp validate_user_message(user_message) do
+    case user_message_text(user_message) do
+      text when text != "" -> :ok
+      _empty -> {:error, :prompt_inputs_missing}
+    end
+  end
+
+  defp user_message_text(%{"text" => text}) when is_binary(text), do: text
+  defp user_message_text(%{text: text}) when is_binary(text), do: text
+  defp user_message_text(_user_message), do: ""
+
+  defp format_parameters(parameters) do
+    @parameter_order
+    |> Enum.filter(&Map.has_key?(parameters, &1))
+    |> Enum.map_join("\n", fn key ->
+      "- `#{key}`: #{format_parameter_value(parameters[key])}"
+    end)
+  end
+
+  defp format_parameter_value(value) when is_binary(value), do: value
+
+  defp format_parameter_value(value) when is_boolean(value) or is_integer(value),
+    do: to_string(value)
+
+  defp format_parameter_value(value), do: inspect(value)
+
+  defp format_tools(%{"tools" => tools}) when is_list(tools) and tools != [] do
+    rows =
+      Enum.map_join(tools, "\n", fn tool ->
+        name = tool["name"] || tool["type"] || "tool"
+        details = tool_detail_parts(tool)
+        "- `#{name}` (#{tool["type"]}): #{Enum.join(details, ", ")}"
+      end)
+
+    """
+    ### Tools
+
+    #{rows}
+
+    """
+  end
+
+  defp format_tools(_parameters), do: ""
+
+  defp tool_detail_parts(tool) do
+    []
+    |> maybe_tool_part("allowed_callers", tool["allowed_callers"])
+    |> maybe_tool_part("max_uses", tool["max_uses"])
+    |> maybe_tool_part("max_content_tokens", tool["max_content_tokens"])
+    |> maybe_tool_part("response_inclusion", tool["response_inclusion"])
+  end
+
+  defp maybe_tool_part(parts, _key, nil), do: parts
+
+  defp maybe_tool_part(parts, key, value),
+    do: parts ++ ["#{key}=#{format_parameter_value(value)}"]
+
+  defp format_images(user_message) do
+    images = user_message["images"] || user_message[:images] || []
+
+    urls =
+      Enum.flat_map(List.wrap(images), fn
+        %{"url" => url} when is_binary(url) and url != "" -> [url]
+        %{url: url} when is_binary(url) and url != "" -> [url]
+        _other -> []
+      end)
+
+    case urls do
+      [] ->
+        ""
+
+      urls ->
+        list = Enum.map_join(urls, "\n", fn url -> "- #{url}" end)
+
+        """
+
+        Images included in that message:
+
+        #{list}
+        """
+    end
   end
 end
