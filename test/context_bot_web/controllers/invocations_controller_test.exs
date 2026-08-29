@@ -335,6 +335,42 @@ defmodule ContextBotWeb.InvocationsControllerTest do
       assert body =~ "API key invalid"
     end
 
+    test "error tooltip shows only the truncated category and reason", %{conn: conn} do
+      {:ok, _inv} =
+        %Invocation{}
+        |> Invocation.changeset(%{
+          dry_run: false,
+          invocation_uri: "at://did:plc:test/app.bsky.feed.post/abc123",
+          notification_cid: "cid1",
+          current_cid: "cid1",
+          actor_did: "did:plc:test",
+          actor_handle: "test.bsky.social",
+          raw_notification: %{},
+          received_at: ~U[2026-08-26 10:00:00Z],
+          status: :failed,
+          stage: :failed,
+          failure_category: :provider_auth,
+          failure_detail: %{
+            "reason" => "API key invalid",
+            "collection" => "site.standard.document",
+            "status" => 400,
+            "error" => "InvalidRequest",
+            "raw" => "SECRET_FAILURE_DETAIL"
+          }
+        })
+        |> Repo.insert()
+
+      conn = get(conn, ~p"/invocations")
+      body = html_response(conn, 200)
+
+      assert body =~ ~s(title="provider_auth: API key invalid")
+      assert body =~ "provider_auth: API key invalid"
+      refute body =~ "SECRET_FAILURE_DETAIL"
+      refute body =~ "InvalidRequest"
+      refute body =~ ~s("collection")
+      refute body =~ ~s("status")
+    end
+
     test "links to the full Standard Reader response when standard_site_document_uri exists", %{
       conn: conn
     } do
