@@ -1,8 +1,8 @@
 defmodule ContextBot.Workers.EligibilityWorkerTest.GateStub do
   @moduledoc false
 
-  def check(actor_did, observed_handle, now, settings, client) do
-    send(self(), {:eligibility_check, actor_did, observed_handle, now, settings, client})
+  def check(actor_did, observed_handle, now, settings, client, context \\ %{}) do
+    send(self(), {:eligibility_check, actor_did, observed_handle, now, settings, client, context})
 
     case Process.get({__MODULE__, :result}) do
       nil -> raise "eligibility result was not configured"
@@ -104,7 +104,9 @@ defmodule ContextBot.Workers.EligibilityWorkerTest do
 
     assert :ok = perform(invocation)
 
-    assert_received {:eligibility_check, @actor_did, "actor.example", @now, _settings, _client}
+    assert_received {:eligibility_check, @actor_did, "actor.example", @now, _settings, _client,
+                     _context}
+
     persisted = Repo.reload!(invocation)
     assert persisted.status == :ineligible
     assert persisted.eligibility_method == nil
@@ -144,6 +146,40 @@ defmodule ContextBot.Workers.EligibilityWorkerTest do
            }
 
     assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "persists the chosen fund id and matched handle without a credential" do
+    invocation = invocation("funded-payer", :received)
+
+    Process.put(
+      {GateStub, :result},
+      {:eligible, :funded_handle,
+       %{
+         "fund_id" => "jw",
+         "handle" => "jonathanwarden.com",
+         "source" => "funded_handle",
+         "api_key" => "funding-test-key-never-expose"
+       }}
+    )
+
+    configure(settings(), eligibility: GateStub)
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.status == :capturing_thread
+    assert persisted.eligibility_method == "funded_handle"
+    assert persisted.payer_kind == "funded_handle"
+    assert persisted.payer_fund_id == "jw"
+    assert persisted.payer_handle == "jonathanwarden.com"
+
+    assert persisted.eligibility_evidence == %{
+             "fund_id" => "jw",
+             "handle" => "jonathanwarden.com",
+             "source" => "funded_handle"
+           }
+
+    refute inspect(persisted) =~ "funding-test-key-never-expose"
   end
 
   test "stores only bounded allowlisted evidence fields" do

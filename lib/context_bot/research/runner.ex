@@ -203,7 +203,7 @@ defmodule ContextBot.Research.Runner do
          :ok <- crash(config, :after_sent, sent),
          {:ok, _current_claim} <-
            config.store.renew_research_claim(invocation, config.claim_token, now(config)) do
-      case config.client.send_message(request, metadata(sent)) do
+      case config.client.send_message(request, metadata(sent, invocation)) do
         {:ok, envelope} -> persist_envelope(invocation, sent, envelope, config)
         {:error, reason} -> handle_transport_error(invocation, sent, reason, config)
       end
@@ -731,7 +731,15 @@ defmodule ContextBot.Research.Runner do
     |> Repo.exists?()
   end
 
-  defp metadata(entry), do: %{attempt_key: entry.attempt_key, kind: entry.kind}
+  defp metadata(entry, invocation) do
+    %{attempt_key: entry.attempt_key, kind: entry.kind}
+    |> maybe_put_fund_id(invocation.payer_fund_id)
+  end
+
+  defp maybe_put_fund_id(metadata, fund_id) when is_binary(fund_id) and fund_id != "",
+    do: Map.put(metadata, :fund_id, fund_id)
+
+  defp maybe_put_fund_id(metadata, _fund_id), do: metadata
 
   defp response_value(response, key),
     do: Map.get(response, key, Map.get(response, Atom.to_string(key)))

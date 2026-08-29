@@ -56,6 +56,7 @@ config :context_bot, ContextBot.ATProto.PublicClient,
   req_options: [plug: {Req.Test, ContextBot.ATProto.PublicClient}]
 
 config :context_bot, :anthropic_api_key, "anthropic-test-key-never-expose"
+config :context_bot, :funding_api_keys, %{}
 
 config :context_bot, ContextBot.Research.AnthropicClient,
   base_url: "https://api.anthropic.test",

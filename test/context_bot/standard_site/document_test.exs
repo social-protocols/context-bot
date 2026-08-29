@@ -289,6 +289,45 @@ defmodule ContextBot.StandardSite.DocumentTest do
       refute markdown =~ "3parentrkey12"
       refute block =~ "What bird is that?"
     end
+
+    test "attributes a funded-handle payer in the footer without a donate link when unset" do
+      markdown =
+        Document.format_markdown(
+          Map.merge(@content, %{
+            funding: %{kind: "funded_handle", handle: "jonathanwarden.com"},
+            sponsors_url: nil
+          })
+        )
+
+      assert markdown =~ "Funded for @jonathanwarden.com"
+      refute markdown =~ "sk-ant"
+      refute markdown =~ "funding-test-key"
+      refute markdown =~ "Funded from the community pot"
+      refute markdown =~ "github.com/sponsors"
+    end
+
+    test "attributes the community pot and includes a configured Sponsors URL" do
+      markdown =
+        Document.format_markdown(
+          Map.merge(@content, %{
+            funding: %{kind: "community_pot"},
+            sponsors_url: "https://github.com/sponsors/example"
+          })
+        )
+
+      assert markdown =~ "Funded from the community pot"
+      assert markdown =~ "[GitHub Sponsors](https://github.com/sponsors/example)"
+      refute markdown =~ "Funded for @"
+    end
+
+    test "omits the Sponsors link entirely when the URL is unset" do
+      markdown = Document.format_markdown(@content)
+
+      assert markdown =~ "Funded from the community pot"
+      refute markdown =~ "github.com/sponsors"
+      refute markdown =~ "johnwarden"
+      refute markdown =~ "social-protocols"
+    end
   end
 
   describe "reader_url_from_uri/1" do

@@ -5,6 +5,7 @@ defmodule ContextBot.Research.AnthropicClient do
 
   @behaviour ContextBot.Research.Client
 
+  alias ContextBot.Funding
   alias ContextBot.HTTP.BodyLimit
 
   @base_url "https://api.anthropic.com"
@@ -35,7 +36,7 @@ defmodule ContextBot.Research.AnthropicClient do
   defp request(attempt_metadata, settings) do
     config = config()
     timeout = config[:timeout] || settings.anthropic_http_timeout_ms
-    api_key = Application.fetch_env!(:context_bot, :anthropic_api_key)
+    api_key = Funding.credential(fund_id(attempt_metadata))
 
     common_options = [
       base_url: config[:base_url] || @base_url,
@@ -129,6 +130,12 @@ defmodule ContextBot.Research.AnthropicClient do
     do: Map.put(envelope, :headers_truncated, true)
 
   defp maybe_mark_headers_truncated(envelope, false), do: envelope
+
+  defp fund_id(metadata) when is_map(metadata) do
+    metadata[:fund_id] || metadata["fund_id"]
+  end
+
+  defp fund_id(_metadata), do: nil
 
   defp config, do: Application.get_env(:context_bot, __MODULE__, [])
 end

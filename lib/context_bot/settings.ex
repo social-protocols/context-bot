@@ -3,6 +3,7 @@ defmodule ContextBot.Settings do
   Validated, non-secret runtime settings for the Context Bot workflow.
   """
 
+  alias ContextBot.Funding
   alias ContextBot.Money
   alias ContextBot.Research.{Pricing, ResponseEnvelope}
 
@@ -100,6 +101,7 @@ defmodule ContextBot.Settings do
     :anthropic_retry_reservation_microdollars,
     :anthropic_pricing_version,
     :operator_allowed_dids,
+    :funding_keys,
     :skywatch_did,
     :elder_label
   ]
@@ -147,6 +149,8 @@ defmodule ContextBot.Settings do
     :max_response_bytes,
     :max_storage_bytes,
     :operator_allowed_dids,
+    :funding_keys,
+    :sponsors_url,
     :skywatch_did,
     :elder_label
   ]
@@ -193,9 +197,13 @@ defmodule ContextBot.Settings do
           max_response_bytes: pos_integer(),
           max_storage_bytes: pos_integer(),
           operator_allowed_dids: [String.t()],
+          funding_keys: [funding_key()],
+          sponsors_url: String.t() | nil,
           skywatch_did: String.t(),
           elder_label: String.t()
         }
+
+  @type funding_key :: %{id: String.t(), patterns: [String.t()]}
 
   @spec load(
           keyword()
@@ -450,6 +458,8 @@ defmodule ContextBot.Settings do
         ),
       operator_allowed_dids:
         did_list!(environment, "OPERATOR_ALLOWED_DIDS", :operator_allowed_dids, []),
+      funding_keys: funding_keys!(environment),
+      sponsors_url: optional_url(environment, "SPONSORS_URL", :sponsors_url),
       skywatch_did: @skywatch_did,
       elder_label: @elder_label
     }
@@ -616,6 +626,7 @@ defmodule ContextBot.Settings do
 
     validate_optional_did!(settings.bot_did, "BOT_DID")
     validate_optional_url!(settings.bot_pds_url, "BOT_PDS_URL")
+    validate_optional_url!(settings.sponsors_url, "SPONSORS_URL")
 
     if settings.max_storage_bytes <= settings.max_response_bytes do
       raise ArgumentError, "MAX_STORAGE_BYTES must be greater than MAX_RESPONSE_BYTES"
@@ -755,6 +766,71 @@ defmodule ContextBot.Settings do
     |> url!("APPVIEW_URL", :appview_url, @default_appview_url)
     |> validate_appview_url!()
   end
+
+  defp funding_keys!(environment) do
+    case fetch(environment, "FUNDING_KEYS", :funding_keys, []) do
+      values when is_list(values) ->
+        normalize_funding_keys!(values)
+
+      "" ->
+        []
+
+      values when is_binary(values) ->
+        parse_funding_keys!(values)
+
+      _invalid ->
+        raise ArgumentError,
+              "FUNDING_KEYS must be a comma-separated id:pattern|pattern list"
+    end
+  end
+
+  defp parse_funding_keys!(values) do
+    entries = String.split(values, ",", trim: true)
+
+    if Enum.join(entries, ",") != values do
+      raise ArgumentError, "FUNDING_KEYS must be exact id:pattern|pattern entries"
+    end
+
+    entries
+    |> Enum.map(&parse_funding_key_entry!/1)
+    |> normalize_funding_keys!()
+  end
+
+  defp parse_funding_key_entry!(entry) do
+    case String.split(entry, ":", parts: 2) do
+      [id, patterns] when patterns != "" ->
+        %{id: id, patterns: String.split(patterns, "|", trim: true)}
+
+      _invalid ->
+        raise ArgumentError, "FUNDING_KEYS must be exact id:pattern|pattern entries"
+    end
+  end
+
+  defp normalize_funding_keys!(keys) when is_list(keys) do
+    normalized = Enum.map(keys, &normalize_funding_key!/1)
+    ids = Enum.map(normalized, & &1.id)
+
+    if ids != Enum.uniq(ids) do
+      raise ArgumentError, "FUNDING_KEYS must contain unique fund ids"
+    end
+
+    normalized
+  end
+
+  defp normalize_funding_key!(%{id: id, patterns: patterns})
+       when is_binary(id) and is_list(patterns) and patterns != [] do
+    unless Funding.valid_fund_id?(id) do
+      raise ArgumentError, "FUNDING_KEYS must contain lowercase opaque fund ids"
+    end
+
+    %{id: id, patterns: Enum.map(patterns, &Funding.normalize_pattern!(&1, "FUNDING_KEYS"))}
+  end
+
+  defp normalize_funding_key!(%{"id" => id, "patterns" => patterns}),
+    do: normalize_funding_key!(%{id: id, patterns: patterns})
+
+  defp normalize_funding_key!(_key),
+    do: raise(ArgumentError, "FUNDING_KEYS must contain id and patterns")
 
   defp did_list!(environment, environment_key, option_key, default) do
     case fetch(environment, environment_key, option_key, default) do

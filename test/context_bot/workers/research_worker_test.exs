@@ -274,6 +274,9 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert markdown =~ "canonical thread"
     assert markdown =~ "Hidden model reasoning is not available"
     assert markdown =~ "[Continue this conversation in Claude](https://claude.ai/new?q="
+    assert markdown =~ "Funded from the community pot"
+    refute markdown =~ "sk-ant"
+    refute markdown =~ "funding-test-key"
 
     reader_url = "https://standard-reader.app/a/#{@bot_did}/#{doc_rkey}"
 

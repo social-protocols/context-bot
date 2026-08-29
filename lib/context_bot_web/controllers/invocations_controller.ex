@@ -28,6 +28,8 @@ defmodule ContextBotWeb.InvocationsController do
         status: i.status,
         stage: i.stage,
         actor_handle: i.actor_handle,
+        payer_kind: i.payer_kind,
+        payer_handle: i.payer_handle,
         dry_run: i.dry_run,
         invocation_uri: i.invocation_uri,
         reply_uri: i.reply_uri,
@@ -210,6 +212,7 @@ defmodule ContextBotWeb.InvocationsController do
             <th>Status</th>
             <th>Stage</th>
             <th>Actor</th>
+            <th>Payer</th>
             <th>Dry Run</th>
             <th>Attempts</th>
             <th>Error</th>
@@ -238,6 +241,7 @@ defmodule ContextBotWeb.InvocationsController do
             <td class="status-#{inv.status}">#{inv.status}</td>
             <td>#{inv.stage}</td>
             <td>#{escape_html(inv.actor_handle || "")}</td>
+            <td>#{escape_html(payer_label(inv))}</td>
             <td>#{if inv.dry_run, do: "yes", else: ""}</td>
             <td>#{inv.anthropic_attempt_sequence}</td>
             <td class="error-cell" title="#{error}">
@@ -259,6 +263,13 @@ defmodule ContextBotWeb.InvocationsController do
           </tr>
     """
   end
+
+  defp payer_label(%{payer_kind: "funded_handle", payer_handle: handle})
+       when is_binary(handle) and handle != "",
+       do: "@#{handle}"
+
+  defp payer_label(%{payer_kind: "community_pot"}), do: "community pot"
+  defp payer_label(_inv), do: ""
 
   defp bluesky_post_url(uri) do
     case parse_at_uri(uri) do

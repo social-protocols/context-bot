@@ -5,23 +5,25 @@ defmodule ContextBot.Eligibility do
   All provider access is injected so the decision stays deterministic for a supplied clock.
   """
 
-  alias ContextBot.Settings
+  alias ContextBot.{Funding, Settings}
 
-  @type method :: :operator_allowlist | :bluesky_elder | :bsky_team
+  @type method :: :operator_allowlist | :bluesky_elder | :bsky_team | :funded_handle
   @type result :: {:eligible, method(), map()} | :ineligible | {:error, atom()}
 
-  @spec check(String.t(), String.t() | nil, DateTime.t(), Settings.t(), module()) :: result()
-  def check(actor_did, observed_handle, now, %Settings{} = settings, client)
-      when is_binary(actor_did) and is_struct(now, DateTime) and is_atom(client) do
+  @spec check(String.t(), String.t() | nil, DateTime.t(), Settings.t(), module(), map()) ::
+          result()
+  def check(actor_did, observed_handle, now, %Settings{} = settings, client, context \\ %{})
+      when is_binary(actor_did) and is_struct(now, DateTime) and is_atom(client) and
+             is_map(context) do
     if actor_did in settings.operator_allowed_dids do
       {:eligible, :operator_allowlist,
        %{"actor_did" => actor_did, "source" => "operator_allowlist"}}
     else
-      check_elder(actor_did, observed_handle, now, settings, client)
+      check_elder(actor_did, observed_handle, now, settings, client, context)
     end
   end
 
-  defp check_elder(actor_did, observed_handle, now, settings, client) do
+  defp check_elder(actor_did, observed_handle, now, settings, client, context) do
     case client.get_profile(actor_did, settings.skywatch_did) do
       {:ok, status, headers, %{"labels" => labels}}
       when status in 200..299 and is_map(headers) and is_list(labels) ->
@@ -32,21 +34,52 @@ defmodule ContextBot.Eligibility do
           settings,
           client,
           headers,
-          labels
+          labels,
+          context
         )
 
       {:ok, status, _headers, _body} when is_integer(status) ->
-        {:error, :labeler_unavailable}
+        team_or_funding(
+          actor_did,
+          observed_handle,
+          settings,
+          client,
+          context,
+          :labeler_unavailable
+        )
 
       _error ->
-        team_or_labeler_error(actor_did, observed_handle, client)
+        team_or_funding(
+          actor_did,
+          observed_handle,
+          settings,
+          client,
+          context,
+          :labeler_unavailable
+        )
     end
   end
 
-  defp evaluate_profile(actor_did, observed_handle, now, settings, client, headers, labels) do
+  defp evaluate_profile(
+         actor_did,
+         observed_handle,
+         now,
+         settings,
+         client,
+         headers,
+         labels,
+         context
+       ) do
     cond do
       not confirmed_labeler?(headers, settings.skywatch_did) ->
-        team_or_labeler_error(actor_did, observed_handle, client)
+        team_or_funding(
+          actor_did,
+          observed_handle,
+          settings,
+          client,
+          context,
+          :labeler_unavailable
+        )
 
       Enum.any?(labels, &active_elder_label?(&1, actor_did, now, settings)) ->
         {:eligible, :bluesky_elder,
@@ -57,7 +90,7 @@ defmodule ContextBot.Eligibility do
          }}
 
       true ->
-        check_team(actor_did, observed_handle, client)
+        check_team_or_funding(actor_did, observed_handle, settings, client, context)
     end
   end
 
@@ -108,10 +141,98 @@ defmodule ContextBot.Eligibility do
 
   defp check_team(_actor_did, _observed_handle, _client), do: :ineligible
 
-  defp team_or_labeler_error(actor_did, observed_handle, client) do
+  defp check_team_or_funding(actor_did, observed_handle, settings, client, context) do
     case check_team(actor_did, observed_handle, client) do
-      {:eligible, :bsky_team, _evidence} = eligible -> eligible
-      _not_independently_eligible -> {:error, :labeler_unavailable}
+      {:eligible, :bsky_team, _evidence} = eligible ->
+        eligible
+
+      :ineligible ->
+        check_funding(actor_did, observed_handle, settings, client, context)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp team_or_funding(actor_did, observed_handle, settings, client, context, fallback_error) do
+    case check_team(actor_did, observed_handle, client) do
+      {:eligible, :bsky_team, _evidence} = eligible ->
+        eligible
+
+      _not_independently_eligible ->
+        case check_funding(actor_did, observed_handle, settings, client, context) do
+          {:eligible, :funded_handle, _evidence} = eligible -> eligible
+          :ineligible -> {:error, fallback_error}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  defp check_funding(actor_did, observed_handle, settings, client, context) do
+    keys = settings.funding_keys
+
+    if keys == [] do
+      :ineligible
+    else
+      accounts =
+        Funding.thread_accounts(context[:notification], actor_did, observed_handle)
+
+      evaluate_funding(accounts, keys, settings, client, context)
+    end
+  end
+
+  defp evaluate_funding([], _keys, _settings, _client, _context), do: :ineligible
+
+  defp evaluate_funding(accounts, keys, settings, client, context) do
+    with {:ok, resolved} <- resolve_funding_accounts(accounts, keys, settings, client) do
+      chooser = context[:choose] || (&Enum.random/1)
+
+      case Funding.select(resolved, keys, chooser) do
+        {:ok, pick} ->
+          {:eligible, :funded_handle,
+           %{
+             "fund_id" => pick.id,
+             "handle" => pick.handle,
+             "source" => "funded_handle"
+           }}
+
+        :none ->
+          :ineligible
+      end
+    end
+  end
+
+  defp resolve_funding_accounts(accounts, keys, settings, client) do
+    if Funding.needs_handles?(keys) and Enum.any?(accounts, &is_nil(&1.handle)) do
+      Funding.resolve_handles(accounts, settings.skywatch_did, client)
+    else
+      {:ok, accounts}
+    end
+  end
+
+  @spec payer_for(String.t(), String.t() | nil, Settings.t(), module(), map()) :: %{
+          payer_kind: String.t(),
+          payer_fund_id: String.t() | nil,
+          payer_handle: String.t() | nil
+        }
+  def payer_for(actor_did, observed_handle, %Settings{} = settings, client, context \\ %{})
+      when is_binary(actor_did) and is_atom(client) and is_map(context) do
+    keys = settings.funding_keys
+    accounts = Funding.thread_accounts(context[:notification], actor_did, observed_handle)
+
+    cond do
+      keys == [] or accounts == [] ->
+        Funding.community_payer()
+
+      true ->
+        case resolve_funding_accounts(accounts, keys, settings, client) do
+          {:ok, resolved} ->
+            chooser = context[:choose] || (&Enum.random/1)
+            Funding.payer_attrs(Funding.select(resolved, keys, chooser))
+
+          {:error, _reason} ->
+            Funding.community_payer()
+        end
     end
   end
 

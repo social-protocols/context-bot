@@ -39,6 +39,25 @@ defmodule ContextBot.StandardSite.PromptDocumentTest do
       assert markdown =~ "LENGTH_REPAIR"
       assert markdown =~ Request.length_repair_sha256()
       assert markdown =~ "Hidden model reasoning is not available"
+      refute markdown =~ "Funded for"
+      refute markdown =~ "Funded from the community pot"
+      refute markdown =~ "GitHub Sponsors"
+    end
+
+    test "keeps the published prompt bytes identical to the versioned system prompt" do
+      assert {:ok, _result} =
+               PromptDocument.ensure_exists(
+                 FakeStandardSiteTrackingClient,
+                 @repo,
+                 @publication_uri,
+                 @created_at
+               )
+
+      assert_received {:standard_site_get, "site.standard.document", _rkey}
+      assert_received {:standard_site_put, "site.standard.document", _rkey, record}
+      assert record["textContent"] == Request.system_prompt()
+      assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V5"
+      refute record["textContent"] =~ "Funded for"
     end
 
     test "reuses a matching prompt document without rewriting it" do

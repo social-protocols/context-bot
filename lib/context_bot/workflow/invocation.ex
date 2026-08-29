@@ -58,6 +58,9 @@ defmodule ContextBot.Workflow.Invocation do
     :stage,
     :eligibility_method,
     :eligibility_evidence,
+    :payer_kind,
+    :payer_fund_id,
+    :payer_handle,
     :admitted_at,
     :defer_until,
     :raw_thread,
@@ -131,6 +134,9 @@ defmodule ContextBot.Workflow.Invocation do
     field :stage, Ecto.Enum, values: @statuses
     field :eligibility_method, :string
     field :eligibility_evidence, :map
+    field :payer_kind, :string
+    field :payer_fund_id, :string
+    field :payer_handle, :string
     field :admitted_at, :utc_datetime_usec
     field :defer_until, :utc_datetime_usec
     field :raw_thread, :map

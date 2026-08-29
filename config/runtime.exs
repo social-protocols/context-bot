@@ -28,6 +28,9 @@ if anthropic_api_key do
   config :context_bot, anthropic_api_key: anthropic_api_key
 end
 
+config :context_bot,
+  funding_api_keys: ContextBot.Funding.load_secrets(settings.funding_keys, System.get_env())
+
 if ContextBot.Settings.bot_enabled?(settings) do
   required_secret = fn variable ->
     case System.get_env(variable) do

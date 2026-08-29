@@ -3,7 +3,11 @@ defmodule ContextBot.EligibilityTest.ClientStub do
 
   def get_profile(actor_did, labeler_did) do
     send(self(), {:get_profile, actor_did, labeler_did})
-    Process.get({__MODULE__, :profile}, {:error, :timeout})
+
+    Process.get(
+      {__MODULE__, {:profile, actor_did}},
+      Process.get({__MODULE__, :profile}, {:error, :timeout})
+    )
   end
 
   def resolve_handle(handle) do
@@ -306,10 +310,194 @@ defmodule ContextBot.EligibilityTest do
              Eligibility.check(@actor_did, "alice.bsky.team", @now, settings(), ClientStub)
   end
 
+  test "a funded parent handle makes an otherwise ineligible mention eligible" do
+    parent_did = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb"
+    put_profile(confirmed_headers(), profile([]))
+
+    put_profile_for(
+      parent_did,
+      confirmed_headers(),
+      parent_profile(parent_did, "jonathanwarden.com")
+    )
+
+    assert {:eligible, :funded_handle,
+            %{
+              "fund_id" => "jw",
+              "handle" => "jonathanwarden.com",
+              "source" => "funded_handle"
+            }} =
+             Eligibility.check(
+               @actor_did,
+               "stranger.example",
+               @now,
+               settings(funding_keys: [fund("jw", ["jonathanwarden.com"])]),
+               ClientStub,
+               %{notification: reply_notification(parent_did, parent_did)}
+             )
+  end
+
+  test "a funded root wildcard match makes an otherwise ineligible mention eligible" do
+    parent_did = "did:plc:cccccccccccccccccccccccc"
+    root_did = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb"
+    put_profile(confirmed_headers(), profile([]))
+    put_profile_for(parent_did, confirmed_headers(), parent_profile(parent_did, "other.example"))
+    put_profile_for(root_did, confirmed_headers(), parent_profile(root_did, "foo.bsky.team"))
+
+    assert {:eligible, :funded_handle, %{"fund_id" => "team", "handle" => "foo.bsky.team"}} =
+             Eligibility.check(
+               @actor_did,
+               "stranger.example",
+               @now,
+               settings(funding_keys: [fund("team", ["*.bsky.team"])]),
+               ClientStub,
+               %{notification: reply_notification(parent_did, root_did)}
+             )
+  end
+
+  test "an unfunded stranger remains ineligible" do
+    parent_did = "did:plc:cccccccccccccccccccccccc"
+    put_profile(confirmed_headers(), profile([]))
+
+    put_profile_for(
+      parent_did,
+      confirmed_headers(),
+      parent_profile(parent_did, "stranger.example")
+    )
+
+    assert :ineligible ==
+             Eligibility.check(
+               @actor_did,
+               "caller.example",
+               @now,
+               settings(funding_keys: [fund("jw", ["jonathanwarden.com"])]),
+               ClientStub,
+               %{notification: reply_notification(parent_did, parent_did)}
+             )
+  end
+
+  test "fails closed when the thread author is unknown rather than guessing the caller" do
+    put_profile(confirmed_headers(), profile([]))
+
+    assert :ineligible ==
+             Eligibility.check(
+               @actor_did,
+               "alice.example",
+               @now,
+               settings(funding_keys: [fund("all", ["*"])]),
+               ClientStub,
+               %{
+                 notification: %{
+                   "record" => %{
+                     "reply" => %{
+                       "parent" => %{"uri" => "not-an-at-uri"},
+                       "root" => %{"uri" => "also-bad"}
+                     }
+                   }
+                 }
+               }
+             )
+  end
+
+  test "operator allowlist still wins over a funded thread author" do
+    assert {:eligible, :operator_allowlist, _evidence} =
+             Eligibility.check(
+               @actor_did,
+               "alice.example",
+               @now,
+               settings(
+                 operator_allowed_dids: [@actor_did],
+                 funding_keys: [fund("all", ["*"])]
+               ),
+               ClientStub,
+               %{notification: top_level_notification()}
+             )
+
+    refute_received {:get_profile, _, _}
+  end
+
+  test "an active Elder label still wins over a funded thread author" do
+    put_profile(confirmed_headers(), profile([elder_label()]))
+
+    assert {:eligible, :bluesky_elder, _evidence} =
+             Eligibility.check(
+               @actor_did,
+               "alice.example",
+               @now,
+               settings(funding_keys: [fund("all", ["*"])]),
+               ClientStub,
+               %{notification: top_level_notification()}
+             )
+  end
+
+  test "chooses one matching fund at random among only those keys" do
+    put_profile(confirmed_headers(), profile([]))
+
+    chooser = fn keys ->
+      assert Enum.map(keys, & &1.id) |> Enum.sort() == ["a", "b"]
+      Enum.find(keys, &(&1.id == "b"))
+    end
+
+    assert {:eligible, :funded_handle, %{"fund_id" => "b"}} =
+             Eligibility.check(
+               @actor_did,
+               "alice.example",
+               @now,
+               settings(
+                 funding_keys: [fund("a", ["*"]), fund("b", ["*"]), fund("c", ["nope.example"])]
+               ),
+               ClientStub,
+               %{notification: top_level_notification(), choose: chooser}
+             )
+  end
+
+  test "attributes a later allowlisted invocation to a matching fund when present" do
+    assert Eligibility.payer_for(
+             @actor_did,
+             "alice.example",
+             settings(funding_keys: [fund("jw", ["alice.example"])]),
+             ClientStub,
+             %{notification: top_level_notification()}
+           ) == %{
+             payer_kind: "funded_handle",
+             payer_fund_id: "jw",
+             payer_handle: "alice.example"
+           }
+  end
+
   defp settings(overrides \\ []) do
     []
     |> Settings.load()
     |> then(&struct!(&1, overrides))
+  end
+
+  defp fund(id, patterns), do: %{id: id, patterns: patterns}
+
+  defp put_profile_for(did, headers, body) do
+    Process.put({ClientStub, {:profile, did}}, {:ok, 200, headers, body})
+  end
+
+  defp parent_profile(did, handle), do: %{"did" => did, "handle" => handle, "labels" => []}
+
+  defp reply_notification(parent_did, root_did) do
+    %{
+      "reason" => "mention",
+      "author" => %{"did" => @actor_did, "handle" => "stranger.example"},
+      "record" => %{
+        "$type" => "app.bsky.feed.post",
+        "reply" => %{
+          "parent" => %{"uri" => "at://#{parent_did}/app.bsky.feed.post/3kparent"},
+          "root" => %{"uri" => "at://#{root_did}/app.bsky.feed.post/3kroot"}
+        }
+      }
+    }
+  end
+
+  defp top_level_notification do
+    %{
+      "reason" => "mention",
+      "author" => %{"did" => @actor_did, "handle" => "alice.example"},
+      "record" => %{"$type" => "app.bsky.feed.post", "text" => "please add context"}
+    }
   end
 
   defp put_profile(headers, body) do

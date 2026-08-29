@@ -10,7 +10,7 @@ defmodule ContextBot.Workers.EligibilityWorker do
 
   import Ecto.Query
 
-  alias ContextBot.{Admission, Eligibility, Operations, Repo}
+  alias ContextBot.{Admission, Eligibility, Funding, Operations, Repo}
   alias ContextBot.ATProto.ReqClient
   alias ContextBot.Workflow.{Invocation, Store}
 
@@ -87,30 +87,37 @@ defmodule ContextBot.Workers.EligibilityWorker do
   defp claim(%Invocation{}), do: :ignore
 
   defp check_eligibility(invocation, dependencies) do
+    context = %{notification: invocation.raw_notification}
+
     result =
       dependencies.eligibility.check(
         invocation.actor_did,
         invocation.actor_handle,
         dependencies.now,
         dependencies.settings,
-        dependencies.client
+        dependencies.client,
+        context
       )
 
-    handle_eligibility(result, invocation, dependencies)
+    handle_eligibility(result, invocation, dependencies, context)
   end
 
-  defp handle_eligibility({:eligible, method, evidence}, invocation, dependencies) do
+  defp handle_eligibility({:eligible, method, evidence}, invocation, dependencies, context) do
     admission = dependencies.admission
+    payer = payer_attrs(method, evidence, invocation, dependencies, context)
 
     case Store.transition(
            invocation,
            :checking_eligibility,
            :checking_eligibility,
-           %{
-             eligibility_method: Atom.to_string(method),
-             eligibility_evidence: safe_evidence(method, evidence),
-             defer_until: nil
-           },
+           Map.merge(
+             %{
+               eligibility_method: Atom.to_string(method),
+               eligibility_evidence: safe_evidence(method, evidence),
+               defer_until: nil
+             },
+             payer
+           ),
            nil
          ) do
       {:ok, evidenced} ->
@@ -130,17 +137,20 @@ defmodule ContextBot.Workers.EligibilityWorker do
     end
   end
 
-  defp handle_eligibility(:ineligible, invocation, dependencies) do
+  defp handle_eligibility(:ineligible, invocation, dependencies, _context) do
     case Store.transition(
            invocation,
            :checking_eligibility,
            :ineligible,
-           %{
-             eligibility_method: nil,
-             eligibility_evidence: %{"result" => "ineligible"},
-             defer_until: nil,
-             completed_at: dependencies.now
-           },
+           Map.merge(
+             %{
+               eligibility_method: nil,
+               eligibility_evidence: %{"result" => "ineligible"},
+               defer_until: nil,
+               completed_at: dependencies.now
+             },
+             %{payer_kind: nil, payer_fund_id: nil, payer_handle: nil}
+           ),
            nil
          ) do
       {:ok, _ineligible} ->
@@ -154,7 +164,8 @@ defmodule ContextBot.Workers.EligibilityWorker do
     end
   end
 
-  defp handle_eligibility({:error, reason}, invocation, _dependencies) when is_atom(reason) do
+  defp handle_eligibility({:error, reason}, invocation, _dependencies, _context)
+       when is_atom(reason) do
     case Store.transition(
            invocation,
            :checking_eligibility,
@@ -207,6 +218,7 @@ defmodule ContextBot.Workers.EligibilityWorker do
   defp evidence_keys(:operator_allowlist), do: ["actor_did", "source"]
   defp evidence_keys(:bluesky_elder), do: ["actor_did", "label", "labeler_did"]
   defp evidence_keys(:bsky_team), do: ["actor_did", "handle", "verification"]
+  defp evidence_keys(:funded_handle), do: ["fund_id", "handle", "source"]
   defp evidence_keys(_method), do: []
 
   defp fetch(map, "actor_did"), do: fetch_key(map, "actor_did", :actor_did)
@@ -215,6 +227,31 @@ defmodule ContextBot.Workers.EligibilityWorker do
   defp fetch(map, "labeler_did"), do: fetch_key(map, "labeler_did", :labeler_did)
   defp fetch(map, "handle"), do: fetch_key(map, "handle", :handle)
   defp fetch(map, "verification"), do: fetch_key(map, "verification", :verification)
+  defp fetch(map, "fund_id"), do: fetch_key(map, "fund_id", :fund_id)
+
+  defp payer_attrs(:funded_handle, evidence, _invocation, _dependencies, _context) do
+    %{
+      payer_kind: "funded_handle",
+      payer_fund_id: fetch(evidence, "fund_id"),
+      payer_handle: fetch(evidence, "handle")
+    }
+  end
+
+  defp payer_attrs(_method, _evidence, invocation, dependencies, context) do
+    eligibility = dependencies.eligibility
+
+    if function_exported?(eligibility, :payer_for, 5) do
+      eligibility.payer_for(
+        invocation.actor_did,
+        invocation.actor_handle,
+        dependencies.settings,
+        dependencies.client,
+        context
+      )
+    else
+      Funding.community_payer()
+    end
+  end
 
   defp fetch_key(map, string_key, atom_key) do
     case Map.fetch(map, string_key) do

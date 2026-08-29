@@ -37,6 +37,10 @@ kill_timeout = 300
 
   # Eligibility, admission, and queue settings.
   OPERATOR_ALLOWED_DIDS = "did:plc:33avz2l7y5scw3abq3lmylns"
+  # Operator-curated funding keys: id:pattern|pattern,... Empty = no funded-handle path.
+  # Optional per-fund secrets use FUNDING_KEY_<ID>_ANTHROPIC_API_KEY. Do not set SPONSORS_URL
+  # until the real GitHub Sponsors URL is reviewed; an unset value omits the donate link.
+  FUNDING_KEYS = ""
   THREAD_PARENT_HEIGHT = "80"
   ACTOR_HOURLY_LIMIT = "2"
   ACTOR_DAILY_LIMIT = "5"

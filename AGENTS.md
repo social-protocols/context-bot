@@ -81,7 +81,7 @@ Preserve these POC invariants:
 
 - ingest only exact direct mentions and never call notification `updateSeen`;
 - fetch only the invocation plus ancestors (`depth=0`), never descendants;
-- fail closed unless the actor has a bidirectionally verified `bsky.team` handle, a confirmed Skywatch `bluesky-elder` label, or an exact operator-allowlisted DID;
+- fail closed unless the actor has a bidirectionally verified `bsky.team` handle, a confirmed Skywatch `bluesky-elder` label, an exact operator-allowlisted DID, or the parent/root thread author matches an operator-curated funding key's handle/DID patterns;
 - reserve integer-microdollar budget before Anthropic work and mark attempts sent before a request can escape;
 - preserve complete provider responses within the configured per-response and cumulative storage bounds;
 - treat `dry_run = true` as permanently non-publishable: use only unauthenticated public AppView reads, skip eligibility/mention rates, retain all Anthropic spending and safety limits, and never create a reply intent or publication claim;

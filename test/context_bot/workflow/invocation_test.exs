@@ -73,6 +73,27 @@ defmodule ContextBot.Workflow.InvocationTest do
     assert persisted.standard_site_document_rkey == "3kfullresp"
   end
 
+  test "persists an opaque fund payer without a credential" do
+    invocation =
+      %Invocation{}
+      |> Invocation.changeset(public_attrs())
+      |> Repo.insert!()
+
+    invocation
+    |> Invocation.transition_changeset(%{
+      payer_kind: "funded_handle",
+      payer_fund_id: "jw",
+      payer_handle: "jonathanwarden.com"
+    })
+    |> Repo.update!()
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.payer_kind == "funded_handle"
+    assert persisted.payer_fund_id == "jw"
+    assert persisted.payer_handle == "jonathanwarden.com"
+    refute inspect(persisted) =~ "sk-ant"
+  end
+
   defp public_attrs do
     %{
       invocation_uri: "at://did:plc:actor/app.bsky.feed.post/public",

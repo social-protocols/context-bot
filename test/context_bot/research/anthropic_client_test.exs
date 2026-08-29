@@ -102,6 +102,36 @@ defmodule ContextBot.Research.AnthropicClientTest do
     refute Map.has_key?(options, :request_timeout)
   end
 
+  test "uses a fund credential when metadata carries a fund id and never puts it in Finch private" do
+    fund_key = "funding-test-key-never-expose"
+    previous = Application.get_env(:context_bot, :funding_api_keys)
+    Process.put(:anthropic_client_capture_pid, self())
+
+    on_exit(fn ->
+      Process.delete(:anthropic_client_capture_pid)
+
+      if previous do
+        Application.put_env(:context_bot, :funding_api_keys, previous)
+      else
+        Application.delete_env(:context_bot, :funding_api_keys)
+      end
+    end)
+
+    Application.put_env(:context_bot, :funding_api_keys, %{"jw" => fund_key})
+
+    Req.Test.expect(AnthropicClient, fn conn ->
+      assert Plug.Conn.get_req_header(conn, "x-api-key") == [fund_key]
+      Req.Test.json(conn, %{"type" => "message"})
+    end)
+
+    metadata = Map.put(@attempt_metadata, :fund_id, "jw")
+    assert {:ok, %{status: 200}} = AnthropicClient.send_message(@request, metadata)
+
+    assert_receive {:anthropic_client_options, options}
+    assert options.finch_private == %{context_bot_attempt: metadata}
+    refute inspect(options.finch_private) =~ fund_key
+  end
+
   test "uses the runtime Anthropic API version and HTTP timeout without test overrides" do
     original_settings = Application.fetch_env!(:context_bot, :settings)
     original_config = Application.fetch_env!(:context_bot, AnthropicClient)

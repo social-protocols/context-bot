@@ -371,9 +371,18 @@ defmodule ContextBot.Workers.ResearchWorker do
       document_title: Map.get(result, :document_title),
       prompt: Map.put(projection.prompt, :reader_url, prompt_doc.reader_url),
       parameters: projection.parameters,
-      user_message: projection.user_message
+      user_message: projection.user_message,
+      funding: funding_for(invocation),
+      sponsors_url: settings.sponsors_url
     }
   end
+
+  defp funding_for(%{payer_kind: "funded_handle", payer_handle: handle})
+       when is_binary(handle) and handle != "" do
+    %{kind: "funded_handle", handle: handle}
+  end
+
+  defp funding_for(_invocation), do: %{kind: "community_pot"}
 
   defp fail_standard_site(invocation, collection, reason) do
     Operations.log_standard_site(invocation, collection: collection, reason: reason)

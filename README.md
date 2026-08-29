@@ -285,7 +285,7 @@ The release entrypoint migrates `/data/context_bot.db` before starting Phoenix. 
 
 Live tests call Bluesky and Anthropic and publish a public reply. They always require explicit authorization.
 
-For the eligible test, use either a bidirectionally verified `bsky.team` account, an account with the `bluesky-elder` Skywatch label, or an exact DID listed in `OPERATOR_ALLOWED_DIDS`.
+For the eligible test, use either a bidirectionally verified `bsky.team` account, an account with the `bluesky-elder` Skywatch label, an exact DID listed in `OPERATOR_ALLOWED_DIDS`, or a mention whose parent/root author matches a `FUNDING_KEYS` pattern.
 
 1. With explicit authorization, record the current invocation, sent-budget-entry, provider-response, and completed-reply counts using the aggregate-only `fly ssh console` queries above.
 2. Create a public ancestor chain. Mention the bot in a new reply and ask for context.
@@ -294,7 +294,7 @@ For the eligible test, use either a bidirectionally verified `bsky.team` account
 5. Create a direct reply below the invocation before its poll is processed; confirm that descendant text is absent from the stored canonical thread/provider prompt.
 6. Wait through another notification poll and confirm the same invocation still has one reply URI/CID and Bluesky still shows one bot reply.
 
-For the ineligible test, use an account that is not `bsky.team`, has no `bluesky-elder` label, and is absent from `OPERATOR_ALLOWED_DIDS`.
+For the ineligible test, use an account that is not `bsky.team`, has no `bluesky-elder` label, is absent from `OPERATOR_ALLOWED_DIDS`, and whose parent/root author matches no `FUNDING_KEYS` pattern.
 
 1. Record the sent-budget-entry, provider-response, and completed-reply counts.
 2. Mention the bot publicly and wait through a poll and job cycle.

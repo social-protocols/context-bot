@@ -47,7 +47,9 @@ defmodule ContextBot.StandardSite.Document do
           optional(:invoker_handle) => String.t() | nil,
           optional(:parent_handle) => String.t() | nil,
           optional(:document_title) => String.t() | nil,
-          optional(:document_reader_url) => String.t()
+          optional(:document_reader_url) => String.t(),
+          optional(:funding) => %{optional(atom() | String.t()) => term()},
+          optional(:sponsors_url) => String.t() | nil
         }
 
   @type result ::
@@ -224,6 +226,7 @@ defmodule ContextBot.StandardSite.Document do
     #{user_message_text(user_message)}
     ```
     #{format_images(user_message)}
+    #{format_funding(content)}
     """
   end
 
@@ -342,6 +345,43 @@ defmodule ContextBot.StandardSite.Document do
 
   defp maybe_tool_part(parts, key, value),
     do: parts ++ ["#{key}=#{format_parameter_value(value)}"]
+
+  defp format_funding(content) do
+    attribution = funding_line(content)
+    sponsors = sponsors_line(content)
+
+    """
+
+    ---
+
+    #{attribution}#{sponsors}
+    """
+  end
+
+  defp funding_line(content) do
+    case funding_handle(content) do
+      handle when is_binary(handle) and handle != "" -> "Funded for @#{handle}"
+      _other -> "Funded from the community pot"
+    end
+  end
+
+  defp funding_handle(content) do
+    funding = Map.get(content, :funding) || Map.get(content, "funding") || %{}
+    kind = Map.get(funding, :kind) || Map.get(funding, "kind")
+    handle = Map.get(funding, :handle) || Map.get(funding, "handle")
+
+    if kind in ["funded_handle", :funded_handle], do: handle
+  end
+
+  defp sponsors_line(content) do
+    case Map.get(content, :sponsors_url) || Map.get(content, "sponsors_url") do
+      url when is_binary(url) and url != "" ->
+        "\n\n[GitHub Sponsors](#{url})"
+
+      _missing ->
+        ""
+    end
+  end
 
   defp format_images(user_message) do
     images = user_message["images"] || user_message[:images] || []

@@ -550,6 +550,35 @@ defmodule ContextBotWeb.InvocationsControllerTest do
       refute body =~ "SECRET_NOTIFICATION_BODY"
     end
 
+    test "shows a funded-handle payer without any API key material", %{conn: conn} do
+      {:ok, _inv} =
+        %Invocation{}
+        |> Invocation.changeset(%{
+          dry_run: false,
+          invocation_uri: "at://did:plc:test/app.bsky.feed.post/abc123",
+          notification_cid: "cid1",
+          current_cid: "cid1",
+          actor_did: "did:plc:test",
+          actor_handle: "caller.bsky.social",
+          raw_notification: %{},
+          received_at: ~U[2026-08-26 10:00:00Z],
+          status: :complete,
+          stage: :complete,
+          payer_kind: "funded_handle",
+          payer_fund_id: "jw",
+          payer_handle: "jonathanwarden.com"
+        })
+        |> Repo.insert()
+
+      conn = get(conn, ~p"/invocations")
+      body = html_response(conn, 200)
+
+      assert body =~ "Payer"
+      assert body =~ "@jonathanwarden.com"
+      refute body =~ "sk-ant"
+      refute body =~ "funding-test-key"
+    end
+
     test "does not accept POST", %{conn: conn} do
       conn = post(conn, "/invocations", %{})
       assert conn.status == 404

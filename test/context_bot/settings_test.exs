@@ -45,6 +45,8 @@ defmodule ContextBot.SettingsTest do
     assert settings.anthropic_retry_base_ms == 1_000
     assert settings.anthropic_retry_max_ms == 30_000
     assert settings.appview_url == "https://api.bsky.app"
+    assert settings.funding_keys == []
+    assert settings.sponsors_url == nil
     assert settings.poll_interval_ms == 30_000
     assert settings.notification_page_cap == 5
     assert settings.atproto_http_timeout_ms == 15_000
@@ -83,6 +85,14 @@ defmodule ContextBot.SettingsTest do
 
     assert_raise ArgumentError, ~r/OPERATOR_ALLOWED_DIDS/, fn ->
       Settings.load(operator_allowed_dids: "did:plc:valid, not-a-did")
+    end
+
+    assert_raise ArgumentError, ~r/FUNDING_KEYS/, fn ->
+      Settings.load(funding_keys: "did:plc:valid")
+    end
+
+    assert_raise ArgumentError, ~r/SPONSORS_URL/, fn ->
+      Settings.load(sponsors_url: "http://github.com/sponsors/example")
     end
 
     assert_raise ArgumentError, ~r/ANTHROPIC_DAILY_BUDGET_USD/, fn ->
@@ -321,5 +331,24 @@ defmodule ContextBot.SettingsTest do
         ] do
       assert_raise ArgumentError, ~r/#{expected_name}/, fn -> Settings.load(environment) end
     end
+  end
+
+  test "loads operator-curated funding keys and an optional Sponsors URL" do
+    settings =
+      Settings.load(%{
+        "FUNDING_KEYS" => "jw:jonathanwarden.com|*.bsky.team,all:*",
+        "SPONSORS_URL" => "https://github.com/sponsors/example"
+      })
+
+    assert settings.funding_keys == [
+             %{id: "jw", patterns: ["jonathanwarden.com", "*.bsky.team"]},
+             %{id: "all", patterns: ["*"]}
+           ]
+
+    assert settings.sponsors_url == "https://github.com/sponsors/example"
+    refute Map.has_key?(settings, :anthropic_api_key)
+    refute Map.has_key?(settings, :funding_api_keys)
+    assert Settings.load(%{"FUNDING_KEYS" => "", "SPONSORS_URL" => ""}).funding_keys == []
+    assert Settings.load(%{"FUNDING_KEYS" => "", "SPONSORS_URL" => ""}).sponsors_url == nil
   end
 end

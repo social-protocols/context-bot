@@ -122,6 +122,7 @@ defmodule ContextBotWeb.ProductionConfigTest do
     settings = Keyword.fetch!(context_bot_config, :settings)
     refute Map.has_key?(settings, :anthropic_api_key)
     refute Map.has_key?(settings, :bot_app_password)
+    refute Map.has_key?(settings, :funding_api_keys)
   end
 
   test "runtime config keeps every workflow queue serial" do
@@ -177,6 +178,25 @@ defmodule ContextBotWeb.ProductionConfigTest do
 
     assert Exception.message(error) == "invalid CONTEXT_BOT_LOG_PATH"
     refute Exception.message(error) =~ "provider-secret"
+  end
+
+  test "runtime loads optional fund credentials outside settings" do
+    replace_environment(%{
+      "BOT_ENABLED" => "false",
+      "FUNDING_KEYS" => "jw:jonathanwarden.com",
+      "FUNDING_KEY_JW_ANTHROPIC_API_KEY" => "funding-test-key-never-expose"
+    })
+
+    context_bot_config =
+      "config/runtime.exs"
+      |> Config.Reader.read!(env: :test)
+      |> Keyword.fetch!(:context_bot)
+
+    assert context_bot_config[:funding_api_keys] == %{"jw" => "funding-test-key-never-expose"}
+    settings = Keyword.fetch!(context_bot_config, :settings)
+    assert [%{id: "jw", patterns: ["jonathanwarden.com"]}] = settings.funding_keys
+    refute Map.has_key?(settings, :funding_api_keys)
+    refute inspect(settings) =~ "funding-test-key-never-expose"
   end
 
   defp replace_environment(changes) do
