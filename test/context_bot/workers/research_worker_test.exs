@@ -223,10 +223,27 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert_received {:standard_site_put, "site.standard.publication", "context-bot", pub_record}
     assert pub_record["$type"] == "site.standard.publication"
 
+    prompt_rkey = ContextBot.Research.Request.system_prompt_rkey()
+    assert_received {:standard_site_get, "site.standard.document", ^prompt_rkey}
+    assert_received {:standard_site_put, "site.standard.document", ^prompt_rkey, prompt_record}
+    assert prompt_record["$type"] == "site.standard.document"
+    assert prompt_record["textContent"] == ContextBot.Research.Request.system_prompt()
+
     assert_received {:standard_site_put, "site.standard.document", doc_rkey, doc_record}
     assert is_binary(doc_rkey) and doc_rkey != ""
+    assert doc_rkey != prompt_rkey
     assert doc_record["$type"] == "site.standard.document"
     assert doc_record["textContent"] == "Thorough markdown writeup."
+
+    markdown = doc_record["content"]["text"]["markdown"]
+    assert markdown =~ "Thorough markdown writeup."
+    assert markdown =~ ContextBot.Research.Request.system_prompt_id()
+    assert markdown =~ ContextBot.Research.Request.system_prompt_sha256()
+    assert markdown =~ "https://standard-reader.app/a/#{@bot_did}/#{prompt_rkey}"
+    assert markdown =~ "`anthropic-version`: 2023-06-01"
+    assert markdown =~ "`model`: claude-sonnet-5"
+    assert markdown =~ "canonical thread"
+    assert markdown =~ "Hidden model reasoning is not available"
 
     assert persisted.full_response == "Thorough markdown writeup."
 
@@ -289,6 +306,25 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     refute log =~ "Thorough markdown writeup"
   end
 
+  test "fails closed without freezing a reply when the prompt document cannot be created" do
+    invocation = invocation("prompt-document-create-fails", :thread_ready)
+
+    configure_runner(
+      {:ok, runner_result() |> Map.put(:full_response, "Thorough markdown writeup.")}
+    )
+
+    configure_worker(atproto_client: FakePublicationExistsDocumentFails)
+
+    assert :ok = perform(invocation)
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :failed
+    assert persisted.standard_site_document_uri == nil
+    assert persisted.reply_record == nil
+    assert persisted.failure_detail["reason"] == "standard_site_document_failed"
+    assert persisted.failure_detail["collection"] == "site.standard.document"
+    assert Repo.all(Oban.Job) == []
+  end
+
   test "fails closed without freezing a reply when the publication exists but document create fails" do
     invocation = invocation("document-lexicon-unknown", :thread_ready)
 
@@ -296,7 +332,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
       {:ok, runner_result() |> Map.put(:full_response, "Thorough markdown writeup.")}
     )
 
-    configure_worker(atproto_client: FakePublicationExistsDocumentFails)
+    configure_worker(atproto_client: FakePublicationAndPromptExistDocumentFails)
 
     log =
       capture_log(

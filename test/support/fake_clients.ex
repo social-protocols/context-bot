@@ -70,6 +70,10 @@ end
 defmodule FakeDocClientFailure do
   @moduledoc false
 
+  def get_record(_repo, _collection, _rkey) do
+    {:error, :record_not_found}
+  end
+
   def put_record(_repo, _collection, _rkey, _record) do
     {:error, :timeout}
   end
@@ -163,6 +167,10 @@ defmodule FakePublicationExistsDocumentFails do
     {:ok, 200, %{}, %{"value" => record}}
   end
 
+  def get_record(_repo, "site.standard.document", _rkey) do
+    {:error, :record_not_found}
+  end
+
   def put_record(_repo, "site.standard.document", _rkey, _record) do
     {:error,
      {:permanent, 400,
@@ -170,5 +178,74 @@ defmodule FakePublicationExistsDocumentFails do
         "error" => "InvalidRequest",
         "message" => "Lexicon not found: site.standard.document"
       }}}
+  end
+end
+
+defmodule FakePublicationAndPromptExistDocumentFails do
+  @moduledoc false
+
+  def get_record(_repo, "site.standard.publication", _rkey) do
+    record = %{
+      "$type" => "site.standard.publication",
+      "url" => "https://getcontext.bot",
+      "name" => "Context Bot",
+      "createdAt" => DateTime.to_iso8601(~U[2026-08-25 12:00:00Z])
+    }
+
+    {:ok, 200, %{}, %{"value" => record}}
+  end
+
+  def get_record(_repo, "site.standard.document", rkey) do
+    if String.starts_with?(rkey, "prompt-") do
+      record = %{
+        "$type" => "site.standard.document",
+        "textContent" => ContextBot.Research.Request.system_prompt()
+      }
+
+      {:ok, 200, %{}, %{"value" => record}}
+    else
+      {:error, :record_not_found}
+    end
+  end
+
+  def put_record(_repo, "site.standard.document", rkey, _record) do
+    if String.starts_with?(rkey, "prompt-") do
+      {:ok, 200, %{}, %{}}
+    else
+      {:error,
+       {:permanent, 400,
+        %{
+          "error" => "InvalidRequest",
+          "message" => "Lexicon not found: site.standard.document"
+        }}}
+    end
+  end
+end
+
+defmodule FakePromptDocumentExists do
+  @moduledoc false
+
+  def get_record(_repo, "site.standard.document", rkey) do
+    record = %{
+      "$type" => "site.standard.document",
+      "textContent" => ContextBot.Research.Request.system_prompt(),
+      "title" => "Context Bot system prompt #{ContextBot.Research.Request.system_prompt_id()}"
+    }
+
+    send(self(), {:standard_site_get, "site.standard.document", rkey})
+    {:ok, 200, %{}, %{"value" => record}}
+  end
+end
+
+defmodule FakePromptDocumentMismatch do
+  @moduledoc false
+
+  def get_record(_repo, "site.standard.document", _rkey) do
+    record = %{
+      "$type" => "site.standard.document",
+      "textContent" => "CONTEXT_BOT_SYSTEM_V4\n\nstale prompt"
+    }
+
+    {:ok, 200, %{}, %{"value" => record}}
   end
 end

@@ -249,6 +249,175 @@ defmodule ContextBot.Research.RequestTest do
     assert repair_message["content"] =~ "Do not perform additional research"
   end
 
+  test "exposes a stable hashed identity for the versioned system prompt" do
+    prompt = Request.system_prompt()
+
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V5")
+    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V5"
+    assert Request.system_prompt_semantic_version() == "5.0.0"
+
+    assert Request.system_prompt_sha256() ==
+             :sha256 |> :crypto.hash(prompt) |> Base.encode16(case: :lower)
+
+    assert Request.system_prompt_rkey() ==
+             "prompt-context-bot-system-v5-#{String.slice(Request.system_prompt_sha256(), 0, 16)}"
+
+    assert String.starts_with?(Request.length_repair_prompt(), "LENGTH_REPAIR")
+
+    assert Request.length_repair_sha256() ==
+             :sha256
+             |> :crypto.hash(Request.length_repair_prompt())
+             |> Base.encode16(case: :lower)
+  end
+
+  test "projects allowlisted Messages parameters and the first user message" do
+    request = Request.initial(@canonical_thread, config())
+
+    projection =
+      Request.public_projection(request, %{
+        anthropic_api_version: "2023-06-01",
+        research_max_tokens: 4_096
+      })
+
+    assert projection.prompt.id == "CONTEXT_BOT_SYSTEM_V5"
+    assert projection.prompt.semantic_version == "5.0.0"
+    assert projection.prompt.sha256 == Request.system_prompt_sha256()
+    assert projection.parameters["anthropic-version"] == "2023-06-01"
+    assert projection.parameters["model"] == "claude-sonnet-5"
+    assert projection.parameters["max_tokens"] == 4_096
+    assert projection.parameters["effort"] == "medium"
+    assert projection.parameters["thinking"] == "adaptive"
+    assert projection.parameters["tool_choice"] == "auto"
+    assert projection.parameters["cache_control"] == "ephemeral"
+    assert projection.parameters["stream"] == false
+    assert projection.parameters["continuation"] == false
+    assert projection.parameters["length_repair"] == false
+
+    assert projection.parameters["tools"] == [
+             %{
+               "type" => "web_search_20260318",
+               "name" => "web_search",
+               "allowed_callers" => ["direct"],
+               "response_inclusion" => "excluded",
+               "max_uses" => 2
+             },
+             %{
+               "type" => "web_fetch_20260318",
+               "name" => "web_fetch",
+               "allowed_callers" => ["direct"],
+               "response_inclusion" => "excluded",
+               "max_uses" => 2,
+               "max_content_tokens" => 10_000
+             }
+           ]
+
+    assert projection.user_message == %{"text" => @canonical_thread.text, "images" => []}
+    assert projection.continuation == false
+    assert projection.length_repair == false
+    refute Map.has_key?(projection.parameters, "x-api-key")
+    refute inspect(projection) =~ "sk-ant"
+  end
+
+  test "projects version 2 image URL blocks and omits non-CDN sources" do
+    request =
+      Request.initial(@canonical_thread_v2, config())
+      |> put_in(
+        ["messages", Access.at(0), "content"],
+        [
+          %{
+            "type" => "image",
+            "source" => %{
+              "type" => "url",
+              "url" =>
+                "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:author/bafkreiaurora@jpeg"
+            }
+          },
+          %{
+            "type" => "image",
+            "source" => %{"type" => "url", "url" => "https://evil.example/secret?token=abc"}
+          },
+          %{"type" => "text", "text" => @canonical_thread_v2.text}
+        ]
+      )
+
+    projection =
+      Request.public_projection(request, %{anthropic_api_version: "2023-06-01"})
+
+    assert projection.user_message["text"] == @canonical_thread_v2.text
+
+    assert projection.user_message["images"] == [
+             %{
+               "url" =>
+                 "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:author/bafkreiaurora@jpeg"
+             }
+           ]
+
+    refute inspect(projection) =~ "evil.example"
+    refute inspect(projection) =~ "token=abc"
+  end
+
+  test "flags continuation and length-repair without copying assistant thinking" do
+    initial = Request.initial(@canonical_thread, config())
+
+    continued =
+      Request.continue(
+        initial,
+        [
+          %{
+            "type" => "thinking",
+            "thinking" => "hidden chain of thought",
+            "signature" => "signed-thinking-payload"
+          }
+        ],
+        initial["max_tokens"]
+      )
+
+    continued_projection =
+      Request.public_projection(continued, %{
+        anthropic_api_version: "2023-06-01",
+        research_max_tokens: 4_096
+      })
+
+    assert continued_projection.continuation == true
+    assert continued_projection.length_repair == false
+    assert continued_projection.parameters["continuation"] == true
+    refute inspect(continued_projection) =~ "hidden chain of thought"
+    refute inspect(continued_projection) =~ "signed-thinking-payload"
+
+    repaired = Request.repair(continued, [%{"type" => "text", "text" => "too long"}], 1_024)
+
+    repaired_projection =
+      Request.public_projection(repaired, %{
+        anthropic_api_version: "2023-06-01",
+        research_max_tokens: 4_096
+      })
+
+    assert repaired_projection.continuation == true
+    assert repaired_projection.length_repair == true
+    assert repaired_projection.parameters["max_tokens"] == 4_096
+    assert repaired_projection.parameters["research_max_tokens"] == 4_096
+    assert repaired_projection.parameters["length_repair_max_tokens"] == 1_024
+    refute inspect(repaired_projection) =~ "LENGTH_REPAIR\n"
+  end
+
+  test "drops injected secrets from the public projection" do
+    request =
+      config()
+      |> then(&Request.initial(@canonical_thread, &1))
+      |> Map.merge(%{
+        "x-api-key" => "sk-ant-secret",
+        "authorization" => "Bearer secret-token",
+        "cookie" => "session=secret"
+      })
+
+    projection =
+      Request.public_projection(request, %{anthropic_api_version: "2023-06-01"})
+
+    refute inspect(projection) =~ "sk-ant-secret"
+    refute inspect(projection) =~ "Bearer secret-token"
+    refute inspect(projection) =~ "session=secret"
+  end
+
   defp config do
     %{
       model_id: "claude-sonnet-5",

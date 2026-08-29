@@ -2,7 +2,7 @@
 
 An experimental, on-demand Bluesky / ATProto context bot. The proof of concept acts only when directly mentioned in a public thread; it is not a proactive moderation system.
 
-The POC durably receives mentions, checks a narrow eligibility policy, captures the invocation and ancestor chain, requests Claude analysis with server-side research, and publishes exactly one correctly rooted Bluesky reply. SQLite holds workflow, budget, provider-response, and frozen reply state. Audit-record publication, audit pages, IPFS, descendants, and a UI are intentionally out of scope.
+The POC durably receives mentions, checks a narrow eligibility policy, captures the invocation and ancestor chain, requests Claude analysis with server-side research, and publishes exactly one correctly rooted Bluesky reply. SQLite holds workflow, budget, provider-response, and frozen reply state. The compact Bluesky reply links a Standard.site document that includes the research writeup, the hashed versioned system prompt, the allowlisted Messages API parameters, and the canonical thread that was sent. Custom `org.social-protocols.contextbot.*` audit-record publication, audit pages, IPFS, descendants, and a UI are intentionally out of scope.
 
 ## Prerequisites
 

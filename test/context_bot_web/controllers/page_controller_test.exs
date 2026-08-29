@@ -8,6 +8,9 @@ defmodule ContextBotWeb.PageControllerTest do
     assert response =~ "Context Bot"
     assert response =~ "Mention @getcontext.bot on a Bluesky post"
     assert response =~ "A Social Protocols project"
+    assert response =~ "versioned system prompt"
+    assert response =~ "Anthropic request parameters"
+    refute response =~ "stored as atproto records"
   end
 
   test "GET / includes proper HTML structure", %{conn: conn} do

@@ -12,7 +12,7 @@ A quick way to invoke an AI agent in a Bluesky thread. Use it for fact checking,
 
 - **Invite Only.** It only joints a thread when invited.
 - **Research with Sources.** It uses Claude Sonnet with web search and citations enabled. 
-- **Transparent.** The full prompt and reply, including cited soures, are stored as atproto records.
+- **Transparent.** The full reply, cited sources, versioned system prompt, and Anthropic request parameters are published as Standard.site documents. Hidden model reasoning is not included, and the same inputs do not guarantee an identical Claude response.
 - **Succinct.** Bluesky reply is a short post with a link to the full reply.
 
 ## How to use
