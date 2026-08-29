@@ -212,9 +212,8 @@ defmodule ContextBot.StandardSite.Document do
          user_message: user_message
        })
        when is_map(prompt) and is_map(parameters) and is_map(user_message) do
-    with :ok <- validate_prompt(prompt),
-         :ok <- validate_user_message(user_message) do
-      :ok
+    with :ok <- validate_prompt(prompt) do
+      validate_user_message(user_message)
     end
   end
 

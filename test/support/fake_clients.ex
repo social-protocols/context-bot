@@ -184,6 +184,8 @@ end
 defmodule FakePublicationAndPromptExistDocumentFails do
   @moduledoc false
 
+  alias ContextBot.Research.Request
+
   def get_record(_repo, "site.standard.publication", _rkey) do
     record = %{
       "$type" => "site.standard.publication",
@@ -199,7 +201,7 @@ defmodule FakePublicationAndPromptExistDocumentFails do
     if String.starts_with?(rkey, "prompt-") do
       record = %{
         "$type" => "site.standard.document",
-        "textContent" => ContextBot.Research.Request.system_prompt()
+        "textContent" => Request.system_prompt()
       }
 
       {:ok, 200, %{}, %{"value" => record}}
@@ -225,11 +227,13 @@ end
 defmodule FakePromptDocumentExists do
   @moduledoc false
 
+  alias ContextBot.Research.Request
+
   def get_record(_repo, "site.standard.document", rkey) do
     record = %{
       "$type" => "site.standard.document",
-      "textContent" => ContextBot.Research.Request.system_prompt(),
-      "title" => "Context Bot system prompt #{ContextBot.Research.Request.system_prompt_id()}"
+      "textContent" => Request.system_prompt(),
+      "title" => "Context Bot system prompt #{Request.system_prompt_id()}"
     }
 
     send(self(), {:standard_site_get, "site.standard.document", rkey})

@@ -24,31 +24,14 @@ defmodule ContextBot.StandardSite.PromptDocument do
   def ensure_exists(client \\ ContextBot.ATProto.ReqClient, repo, publication_uri, created_at)
       when is_binary(repo) and is_binary(publication_uri) and is_struct(created_at, DateTime) do
     rkey = Request.system_prompt_rkey()
-    record = build_record(publication_uri, created_at)
     uri = "at://#{repo}/#{@collection}/#{rkey}"
 
     case client.get_record(repo, @collection, rkey) do
       {:ok, _status, _headers, %{"value" => existing}} when is_map(existing) ->
-        if prompt_matches?(existing) do
-          reader_url = Document.reader_url_from_uri(uri)
-          {:ok, %{uri: uri, rkey: rkey, reader_url: reader_url}}
-        else
-          {:error, :prompt_document_conflict}
-        end
+        accept_existing(existing, uri, rkey)
 
       {:error, :record_not_found} ->
-        case client.put_record(repo, @collection, rkey, record) do
-          {:ok, _status, _headers, _body} ->
-            {:ok,
-             %{
-               uri: uri,
-               rkey: rkey,
-               reader_url: Document.reader_url_from_uri(uri)
-             }}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
+        create_record(client, repo, publication_uri, created_at, uri, rkey)
 
       {:error, reason} ->
         {:error, reason}
@@ -56,6 +39,25 @@ defmodule ContextBot.StandardSite.PromptDocument do
       {:ok, _status, _headers, _body} ->
         {:error, :prompt_document_conflict}
     end
+  end
+
+  defp accept_existing(existing, uri, rkey) do
+    if prompt_matches?(existing) do
+      {:ok, location(uri, rkey)}
+    else
+      {:error, :prompt_document_conflict}
+    end
+  end
+
+  defp create_record(client, repo, publication_uri, created_at, uri, rkey) do
+    case client.put_record(repo, @collection, rkey, build_record(publication_uri, created_at)) do
+      {:ok, _status, _headers, _body} -> {:ok, location(uri, rkey)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp location(uri, rkey) do
+    %{uri: uri, rkey: rkey, reader_url: Document.reader_url_from_uri(uri)}
   end
 
   defp prompt_matches?(existing) do

@@ -44,6 +44,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
   import ExUnit.CaptureLog
 
   alias ContextBot.ATProto.TID
+  alias ContextBot.Research.Request
   alias ContextBot.Settings
   alias ContextBot.Workers.ResearchWorker
   alias ContextBot.Workers.ResearchWorkerTest.{AnthropicClient, Runner}
@@ -223,11 +224,11 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert_received {:standard_site_put, "site.standard.publication", "context-bot", pub_record}
     assert pub_record["$type"] == "site.standard.publication"
 
-    prompt_rkey = ContextBot.Research.Request.system_prompt_rkey()
+    prompt_rkey = Request.system_prompt_rkey()
     assert_received {:standard_site_get, "site.standard.document", ^prompt_rkey}
     assert_received {:standard_site_put, "site.standard.document", ^prompt_rkey, prompt_record}
     assert prompt_record["$type"] == "site.standard.document"
-    assert prompt_record["textContent"] == ContextBot.Research.Request.system_prompt()
+    assert prompt_record["textContent"] == Request.system_prompt()
 
     assert_received {:standard_site_put, "site.standard.document", doc_rkey, doc_record}
     assert is_binary(doc_rkey) and doc_rkey != ""
@@ -237,8 +238,8 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
 
     markdown = doc_record["content"]["text"]["markdown"]
     assert markdown =~ "Thorough markdown writeup."
-    assert markdown =~ ContextBot.Research.Request.system_prompt_id()
-    assert markdown =~ ContextBot.Research.Request.system_prompt_sha256()
+    assert markdown =~ Request.system_prompt_id()
+    assert markdown =~ Request.system_prompt_sha256()
     assert markdown =~ "https://standard-reader.app/a/#{@bot_did}/#{prompt_rkey}"
     assert markdown =~ "`anthropic-version`: 2023-06-01"
     assert markdown =~ "`model`: claude-sonnet-5"
