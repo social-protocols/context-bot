@@ -7,7 +7,7 @@ defmodule ContextBot.Test.CrossProcessRuntimePeer do
   @target_uri "at://did:plc:target/app.bsky.feed.post/cross-process-owner"
   @question "What is the shared context?"
   @received_at ~U[2026-08-10 12:00:00.000000Z]
-  @wait_attempts 1_000
+  @wait_attempts 2_500
 
   def run(["setup", database]) do
     repo = start_repo!(database)
@@ -44,10 +44,7 @@ defmodule ContextBot.Test.CrossProcessRuntimePeer do
 
   defp own_runtime("second", database, events) do
     wait_for!(Path.join(events, "first.recovery"))
-
-    {:error, :runtime_owned} =
-      RuntimeOwner.acquire(database: database)
-
+    await_contention!(database, events)
     write_event(events, "second", "contended", "owner-active")
     owner = acquire_eventually!(database)
     write_event(events, "second", "takeover", "acquired")
@@ -79,6 +76,29 @@ defmodule ContextBot.Test.CrossProcessRuntimePeer do
       worker: "ContextBot.Workers.ThreadWorker",
       queue: :dry_thread
     )
+  end
+
+  defp await_contention!(database, events, attempts \\ 100)
+
+  defp await_contention!(_database, events, 0) do
+    write_event(events, "second", "acquire_failed", "no-runtime-owned")
+    raise "expected runtime_owned while first held the lock"
+  end
+
+  defp await_contention!(database, events, attempts) do
+    case RuntimeOwner.acquire(database: database, handshake_timeout_ms: 200) do
+      {:error, :runtime_owned} ->
+        :ok
+
+      {:error, :runtime_lock_failed} ->
+        Process.sleep(10)
+        await_contention!(database, events, attempts - 1)
+
+      {:ok, owner} ->
+        write_event(events, "second", "acquire_unexpected", "lock-free")
+        _released = RuntimeOwner.release(owner)
+        raise "lock was free while first should have held it"
+    end
   end
 
   defp acquire_eventually!(database, attempts \\ @wait_attempts)

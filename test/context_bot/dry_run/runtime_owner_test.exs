@@ -68,6 +68,17 @@ defmodule ContextBot.DryRun.RuntimeOwnerTest do
     assert :ok = RuntimeOwner.release(second)
   end
 
+  test "a held lock is still observed as owned after a tiny handshake budget expires", %{
+    directory: dir
+  } do
+    database = Path.join(dir, "tiny-handshake.db")
+    assert {:ok, owner} = RuntimeOwner.acquire(database: database)
+
+    assert {:error, :runtime_owned} = await_owned(database)
+
+    assert :ok = RuntimeOwner.release(owner)
+  end
+
   defp acquire_eventually(database, attempts \\ 20)
 
   defp acquire_eventually(_database, 0), do: {:error, :runtime_lock_failed}
@@ -80,6 +91,25 @@ defmodule ContextBot.DryRun.RuntimeOwnerTest do
 
       result ->
         result
+    end
+  end
+
+  defp await_owned(database, attempts \\ 50)
+
+  defp await_owned(_database, 0), do: {:error, :runtime_lock_failed}
+
+  defp await_owned(database, attempts) do
+    case RuntimeOwner.acquire(database: database, handshake_timeout_ms: 1) do
+      {:error, :runtime_owned} ->
+        {:error, :runtime_owned}
+
+      {:error, :runtime_lock_failed} ->
+        Process.sleep(10)
+        await_owned(database, attempts - 1)
+
+      {:ok, stolen} ->
+        _ = RuntimeOwner.release(stolen)
+        {:ok, stolen}
     end
   end
 end
