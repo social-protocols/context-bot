@@ -47,7 +47,8 @@ defmodule ContextBot.StandardSite.DocumentTest do
       ]
     },
     asked_text: "What bird is that?",
-    parent_uri: "at://did:plc:bob/app.bsky.feed.post/3parentrkey12"
+    parent_uri: "at://did:plc:bob/app.bsky.feed.post/3parentrkey12",
+    document_reader_url: "https://standard-reader.app/a/#{@repo}/3kfullresp"
   }
 
   defmodule TrackingDocClient do
@@ -154,6 +155,30 @@ defmodule ContextBot.StandardSite.DocumentTest do
       assert record["title"] == "Can you help me understand the"
       assert record["description"] == asked
     end
+
+    test "publishes a Claude continue link that names this document's reader URL" do
+      assert {:ok, result} =
+               Document.create(
+                 TrackingDocClient,
+                 @repo,
+                 @publication_uri,
+                 @content,
+                 @created_at
+               )
+
+      assert_received {:document_put, record}
+      markdown = record["content"]["text"]["markdown"]
+      href = continue_href(markdown)
+      query = continue_query(href)
+
+      assert href =~ "https://claude.ai/new?q="
+      assert query =~ result.reader_url
+      refute query =~ @content.full_response
+      refute query =~ "CONTEXT_BOT_SYSTEM_V5"
+      refute href =~ @content.full_response
+      refute href =~ "attachment="
+      refute href =~ "claude://"
+    end
   end
 
   describe "format_markdown/1" do
@@ -200,6 +225,25 @@ defmodule ContextBot.StandardSite.DocumentTest do
       assert markdown =~ "https://bsky.app/profile/did:plc:bob/post/3parentrkey12"
     end
 
+    test "places a Claude continue link after Asked and before the writeup" do
+      markdown = Document.format_markdown(@content)
+      asked_at = :binary.match(markdown, "## Asked") |> elem(0)
+      continue_at = :binary.match(markdown, "Continue this conversation in Claude") |> elem(0)
+      analysis_at = :binary.match(markdown, "# Research Analysis") |> elem(0)
+      href = continue_href(markdown)
+      query = continue_query(href)
+
+      assert asked_at < continue_at
+      assert continue_at < analysis_at
+      assert href =~ "https://claude.ai/new?q="
+      assert query =~ @content.document_reader_url
+      refute query =~ @content.full_response
+      refute query =~ "CONTEXT_BOT_SYSTEM_V5"
+      refute href =~ @content.full_response
+      refute href =~ "attachment="
+      refute href =~ "claude://"
+    end
+
     test "omits the parent link when the invoking post is not a reply" do
       markdown = Document.format_markdown(Map.delete(@content, :parent_uri))
 
@@ -239,5 +283,21 @@ defmodule ContextBot.StandardSite.DocumentTest do
       assert {:error, :record_not_found} =
                Document.add_post_ref(FakeDocClientNotFound, @repo, "3k123", post_uri)
     end
+  end
+
+  defp continue_href(markdown) do
+    assert [_, href] =
+             Regex.run(
+               ~r/\[Continue this conversation in Claude\]\((https:\/\/claude\.ai\/new\?q=[^)]+)\)/,
+               markdown
+             )
+
+    href
+  end
+
+  defp continue_query(href) do
+    %URI{query: query} = URI.parse(href)
+    assert %{"q" => q} = URI.decode_query(query)
+    q
   end
 end

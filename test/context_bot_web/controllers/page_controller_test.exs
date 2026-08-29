@@ -6,13 +6,13 @@ defmodule ContextBotWeb.PageControllerTest do
 
     assert response = html_response(conn, 200)
     assert response =~ "Context Bot"
-    assert response =~ "Mention @getcontext.bot on a Bluesky post"
-    assert response =~ "A Social Protocols project"
-    assert response =~ "versioned system prompt"
-    assert response =~ "Anthropic request parameters"
-    assert response =~ "Recent invocations are listed at"
-    assert response =~ ~s(href="/invocations")
-    refute response =~ "stored as atproto records"
+    assert response =~ "@getcontext.bot"
+    assert response =~ "on a Bluesky post"
+    assert response =~ ~s(href="https://bsky.app/profile/getcontext.bot")
+    assert response =~ "Social Protocols"
+    assert response =~ "stored as atproto records"
+    assert response =~ ~s(href="https://github.com/social-protocols/context-bot/")
+    assert response =~ ~s(href="https://social-protocols.org")
   end
 
   test "GET / includes proper HTML structure", %{conn: conn} do
