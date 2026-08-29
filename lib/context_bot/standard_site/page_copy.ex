@@ -221,17 +221,19 @@ defmodule ContextBot.StandardSite.PageCopy do
     else
       text
       |> words()
-      |> Enum.reduce_while({"", 0}, fn word, {acc, count} ->
-        next = if acc == "", do: word, else: acc <> " " <> word
-        next_count = count + 1
-
-        if String.length(next) <= cap and next_count <= @title_max_words do
-          {:cont, {next, next_count}}
-        else
-          {:halt, {acc, count}}
-        end
-      end)
+      |> Enum.reduce_while({"", 0}, &take_title_word(&1, &2, cap))
       |> elem(0)
+    end
+  end
+
+  defp take_title_word(word, {acc, count}, cap) do
+    next = if acc == "", do: word, else: acc <> " " <> word
+    next_count = count + 1
+
+    if String.length(next) <= cap and next_count <= @title_max_words do
+      {:cont, {next, next_count}}
+    else
+      {:halt, {acc, count}}
     end
   end
 
