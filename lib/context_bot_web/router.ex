@@ -14,6 +14,7 @@ defmodule ContextBotWeb.Router do
     pipe_through :browser
 
     get "/", PageController, :home
+    get "/invocations", InvocationsController, :index
   end
 
   scope "/", ContextBotWeb do

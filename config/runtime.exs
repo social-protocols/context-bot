@@ -66,13 +66,6 @@ end
 config :context_bot, ContextBotWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
-# Internal endpoint for operator tools (6PN-only in production)
-internal_port = String.to_integer(System.get_env("INTERNAL_PORT", "4001"))
-
-config :context_bot, ContextBotWeb.InternalEndpoint,
-  http: [port: internal_port],
-  server: true
-
 if config_env() == :prod do
   database_path =
     System.get_env("DATABASE_PATH") ||
@@ -110,20 +103,6 @@ if config_env() == :prod do
       ip: {0, 0, 0, 0, 0, 0, 0, 0}
     ],
     secret_key_base: secret_key_base
-
-  # Internal endpoint binds to Fly's 6PN private network interface
-  # Accessible as http://context-bot-social-protocols.internal:4001 from other Fly machines
-  internal_ip =
-    case :inet.getaddr(~c"fly-local-6pn", :inet6) do
-      {:ok, addr} -> addr
-      {:error, _} -> {127, 0, 0, 1}
-    end
-
-  config :context_bot, ContextBotWeb.InternalEndpoint,
-    http: [
-      port: String.to_integer(System.get_env("INTERNAL_PORT", "4001")),
-      ip: internal_ip
-    ]
 
   # ## SSL Support
   #

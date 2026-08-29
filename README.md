@@ -36,11 +36,14 @@ In another terminal, inspect the credential-free aggregate health response:
 curl --fail --silent --show-error http://127.0.0.1:4000/health | jq
 ```
 
-The application also serves a public homepage at `GET /`:
+The application also serves a public homepage at `GET /` and a GET-only invocations log at `GET /invocations`:
 
 ```bash
 curl --fail --silent --show-error http://127.0.0.1:4000/
+curl --fail --silent --show-error http://127.0.0.1:4000/invocations
 ```
+
+`GET /invocations` shows operational metadata: counts, spend, tokens, status, actor handle, Bluesky links, Standard.site full-response links, and short error reasons. It does not show API keys, post bodies, prompts, or envelopes, and it has no reprocess or other mutation endpoints. Reprocess stays on `just fly-reprocess` over Fly SSH.
 
 The homepage is reachable via the configured Phoenix host. Serving https://getcontext.bot (the bot's Bluesky handle and site.standard.publication domain) requires separate DNS configuration pointing to the Fly deployment.
 
@@ -165,7 +168,6 @@ it reports the existing reply URL without another Claude request or Bluesky post
 | `just reprocess <invocation-id>` | With the bot disabled and workers stopped, reopen a guarded provider-processing failure from its retained response; performs no external I/O. |
 | `just fly-reprocess <id>` | Reprocess one production invocation from its retained response on Fly. May publish a Bluesky reply. External authorization required. |
 | `just fly-invocation <id>` | Query and display production invocation status by ID on Fly. External authorization required. |
-| `just fly-dashboard` | Proxy the 6PN-only dashboard (`context-bot-social-protocols.internal:4001/invocations`) to `http://127.0.0.1:4001/invocations` and open it in Google Chrome. External authorization required. |
 | `just docker-build` | Build `context-bot:local`. |
 | `just secrets` | Validate the allowlisted Bitwarden fields without printing values. |
 | `just secrets-sync` | Load secrets from Bitwarden and synchronize them to Fly without deploying. External authorization is required. |

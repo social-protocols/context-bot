@@ -66,13 +66,12 @@ Cursor cloud agents automatically install git hooks during environment setup. Th
 | `just docker-build` | Build the production image locally. |
 | `just secrets` / `deploy` | Validate Bitwarden fields or deploy to Fly. |
 | `just fly-status` / `fly-logs` | Inspect the Fly app. |
-| `just fly-dashboard` | Open the 6PN-only `/invocations` dashboard in Google Chrome via `fly proxy` to `context-bot-social-protocols.internal:4001`. |
 
 Run `direnv exec . just check` before any completion claim. For release or deployment changes, also run `direnv exec . just docker-build` and smoke-test `/health`.
 
 ## Architecture
 
-This is one Phoenix API application, not an umbrella. `ContextBot.Application` starts Repo and Finch always, and starts Oban, `ContextBot.ATProto.Session`, and `ContextBot.Mentions.Poller` only when the validated settings enable the bot. `GET /health` returns bounded operational aggregates and never stored content or credentials.
+This is one Phoenix API application, not an umbrella. `ContextBot.Application` starts Repo and Finch always, and starts Oban, `ContextBot.ATProto.Session`, and `ContextBot.Mentions.Poller` only when the validated settings enable the bot. `GET /health` returns bounded operational aggregates and never stored content or credentials. Public `GET /invocations` is a GET-only HTML log of operational metadata (counts, spend, tokens, status, actor handle, Bluesky and Standard.site links, short error reasons). It does not show post bodies, prompts, envelopes, or secrets, and it has no reprocess or other mutation endpoints. Reprocess stays on `just fly-reprocess` over Fly SSH.
 
 The public pipeline is `Mentions.Poller` → `EligibilityWorker` → `ThreadWorker` → `ResearchWorker` → `ReplyWorker`; `DeferredWorker` repairs missing jobs and reconsiders bounded deferred work. The read-only local path is `just dry-run` → `ThreadWorker` → `ResearchWorker` for a selected public post, or `just dry-run` → `ResearchWorker` for a question-only local subject; both terminate at `complete` without reply construction. The explicit local public-write path is `just live-run` → `ThreadWorker` → `ResearchWorker` → `ReplyWorker`; it uses `data/live-demo.db` by default, starts no poller, bypasses only actor eligibility, and processes one selected direct mention. `Workflow.Store` and Ecto/SQLite own invocation checkpoints, leases, budget entries, exact bounded provider response envelopes, and any public frozen reply intent. Development and test databases live under ignored `data/`; Fly mounts `/data/context_bot.db`.
 

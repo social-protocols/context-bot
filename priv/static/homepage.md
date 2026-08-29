@@ -19,6 +19,7 @@ A quick way to invoke an AI agent in a Bluesky thread. Use it for fact checking,
 
 On Bluesky, autocomplete @getcontext.bot (the dotted handle). Ask a concrete question about the post you are under. "is this true?" "what's the background here?" "where does this data come from?"
 
+Recent invocations are listed at [/invocations](/invocations).
 
 ---
 

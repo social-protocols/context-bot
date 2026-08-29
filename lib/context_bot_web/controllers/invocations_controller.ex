@@ -1,6 +1,6 @@
-defmodule ContextBotWeb.InternalController do
+defmodule ContextBotWeb.InvocationsController do
   @moduledoc """
-  Internal operator dashboard controller.
+  Public GET-only invocations dashboard.
   """
 
   use ContextBotWeb, :controller
@@ -108,7 +108,7 @@ defmodule ContextBotWeb.InternalController do
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Context Bot - Internal Dashboard</title>
+      <title>Context Bot Invocations</title>
       <style>
         body {
           font-family: system-ui, -apple-system, sans-serif;
