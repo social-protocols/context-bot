@@ -135,7 +135,5 @@ defmodule ContextBot.Research.AnthropicClient do
     metadata[:fund_id] || metadata["fund_id"]
   end
 
-  defp fund_id(_metadata), do: nil
-
   defp config, do: Application.get_env(:context_bot, __MODULE__, [])
 end

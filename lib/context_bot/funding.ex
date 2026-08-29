@@ -266,8 +266,6 @@ defmodule ContextBot.Funding do
       Regex.match?(~r/[a-z]/, List.last(labels))
   end
 
-  defp valid_handle?(_handle), do: false
-
   defp valid_handle_label?(label) do
     byte_size(label) in 1..63 and
       Regex.match?(~r/\A[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\z/, label)
