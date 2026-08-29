@@ -515,9 +515,8 @@ defmodule ContextBotWeb.InvocationsControllerTest do
     end
 
     test "does not accept POST", %{conn: conn} do
-      assert_error_sent 404, fn ->
-        post(conn, "/invocations", %{})
-      end
+      conn = post(conn, "/invocations", %{})
+      assert conn.status == 404
     end
   end
 end
