@@ -1,0 +1,28 @@
+{
+  "$type": "app.bsky.embed.recordWithMedia#view",
+  "media": {
+    "$type": "app.bsky.embed.images#view",
+    "images": [
+      {
+        "alt": "Himalayan Monal",
+        "aspectRatio": {
+          "height": 1658,
+          "width": 2329
+        },
+        "fullsize": "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:h25avmes6g7fgcddc3xj7qmg/bafkreigkxkoq2ki6i7bu5ndvjvhloi7zktyuqxq56xuhkms4vdhh2aarv4",
+        "thumb": "https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:h25avmes6g7fgcddc3xj7qmg/bafkreigkxkoq2ki6i7bu5ndvjvhloi7zktyuqxq56xuhkms4vdhh2aarv4"
+      }
+    ]
+  },
+  "record": {
+    "record": {
+      "$type": "app.bsky.embed.record#viewRecord",
+      "cid": "bafyreicvsbkqzdc3qvs5gbvew2pgx262lmwcxkbzktl2exhcar6a3lmf7u",
+      "uri": "at://did:plc:h25avmes6g7fgcddc3xj7qmg/app.bsky.feed.post/3mt2q2oxoms2m",
+      "value": {
+        "$type": "app.bsky.feed.post",
+        "text": "QUOTED POST BODY MUST NEVER APPEAR"
+      }
+    }
+  }
+}

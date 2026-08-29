@@ -158,6 +158,60 @@ defmodule ContextBot.Thread.CanonicalizerTest do
     refute result.text =~ "QUOTED POST BODY"
   end
 
+  test "accepts AppView recordWithMedia whose record wrapper omits $type" do
+    thread =
+      put_in(
+        fixture("thread_ancestors.json"),
+        ["thread", "parent", "post", "embed"],
+        fixture("embed_record_with_media_appview.json")
+      )
+
+    assert {:ok, result} = Canonicalizer.build(thread, context())
+
+    assert result.text =~
+             "Quoted post URI: at://did:plc:h25avmes6g7fgcddc3xj7qmg/app.bsky.feed.post/3mt2q2oxoms2m"
+
+    assert result.text =~ "[image 1] Alt text: Himalayan Monal"
+    refute result.text =~ "QUOTED POST BODY"
+
+    assert [%{"alt" => "Himalayan Monal", "index" => 1, "post_uri" => parent_uri} | _rest] =
+             result.media
+
+    assert parent_uri == "at://did:plc:bob/app.bsky.feed.post/parent"
+  end
+
+  test "still fails closed when recordWithMedia media omits $type or the record is malformed" do
+    base = fixture("thread_ancestors.json")
+    embed = fixture("embed_record_with_media_appview.json")
+
+    missing_media_type =
+      put_in(
+        base,
+        ["thread", "parent", "post", "embed"],
+        update_in(embed, ["media"], &Map.delete(&1, "$type"))
+      )
+
+    assert {:error, :invalid_thread} = Canonicalizer.build(missing_media_type, context())
+
+    missing_quote_uri =
+      put_in(
+        base,
+        ["thread", "parent", "post", "embed"],
+        put_in(embed, ["record", "record", "uri"], "")
+      )
+
+    assert {:error, :invalid_thread} = Canonicalizer.build(missing_quote_uri, context())
+
+    unknown_record_type =
+      put_in(
+        base,
+        ["thread", "parent", "post", "embed"],
+        put_in(embed, ["record", "$type"], "app.bsky.embed.futureRecord#view")
+      )
+
+    assert {:error, :invalid_thread} = Canonicalizer.build(unknown_record_type, context())
+  end
+
   test "recognizes gallery images directly and through record-with-media" do
     base = fixture("thread_ancestors.json")
 
