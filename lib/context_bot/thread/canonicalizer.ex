@@ -427,8 +427,15 @@ defmodule ContextBot.Thread.Canonicalizer do
 
   defp inspect_embed(_media_or_unknown, _post_uri), do: {:error, :invalid_media_embed}
 
+  # AppView omits $type on recordWithMedia.record because that field is a lexicon
+  # ref to app.bsky.embed.record#view, not a union. Media remains a typed union.
   defp inspect_record(%{"$type" => @record_view} = record, post_uri),
     do: inspect_embed(record, post_uri)
+
+  defp inspect_record(%{"record" => %{"uri" => uri}} = record, post_uri)
+       when is_binary(uri) and uri != "" and not is_map_key(record, "$type") do
+    inspect_embed(Map.put(record, "$type", @record_view), post_uri)
+  end
 
   defp inspect_record(_unknown_record, _post_uri), do: {:error, :invalid_media_embed}
 
