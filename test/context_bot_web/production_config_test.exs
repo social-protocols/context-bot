@@ -3,6 +3,17 @@ defmodule ContextBotWeb.ProductionConfigTest do
 
   alias ContextBot.Settings
 
+  test "runtime config does not bind a 6PN-only internal endpoint" do
+    replace_environment(%{"BOT_ENABLED" => "false", "INTERNAL_PORT" => "4001"})
+
+    context_bot_config =
+      "config/runtime.exs"
+      |> Config.Reader.read!(env: :test)
+      |> Keyword.fetch!(:context_bot)
+
+    refute Keyword.has_key?(context_bot_config, ContextBotWeb.InternalEndpoint)
+  end
+
   test "production health checks are not redirected to HTTPS" do
     config = Config.Reader.read!("config/prod.exs")
 

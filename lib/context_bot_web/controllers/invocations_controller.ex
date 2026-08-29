@@ -1,6 +1,6 @@
-defmodule ContextBotWeb.InternalController do
+defmodule ContextBotWeb.InvocationsController do
   @moduledoc """
-  Internal operator dashboard controller.
+  Public GET-only invocations dashboard.
   """
 
   use ContextBotWeb, :controller
@@ -108,7 +108,7 @@ defmodule ContextBotWeb.InternalController do
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Context Bot - Internal Dashboard</title>
+      <title>Context Bot Invocations</title>
       <style>
         body {
           font-family: system-ui, -apple-system, sans-serif;
@@ -229,6 +229,8 @@ defmodule ContextBotWeb.InternalController do
   end
 
   defp render_row(inv) do
+    error = escape_html(error_summary(inv.failure_detail, inv.failure_category))
+
     """
           <tr>
             <td>#{inv.id}</td>
@@ -237,8 +239,8 @@ defmodule ContextBotWeb.InternalController do
             <td>#{escape_html(inv.actor_handle || "")}</td>
             <td>#{if inv.dry_run, do: "yes", else: ""}</td>
             <td>#{inv.anthropic_attempt_sequence}</td>
-            <td class="error-cell" title="#{escape_html(full_error_detail(inv.failure_detail))}">
-              #{escape_html(error_summary(inv.failure_detail, inv.failure_category))}
+            <td class="error-cell" title="#{error}">
+              #{error}
             </td>
             <td>
               #{invocation_link(inv.invocation_uri)}
@@ -322,14 +324,6 @@ defmodule ContextBotWeb.InternalController do
   defp format_datetime(%DateTime{} = dt) do
     Calendar.strftime(dt, "%Y-%m-%d %H:%M:%S")
   end
-
-  defp full_error_detail(nil), do: ""
-
-  defp full_error_detail(detail) when is_map(detail) do
-    Jason.encode!(detail)
-  end
-
-  defp full_error_detail(detail), do: to_string(detail)
 
   defp escape_html(text) when is_binary(text) do
     text

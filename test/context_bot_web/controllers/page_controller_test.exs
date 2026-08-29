@@ -10,6 +10,8 @@ defmodule ContextBotWeb.PageControllerTest do
     assert response =~ "A Social Protocols project"
     assert response =~ "versioned system prompt"
     assert response =~ "Anthropic request parameters"
+    assert response =~ "Recent invocations are listed at"
+    assert response =~ ~s(href="/invocations")
     refute response =~ "stored as atproto records"
   end
 

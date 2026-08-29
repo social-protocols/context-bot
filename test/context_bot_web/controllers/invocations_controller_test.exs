@@ -1,9 +1,7 @@
-defmodule ContextBotWeb.InternalControllerTest do
+defmodule ContextBotWeb.InvocationsControllerTest do
   use ContextBotWeb.ConnCase, async: true
 
   import Ecto.Query
-
-  @endpoint ContextBotWeb.InternalEndpoint
 
   alias ContextBot.Repo
   alias ContextBot.Research.BudgetEntry
@@ -53,7 +51,7 @@ defmodule ContextBotWeb.InternalControllerTest do
         })
         |> Repo.insert()
 
-      conn = get(conn, "/invocations")
+      conn = get(conn, ~p"/invocations")
       body = html_response(conn, 200)
 
       # Check summary sections exist
@@ -102,7 +100,7 @@ defmodule ContextBotWeb.InternalControllerTest do
         })
         |> Repo.insert()
 
-      conn = get(conn, "/invocations")
+      conn = get(conn, ~p"/invocations")
       body = html_response(conn, 200)
 
       assert body =~ "$1.50"
@@ -147,7 +145,7 @@ defmodule ContextBotWeb.InternalControllerTest do
         })
         |> Repo.insert()
 
-      conn = get(conn, "/invocations")
+      conn = get(conn, ~p"/invocations")
       body = html_response(conn, 200)
 
       # Should count both as errors (status=failed OR failure_category is set)
@@ -191,7 +189,7 @@ defmodule ContextBotWeb.InternalControllerTest do
         })
         |> Repo.insert()
 
-      conn = get(conn, "/invocations")
+      conn = get(conn, ~p"/invocations")
 
       assert html_response(conn, 200) =~ "Context Bot Invocations"
       body = html_response(conn, 200)
@@ -230,7 +228,7 @@ defmodule ContextBotWeb.InternalControllerTest do
         })
         |> Repo.insert()
 
-      conn = get(conn, "/invocations")
+      conn = get(conn, ~p"/invocations")
       body = html_response(conn, 200)
 
       assert body =~ "https://bsky.app/profile/did:plc:test/post/abc123"
@@ -255,7 +253,7 @@ defmodule ContextBotWeb.InternalControllerTest do
         })
         |> Repo.insert()
 
-      conn = get(conn, "/invocations")
+      conn = get(conn, ~p"/invocations")
       body = html_response(conn, 200)
 
       assert body =~ "https://bsky.app/profile/did:plc:bot/post/reply1"
@@ -279,7 +277,7 @@ defmodule ContextBotWeb.InternalControllerTest do
         })
         |> Repo.insert()
 
-      conn = get(conn, "/invocations")
+      conn = get(conn, ~p"/invocations")
       body = html_response(conn, 200)
 
       # Should not have reply links, but verify the row exists
@@ -305,7 +303,7 @@ defmodule ContextBotWeb.InternalControllerTest do
         })
         |> Repo.insert()
 
-      conn = get(conn, "/invocations")
+      conn = get(conn, ~p"/invocations")
       body = html_response(conn, 200)
 
       assert body =~ ">3<"
@@ -330,11 +328,47 @@ defmodule ContextBotWeb.InternalControllerTest do
         })
         |> Repo.insert()
 
-      conn = get(conn, "/invocations")
+      conn = get(conn, ~p"/invocations")
       body = html_response(conn, 200)
 
       assert body =~ "provider_auth"
       assert body =~ "API key invalid"
+    end
+
+    test "error tooltip shows only the truncated category and reason", %{conn: conn} do
+      {:ok, _inv} =
+        %Invocation{}
+        |> Invocation.changeset(%{
+          dry_run: false,
+          invocation_uri: "at://did:plc:test/app.bsky.feed.post/abc123",
+          notification_cid: "cid1",
+          current_cid: "cid1",
+          actor_did: "did:plc:test",
+          actor_handle: "test.bsky.social",
+          raw_notification: %{},
+          received_at: ~U[2026-08-26 10:00:00Z],
+          status: :failed,
+          stage: :failed,
+          failure_category: :provider_auth,
+          failure_detail: %{
+            "reason" => "API key invalid",
+            "collection" => "site.standard.document",
+            "status" => 400,
+            "error" => "InvalidRequest",
+            "raw" => "SECRET_FAILURE_DETAIL"
+          }
+        })
+        |> Repo.insert()
+
+      conn = get(conn, ~p"/invocations")
+      body = html_response(conn, 200)
+
+      assert body =~ ~s(title="provider_auth: API key invalid")
+      assert body =~ "provider_auth: API key invalid"
+      refute body =~ "SECRET_FAILURE_DETAIL"
+      refute body =~ "InvalidRequest"
+      refute body =~ ~s("collection")
+      refute body =~ ~s("status")
     end
 
     test "links to the full Standard Reader response when standard_site_document_uri exists", %{
@@ -362,7 +396,7 @@ defmodule ContextBotWeb.InternalControllerTest do
         set: [standard_site_document_uri: "at://did:plc:bot/site.standard.document/3kfullresp"]
       )
 
-      conn = get(conn, "/invocations")
+      conn = get(conn, ~p"/invocations")
       body = html_response(conn, 200)
 
       assert body =~ "Full Response"
@@ -397,7 +431,7 @@ defmodule ContextBotWeb.InternalControllerTest do
         })
         |> Repo.insert()
 
-      conn = get(conn, "/invocations")
+      conn = get(conn, ~p"/invocations")
       body = html_response(conn, 200)
 
       assert body =~ "standard_site_document_failed"
@@ -426,7 +460,7 @@ defmodule ContextBotWeb.InternalControllerTest do
         })
         |> Repo.insert()
 
-      conn = get(conn, "/invocations")
+      conn = get(conn, ~p"/invocations")
       body = html_response(conn, 200)
 
       assert body =~ "&mdash;"
@@ -456,7 +490,7 @@ defmodule ContextBotWeb.InternalControllerTest do
       from(i in Invocation, where: i.id == ^inv.id)
       |> Repo.update_all(set: [standard_site_document_uri: "not-a-document-uri"])
 
-      conn = get(conn, "/invocations")
+      conn = get(conn, ~p"/invocations")
       body = html_response(conn, 200)
 
       assert body =~ "&mdash;"
@@ -482,11 +516,43 @@ defmodule ContextBotWeb.InternalControllerTest do
         })
         |> Repo.insert()
 
-      conn = get(conn, "/invocations")
+      conn = get(conn, ~p"/invocations")
       body = html_response(conn, 200)
 
       assert body =~ "2026-08-26"
       assert body =~ "10:05:00"
+    end
+
+    test "does not render stored post bodies, prompts, or raw notifications", %{conn: conn} do
+      {:ok, _inv} =
+        %Invocation{}
+        |> Invocation.changeset(%{
+          dry_run: true,
+          target_uri: "at://did:plc:test/app.bsky.feed.post/abc123",
+          invocation_text: "SECRET_PROMPT_SHOULD_NOT_APPEAR",
+          invocation_uri: "at://did:plc:test/app.bsky.feed.post/abc123",
+          notification_cid: "cid1",
+          current_cid: "cid1",
+          actor_did: "did:plc:test",
+          actor_handle: "test.bsky.social",
+          raw_notification: %{"text" => "SECRET_NOTIFICATION_BODY"},
+          received_at: ~U[2026-08-26 10:00:00Z],
+          status: :complete,
+          stage: :complete
+        })
+        |> Repo.insert()
+
+      conn = get(conn, ~p"/invocations")
+      body = html_response(conn, 200)
+
+      assert body =~ "test.bsky.social"
+      refute body =~ "SECRET_PROMPT_SHOULD_NOT_APPEAR"
+      refute body =~ "SECRET_NOTIFICATION_BODY"
+    end
+
+    test "does not accept POST", %{conn: conn} do
+      conn = post(conn, "/invocations", %{})
+      assert conn.status == 404
     end
   end
 end

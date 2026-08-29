@@ -24,9 +24,6 @@ kill_timeout = 300
   PHX_HOST = "context-bot-social-protocols.fly.dev"
   PHX_SERVER = "true"
   PORT = "4000"
-  # Internal operator dashboard on 6PN private network only (not exposed publicly)
-  # Accessible from other Fly machines: http://context-bot-social-protocols.internal:4001/invocations
-  INTERNAL_PORT = "4001"
   POOL_SIZE = "5"
 
   # External service locations, polling bounds, and request timeouts.

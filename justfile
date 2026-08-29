@@ -33,15 +33,15 @@ test path="":
 
 format:
     mix format
-    shfmt -w dry-run.sh fly-dashboard.sh live-run.sh secrets.sh test/dry_run_wrapper_test.sh test/fly_wrapper_test.sh test/live_run_wrapper_test.sh test/secrets_test.sh
+    shfmt -w dry-run.sh live-run.sh secrets.sh test/dry_run_wrapper_test.sh test/fly_wrapper_test.sh test/live_run_wrapper_test.sh test/secrets_test.sh
 
 format-check:
     mix format --check-formatted
-    shfmt -d dry-run.sh fly-dashboard.sh live-run.sh secrets.sh test/dry_run_wrapper_test.sh test/fly_wrapper_test.sh test/live_run_wrapper_test.sh test/secrets_test.sh
+    shfmt -d dry-run.sh live-run.sh secrets.sh test/dry_run_wrapper_test.sh test/fly_wrapper_test.sh test/live_run_wrapper_test.sh test/secrets_test.sh
 
 lint:
     mix credo --strict
-    shellcheck dry-run.sh fly-dashboard.sh live-run.sh secrets.sh test/dry_run_wrapper_test.sh test/fly_wrapper_test.sh test/live_run_wrapper_test.sh test/secrets_test.sh
+    shellcheck dry-run.sh live-run.sh secrets.sh test/dry_run_wrapper_test.sh test/fly_wrapper_test.sh test/live_run_wrapper_test.sh test/secrets_test.sh
 
 typecheck:
     mix dialyzer
@@ -114,12 +114,6 @@ fly-invocation invocation_id:
     fi
     
     printf '%s\n' "$result" | jq '.[0] | if .failure_detail != null and (.failure_detail | type == "string" and startswith("{")) then .failure_detail |= fromjson else . end'
-
-# Open the 6PN-only operator dashboard in Google Chrome.
-# Remote: http://context-bot-social-protocols.internal:4001/invocations
-# Local via fly proxy: http://127.0.0.1:4001/invocations (Ctrl-C stops the proxy)
-fly-dashboard:
-    ./fly-dashboard.sh
 
 docker-build:
     docker build --progress=plain -t context-bot:local .
