@@ -1,10 +1,10 @@
 # Context Bot
 
-Mention @getcontext.bot on a Bluesky post and ask it a question. It produces a researched response.
+Mention [@getcontext.bot](https://bsky.app/profile/getcontext.bot) on a Bluesky post and ask it a question. It does the research and produces a brief response.
 
 ## What it is
 
-A quick way to invoke an AI agent in a Bluesky thread. Use it for fact checking, clarification, or just additional explanation about a post.
+A quick way to invoke an AI agent in a Bluesky thread. Use it for research, fact checking or clarification about any post.
 
 @getcontext-bot is inspired by @grok on X, but it uses Claude instead.
 
@@ -12,15 +12,10 @@ A quick way to invoke an AI agent in a Bluesky thread. Use it for fact checking,
 
 - **Invite Only.** It only joints a thread when invited.
 - **Research with Sources.** It uses Claude Sonnet with web search and citations enabled. 
-- **Transparent.** The full reply, cited sources, versioned system prompt, and Anthropic request parameters are published as Standard.site documents. Hidden model reasoning is not included, and the same inputs do not guarantee an identical Claude response.
-- **Succinct.** Bluesky reply is a short post with a link to the full reply.
-
-## How to use
-
-On Bluesky, autocomplete @getcontext.bot (the dotted handle). Ask a concrete question about the post you are under. "is this true?" "what's the background here?" "where does this data come from?"
-
-Recent invocations are listed at [/invocations](/invocations).
+- **Transparent.** The full prompt and reply, including cited soures, are stored as atproto records.
 
 ---
 
-A Social Protocols project. https://social-protocols.org
+See on [github](https://github.com/social-protocols/context-bot/).
+
+A [Social Protocols](https://social-protocols.org) project. 
