@@ -14,7 +14,7 @@ defmodule ContextBot.Workers.ResearchWorker do
   alias ContextBot.{Operations, Repo}
   alias ContextBot.Reply.Intent
   alias ContextBot.Research.{Request, Runner}
-  alias ContextBot.StandardSite.{Document, PromptDocument, Publication}
+  alias ContextBot.StandardSite.{Document, PageCopy, PromptDocument, Publication}
   alias ContextBot.Workflow.{Invocation, Store}
 
   @reply_worker "ContextBot.Workers.ReplyWorker"
@@ -356,10 +356,15 @@ defmodule ContextBot.Workers.ResearchWorker do
         canonical_media: invocation.canonical_media || []
       })
 
+    subject = PageCopy.subject(invocation, settings)
+
     %{
       full_response: result.full_response,
       selected_reply: result.text,
       invocation_uri: invocation.invocation_uri,
+      asked_text: subject.asked_text,
+      parent_uri: subject.parent_uri,
+      document_title: Map.get(result, :document_title),
       prompt: Map.put(projection.prompt, :reader_url, prompt_doc.reader_url),
       parameters: projection.parameters,
       user_message: projection.user_message
