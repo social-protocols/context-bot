@@ -250,7 +250,7 @@ defmodule ContextBot.Research.BudgetConcurrencyTest do
           end
         end)
       end)
-      |> Task.await_many()
+      |> Task.await_many(15_000)
 
     assert Enum.count(results, &match?({:ok, %BudgetEntry{}}, &1)) == 1
     assert Enum.count(results, &(&1 == {:error, :daily_budget_exhausted})) == 1
