@@ -2,11 +2,12 @@ defmodule ContextBot.StandardSite.Document do
   @moduledoc """
   Builds and publishes Standard.site document records containing full research responses.
 
-  Each document includes the full research writeup in both plain text and Markpub format
-  for inline reading, along with metadata linking to the publication and Bluesky post.
+  New documents use the invoking question as Reader `title`/`description` and open the
+  Markpub body with an Asked block. Existing published records are not rewritten.
   """
 
   alias ContextBot.ATProto.{Client, TID}
+  alias ContextBot.StandardSite.PageCopy
 
   @collection "site.standard.document"
   @reader_base_url "https://standard-reader.app/a"
@@ -36,7 +37,10 @@ defmodule ContextBot.StandardSite.Document do
             required(:reader_url) => String.t()
           },
           required(:parameters) => %{optional(String.t()) => term()},
-          required(:user_message) => %{required(String.t()) => term()}
+          required(:user_message) => %{required(String.t()) => term()},
+          optional(:asked_text) => String.t(),
+          optional(:parent_uri) => String.t() | nil,
+          optional(:document_title) => String.t() | nil
         }
 
   @type result ::
@@ -125,8 +129,7 @@ defmodule ContextBot.StandardSite.Document do
     %{
       "$type" => @collection,
       "site" => publication_uri,
-      "title" => title_from_invocation(content.invocation_uri),
-      "description" => String.slice(content.selected_reply, 0..150),
+      "title" => PageCopy.title(content),
       "textContent" => content.full_response,
       "content" => %{
         "$type" => "at.markpub.markdown",
@@ -137,7 +140,11 @@ defmodule ContextBot.StandardSite.Document do
       },
       "publishedAt" => DateTime.to_iso8601(created_at)
     }
+    |> maybe_put_description(PageCopy.description(content))
   end
+
+  defp maybe_put_description(record, nil), do: record
+  defp maybe_put_description(record, description), do: Map.put(record, "description", description)
 
   @doc """
   Markdown published on the Standard Reader full-response page.
@@ -160,6 +167,8 @@ defmodule ContextBot.StandardSite.Document do
     :ok = validate_public_inputs(content)
 
     """
+    #{PageCopy.asked_markdown(content)}
+
     # Research Analysis
 
     #{full_response}
@@ -195,15 +204,6 @@ defmodule ContextBot.StandardSite.Document do
     ```
     #{format_images(user_message)}
     """
-  end
-
-  defp title_from_invocation(invocation_uri) do
-    # Extract a short title from the invocation URI
-    # e.g., "at://did:plc:abc123.../app.bsky.feed.post/3k..." -> "Context on 3k..."
-    case String.split(invocation_uri, "/") do
-      [_, _, _, _, rkey] -> "Context on #{String.slice(rkey, 0..7)}..."
-      _ -> "Context Research"
-    end
   end
 
   defp validate_public_inputs(%{

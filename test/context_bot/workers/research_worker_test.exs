@@ -209,7 +209,20 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
   end
 
   test "creates a missing publication then a document and freezes the reader URL" do
-    invocation = invocation("full-response-compact", :thread_ready)
+    invocation =
+      invocation("full-response-compact", :thread_ready, %{
+        raw_notification: %{
+          "uri" => "at://did:plc:actor/app.bsky.feed.post/full-response-compact",
+          "cid" => "bafy-full-response-compact",
+          "record" => %{
+            "$type" => "app.bsky.feed.post",
+            "text" => "@getcontext.bot What bird is that?",
+            "reply" => %{
+              "parent" => %{"uri" => "at://did:plc:bob/app.bsky.feed.post/3parentrkey12"}
+            }
+          }
+        }
+      })
 
     configure_runner(
       {:ok, runner_result() |> Map.put(:full_response, "Thorough markdown writeup.")}
@@ -235,8 +248,15 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert doc_rkey != prompt_rkey
     assert doc_record["$type"] == "site.standard.document"
     assert doc_record["textContent"] == "Thorough markdown writeup."
+    assert doc_record["title"] == "What bird is that?"
+    assert doc_record["description"] == "What bird is that?"
+    refute doc_record["title"] =~ "Context on"
 
     markdown = doc_record["content"]["text"]["markdown"]
+    assert markdown =~ "## Asked"
+    assert markdown =~ "What bird is that?"
+    assert markdown =~ "https://bsky.app/profile/did:plc:actor/post/full-response-compact"
+    assert markdown =~ "https://bsky.app/profile/did:plc:bob/post/3parentrkey12"
     assert markdown =~ "Thorough markdown writeup."
     assert markdown =~ Request.system_prompt_id()
     assert markdown =~ Request.system_prompt_sha256()

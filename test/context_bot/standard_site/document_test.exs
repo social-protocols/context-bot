@@ -45,8 +45,19 @@ defmodule ContextBot.StandardSite.DocumentTest do
             "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:author/bafkreiaurora@jpeg"
         }
       ]
-    }
+    },
+    asked_text: "What bird is that?",
+    parent_uri: "at://did:plc:bob/app.bsky.feed.post/3parentrkey12"
   }
+
+  defmodule TrackingDocClient do
+    @moduledoc false
+
+    def put_record(_repo, _collection, _rkey, record) do
+      send(self(), {:document_put, record})
+      {:ok, 200, %{}, %{}}
+    end
+  end
 
   describe "create/5" do
     test "creates a document record successfully" do
@@ -101,6 +112,48 @@ defmodule ContextBot.StandardSite.DocumentTest do
                  @created_at
                )
     end
+
+    test "maps title and description from the question, not the rkey or reply" do
+      assert {:ok, _result} =
+               Document.create(
+                 TrackingDocClient,
+                 @repo,
+                 @publication_uri,
+                 @content,
+                 @created_at
+               )
+
+      assert_received {:document_put, record}
+      assert record["title"] == "What bird is that?"
+      assert record["description"] == "What bird is that?"
+      refute record["title"] =~ "Context on"
+      refute record["title"] =~ "3k123"
+      refute record["description"] =~ @content.selected_reply
+    end
+
+    test "falls back to truncated invocation text when the model title is junk" do
+      asked =
+        "Can you help me understand the historical context of this planned explosion near the harbor?"
+
+      content =
+        @content
+        |> Map.put(:asked_text, asked)
+        |> Map.put(:document_title, "Context on 3k123...")
+        |> Map.put(:selected_reply, "The blast was a planned demolition.")
+
+      assert {:ok, _result} =
+               Document.create(
+                 TrackingDocClient,
+                 @repo,
+                 @publication_uri,
+                 content,
+                 @created_at
+               )
+
+      assert_received {:document_put, record}
+      assert record["title"] == "Can you help me understand the"
+      assert record["description"] == asked
+    end
   end
 
   describe "format_markdown/1" do
@@ -134,6 +187,25 @@ defmodule ContextBot.StandardSite.DocumentTest do
       assert markdown =~ "do not guarantee an identical Claude response"
       refute markdown =~ "x-api-key"
       refute markdown =~ "authorization"
+    end
+
+    test "places an Asked block with the invocation and parent links before the writeup" do
+      markdown = Document.format_markdown(@content)
+      asked_at = :binary.match(markdown, "## Asked") |> elem(0)
+      analysis_at = :binary.match(markdown, "# Research Analysis") |> elem(0)
+
+      assert asked_at < analysis_at
+      assert markdown =~ "What bird is that?"
+      assert markdown =~ "https://bsky.app/profile/did:plc:abc/post/3k123"
+      assert markdown =~ "https://bsky.app/profile/did:plc:bob/post/3parentrkey12"
+    end
+
+    test "omits the parent link when the invoking post is not a reply" do
+      markdown = Document.format_markdown(Map.delete(@content, :parent_uri))
+
+      assert markdown =~ "## Asked"
+      assert markdown =~ "https://bsky.app/profile/did:plc:abc/post/3k123"
+      refute markdown =~ "3parentrkey12"
     end
   end
 
