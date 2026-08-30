@@ -4,6 +4,7 @@ defmodule ContextBot.Research.ReplyTest do
   alias ContextBot.ATProto.Post
   alias ContextBot.Research.Reply
   alias ContextBot.Research.ReplyLimits
+  alias Unicode.String.Segment
 
   test "accepts ordered model text at exactly 300 graphemes and 3,000 bytes" do
     reply =
@@ -950,7 +951,7 @@ defmodule ContextBot.Research.ReplyTest do
   end
 
   test "English CLDR sentence suppressions include U.S." do
-    suppressions = Unicode.String.Segment.suppressions!("en", :sentence_break)
+    suppressions = Segment.suppressions!("en", :sentence_break)
     assert "U.S." in suppressions
   end
 
