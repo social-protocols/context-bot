@@ -211,7 +211,7 @@ defmodule ContextBot.POCWorkflowTest do
   end
 
   test "the actor rolling limit defers before thread or provider HTTP" do
-    fixture = POCFixture.start!(settings: [actor_hourly_limit: 1])
+    fixture = POCFixture.start!(eligibility: :elder, settings: [actor_hourly_limit: 1])
     insert_invocation!("history-actor", @actor_did, :complete, admitted_at: now())
 
     POCFixture.poll_once!(fixture)

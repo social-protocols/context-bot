@@ -215,13 +215,24 @@ defmodule ContextBot.Workers.EligibilityWorkerTest do
     historical("rate-one", DateTime.add(@now, -30, :minute))
     historical("rate-two", DateTime.add(@now, -10, :minute))
     invocation = invocation("worker-rate", :received)
-    configure(settings(operator_allowed_dids: [@actor_did]))
+
+    Process.put(
+      {GateStub, :result},
+      {:eligible, :bluesky_elder,
+       %{
+         "actor_did" => @actor_did,
+         "label" => "bluesky-elder",
+         "labeler_did" => "did:plc:e4elbtctnfqocyfcml6h2lf7"
+       }}
+    )
+
+    configure(settings(), eligibility: GateStub)
 
     assert :ok = perform(invocation)
 
     persisted = Repo.reload!(invocation)
     assert persisted.status == :deferred_rate
-    assert persisted.eligibility_method == "operator_allowlist"
+    assert persisted.eligibility_method == "bluesky_elder"
     assert DateTime.after?(persisted.defer_until, @now)
     assert Repo.aggregate(Oban.Job, :count) == 0
   end
