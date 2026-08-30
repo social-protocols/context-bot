@@ -18,17 +18,11 @@ Anyone can mention it; it joins a thread when invited. Ask a concrete question, 
 
 ## Example
 
-**The Story on the Yosemite Land Deal**
+**Google's Geographic-Name Policy for Gulf of America**
 
-Asked:
+{{bluesky_embed}}
 
-> [@getcontext.bot](https://bsky.app/profile/getcontext.bot) What's the story here? How big is the parcel? Why does the developer want it? What would the Park Service get in return? Is there a legitimate reason for the NPS to consider it?
-
-Reply:
-
-> Per NOTUS: since spring 2025, NPS staff have been pressured by Interior leadership to cede a ~0.25-mile strip inside Yosemite to Kingsbarn Realty Capital (CEO Jeff Pori), for a road linking its 83-acre plot to a park road near sequoias.
-
-[Full writeup](https://standard-reader.app/a/did:plc:anbhmngzs3exwbq47xxzogk4/3mu67jhxqnv2b) · [Bluesky reply](https://bsky.app/profile/getcontext.bot/post/3mu67jhxqnv2c)
+[Full writeup](https://standard-reader.app/a/did:plc:anbhmngzs3exwbq47xxzogk4/3mudapth2od2p) · [Bluesky reply](https://bsky.app/profile/getcontext.bot/post/3mudelkjrym23)
 
 ## Why it works
 

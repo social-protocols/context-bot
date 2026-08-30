@@ -29,28 +29,36 @@ defmodule ContextBotWeb.PageControllerTest do
     assert response =~ "“Can you find the original source?”"
   end
 
-  test "GET / features the Yosemite land-deal invocation", %{conn: conn} do
+  test "GET / features the Stancil geographic-name invocation with a Bluesky embed", %{
+    conn: conn
+  } do
     conn = get(conn, ~p"/")
 
     response = html_response(conn, 200)
-    assert response =~ "The Story on the Yosemite Land Deal"
-    assert response =~ "How big is the parcel?"
-    assert response =~ "Why does the developer want it?"
-    assert response =~ "What would the Park Service get in return?"
-    assert response =~ "Is there a legitimate reason for the NPS to consider it?"
-    assert response =~ "Per NOTUS"
-    assert response =~ "0.25-mile strip inside Yosemite"
-    assert response =~ "Kingsbarn Realty Capital"
-
-    assert response =~
-             ~s(href="https://standard-reader.app/a/did:plc:anbhmngzs3exwbq47xxzogk4/3mu67jhxqnv2b")
-
-    assert response =~
-             ~s(href="https://bsky.app/profile/getcontext.bot/post/3mu67jhxqnv2c")
-
+    assert response =~ "Geographic-Name Policy for Gulf of America"
+    refute response =~ "Yosemite"
     refute response =~ "Lake America"
     refute response =~ "acceptable-opinion"
     refute response =~ "acceptable opinion"
+
+    assert response =~ ~s(class="bluesky-embed")
+
+    assert response =~
+             ~s(data-bluesky-uri="at://did:plc:7umvpuxe2vbrc3zrzuquzniu/app.bsky.feed.post/3muclgbgkic25")
+
+    assert response =~
+             ~s(data-bluesky-uri="at://did:plc:33avz2l7y5scw3abq3lmylns/app.bsky.feed.post/3muda3adex22u")
+
+    assert response =~ ~s(src="https://embed.bsky.app/static/embed.js")
+
+    assert response =~
+             ~s(href="https://standard-reader.app/a/did:plc:anbhmngzs3exwbq47xxzogk4/3mudapth2od2p")
+
+    assert response =~
+             ~s(href="https://bsky.app/profile/getcontext.bot/post/3mudelkjrym23")
+
+    csp = conn |> get_resp_header("content-security-policy") |> List.first()
+    assert csp =~ "https://embed.bsky.app"
   end
 
   test "GET / includes Open Graph and Twitter metadata", %{conn: conn} do

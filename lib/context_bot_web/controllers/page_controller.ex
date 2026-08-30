@@ -6,6 +6,13 @@ defmodule ContextBotWeb.PageController do
   @public_url "https://getcontext.bot/"
   @og_image_url "https://getcontext.bot/images/og.png"
   @og_description "Mention @getcontext.bot on a Bluesky post and ask it a question. It does the research and produces a brief response."
+  @embed_csp "base-uri 'self'; frame-ancestors 'self'; script-src 'self' https://embed.bsky.app; frame-src https://embed.bsky.app;"
+  # Official embed.bsky.app snippets for Stancil's root then Jonathan's mention.
+  @featured_embed """
+  <blockquote class="bluesky-embed" data-bluesky-uri="at://did:plc:7umvpuxe2vbrc3zrzuquzniu/app.bsky.feed.post/3muclgbgkic25" data-bluesky-cid="bafyreihnx7sfzeutwy6jvhwkqk2csf7m2enupq5wrbacxaamfthjxjm4ly"><p lang="en">Where does this madness with the renaming on Google end? Can Trump call the Atlantic Ocean the “Trump Ocean” and they’ll fall in line? Can he name Minnesota “Big Fat Loserville” and it goes on the map the next day?</p>&mdash; <a href="https://bsky.app/profile/did:plc:7umvpuxe2vbrc3zrzuquzniu?ref_src=embed">Will Stancil (@whstancil.bsky.social)</a> <a href="https://bsky.app/profile/did:plc:7umvpuxe2vbrc3zrzuquzniu/post/3muclgbgkic25?ref_src=embed">2026-08-30T14:17:28.676Z</a></blockquote>
+  <blockquote class="bluesky-embed" data-bluesky-uri="at://did:plc:33avz2l7y5scw3abq3lmylns/app.bsky.feed.post/3muda3adex22u" data-bluesky-cid="bafyreigtjp7s2nb4jbspklntpowcz556och4qbbn4qpomybbe3324l7vqi"><p lang="en">@getcontext.bot what is Google’s rationale for going along with this?</p>&mdash; <a href="https://bsky.app/profile/did:plc:33avz2l7y5scw3abq3lmylns?ref_src=embed">Jonathan Warden (@jonathanwarden.com)</a> <a href="https://bsky.app/profile/did:plc:33avz2l7y5scw3abq3lmylns/post/3muda3adex22u?ref_src=embed">2026-08-30T20:27:07.011Z</a></blockquote>
+  <script async src="https://embed.bsky.app/static/embed.js" charset="utf-8"></script>
+  """
 
   def home(conn, _params) do
     html_content = """
@@ -72,14 +79,17 @@ defmodule ContextBotWeb.PageController do
         a:hover {
           text-decoration: underline;
         }
-        blockquote {
+        blockquote:not(.bluesky-embed) {
           border-left: 3px solid #d0d0d0;
           padding: 0.25rem 0 0.25rem 1rem;
           margin: 0.75rem 0 1.25rem;
           color: #333333;
         }
-        blockquote p {
+        blockquote:not(.bluesky-embed) p {
           margin-bottom: 0;
+        }
+        .bluesky-embed {
+          margin: 1rem 0;
         }
         hr {
           border: none;
@@ -94,14 +104,19 @@ defmodule ContextBotWeb.PageController do
       </style>
     </head>
     <body>
-    #{markdown_to_html(@homepage_md)}
+    #{insert_featured_embed(markdown_to_html(@homepage_md))}
     </body>
     </html>
     """
 
     conn
+    |> put_resp_header("content-security-policy", @embed_csp)
     |> put_resp_content_type("text/html")
     |> send_resp(200, html_content)
+  end
+
+  defp insert_featured_embed(html) do
+    String.replace(html, "<p>{{bluesky_embed}}</p>", @featured_embed, global: false)
   end
 
   defp markdown_to_html(markdown) do
