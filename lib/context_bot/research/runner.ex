@@ -786,7 +786,6 @@ defmodule ContextBot.Research.Runner do
   defp reservation(settings, :continuation),
     do: settings.anthropic_continuation_reservation_microdollars
 
-  defp reservation(settings, :repair), do: settings.anthropic_repair_reservation_microdollars
   defp reservation(settings, :retry), do: settings.anthropic_retry_reservation_microdollars
 
   defp next_utc_rollover(now) do
