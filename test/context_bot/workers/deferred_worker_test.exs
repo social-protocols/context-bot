@@ -125,6 +125,44 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
     assert Repo.reload!(future).stage == :deferred_rate
   end
 
+  test "claims operator-allowlisted deferred_rate before defer_until" do
+    operator_did = "did:plc:operatoraaaaaaaaaaaaaaaaaa"
+
+    operator =
+      invocation("operator-future-rate", :deferred_rate,
+        actor_did: operator_did,
+        minutes_ago: 3,
+        defer_until: DateTime.add(@now, 60, :second)
+      )
+
+    other =
+      invocation("other-future-rate", :deferred_rate,
+        minutes_ago: 2,
+        defer_until: DateTime.add(@now, 60, :second)
+      )
+
+    configure(settings: settings(operator_allowed_dids: [operator_did]))
+
+    assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
+
+    assert Repo.reload!(operator).stage == :received
+    assert Repo.reload!(operator).defer_until == nil
+    assert Repo.reload!(other).stage == :deferred_rate
+
+    assert DateTime.compare(Repo.reload!(other).defer_until, DateTime.add(@now, 60, :second)) ==
+             :eq
+
+    assert Enum.any?(Repo.all(Oban.Job), fn job ->
+             job.worker == "ContextBot.Workers.EligibilityWorker" and
+               job.args == job_args(operator)
+           end)
+
+    refute Enum.any?(Repo.all(Oban.Job), fn job ->
+             job.worker == "ContextBot.Workers.EligibilityWorker" and
+               job.args == job_args(other)
+           end)
+  end
+
   test "capacity is rechecked while excluding the deferred invocation itself" do
     blocker = invocation("capacity-blocker", :received, minutes_ago: 3)
     deferred = invocation("capacity-waiter", :deferred_capacity, minutes_ago: 2)

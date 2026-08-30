@@ -104,21 +104,44 @@ defmodule ContextBot.Admission do
   end
 
   defp rate_defer_until(actor_did, now, settings, excluded_invocation_id \\ nil) do
-    [
-      breached_window(
-        actor_did,
-        now,
-        :hour,
-        settings.actor_hourly_limit,
-        excluded_invocation_id
-      ),
-      breached_window(actor_did, now, :day, settings.actor_daily_limit, excluded_invocation_id),
-      breached_window(nil, now, :hour, settings.global_hourly_limit, excluded_invocation_id),
-      breached_window(nil, now, :day, settings.global_daily_limit, excluded_invocation_id)
-    ]
+    actor_windows =
+      if skip_actor_rate_windows?(actor_did, settings) do
+        []
+      else
+        [
+          breached_window(
+            actor_did,
+            now,
+            :hour,
+            settings.actor_hourly_limit,
+            excluded_invocation_id
+          ),
+          breached_window(
+            actor_did,
+            now,
+            :day,
+            settings.actor_daily_limit,
+            excluded_invocation_id
+          )
+        ]
+      end
+
+    (actor_windows ++
+       [
+         breached_window(nil, now, :hour, settings.global_hourly_limit, excluded_invocation_id),
+         breached_window(nil, now, :day, settings.global_daily_limit, excluded_invocation_id)
+       ])
     |> Enum.reject(&is_nil/1)
     |> Enum.max(DateTime, fn -> nil end)
   end
+
+  # Operator allowlisting skips only actor hourly/daily windows. Global and
+  # max_pending capacity still apply, including for resume_available?/3.
+  defp skip_actor_rate_windows?(actor_did, %Settings{operator_allowed_dids: allowed})
+       when is_binary(actor_did),
+       do: actor_did in allowed
+
+  defp skip_actor_rate_windows?(_actor_did, _settings), do: false
 
   defp breached_window(actor_did, now, window, limit, excluded_invocation_id) do
     window_seconds = window_seconds(window)
