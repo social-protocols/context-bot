@@ -34,6 +34,7 @@ defmodule ContextBot.Research.Runner do
           required(:messages) => map(),
           required(:text) => String.t(),
           optional(:full_response) => String.t(),
+          optional(:document_title) => String.t(),
           required(:usage) => map(),
           required(:validation) => map()
         }
@@ -336,30 +337,8 @@ defmodule ContextBot.Research.Runner do
 
   defp classify_stop_reason(invocation, _entry, decoded, config) do
     case select_reply(decoded, invocation) do
-      {:ok, full_response, text} ->
-        {:ok,
-         attach_full_response(
-           %{
-             messages: invocation.anthropic_messages,
-             text: text,
-             full_response: full_response,
-             usage: usage_evidence(invocation, config),
-             validation: %{"result" => "valid", "repair_used" => repair_request?(invocation)}
-           },
-           invocation
-         )}
-
-      {:ok, text} ->
-        {:ok,
-         attach_full_response(
-           %{
-             messages: invocation.anthropic_messages,
-             text: text,
-             usage: usage_evidence(invocation, config),
-             validation: %{"result" => "valid", "repair_used" => repair_request?(invocation)}
-           },
-           invocation
-         )}
+      {:ok, selected} ->
+        {:ok, finish_selected(invocation, selected, config)}
 
       {:repairable, _text, _reasons} ->
         handle_repairable(invocation, decoded, config)
@@ -367,6 +346,28 @@ defmodule ContextBot.Research.Runner do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp finish_selected(invocation, selected, config) do
+    repair? = repair_request?(invocation)
+
+    %{
+      messages: invocation.anthropic_messages,
+      text: selected.text,
+      usage: usage_evidence(invocation, config),
+      validation: %{"result" => "valid", "repair_used" => repair?}
+    }
+    |> maybe_put_research_fields(selected, repair?)
+    |> attach_full_response(invocation)
+    |> attach_document_title(invocation)
+  end
+
+  defp maybe_put_research_fields(result, _selected, true), do: result
+
+  defp maybe_put_research_fields(result, selected, false) do
+    result
+    |> Map.put(:full_response, selected.full_response)
+    |> Map.put(:document_title, selected.document_title)
   end
 
   defp handle_repairable(invocation, decoded, config) do
@@ -386,21 +387,20 @@ defmodule ContextBot.Research.Runner do
     with {:ok, text, _reasons} <- extract_repairable_text(content, invocation),
          {:ok, part1, part2} <- Reply.split_text(text) do
       {:ok,
-       attach_full_response(
-         %{
-           messages: invocation.anthropic_messages,
-           text: part1,
-           text_part2: part2,
-           usage: usage_evidence(invocation, config),
-           validation: %{
-             "result" => "split",
-             "repair_used" => true,
-             "part1_graphemes" => String.length(part1),
-             "part2_graphemes" => String.length(part2)
-           }
-         },
-         invocation
-       )}
+       %{
+         messages: invocation.anthropic_messages,
+         text: part1,
+         text_part2: part2,
+         usage: usage_evidence(invocation, config),
+         validation: %{
+           "result" => "split",
+           "repair_used" => true,
+           "part1_graphemes" => String.length(part1),
+           "part2_graphemes" => String.length(part2)
+         }
+       }
+       |> attach_full_response(invocation)
+       |> attach_document_title(invocation)}
     else
       _failed -> {:error, :invalid_repair}
     end
@@ -601,6 +601,20 @@ defmodule ContextBot.Research.Runner do
     case Reply.full_response_from_messages(invocation.anthropic_messages) do
       full when is_binary(full) and byte_size(full) > 0 ->
         Map.put(result, :full_response, full)
+
+      _missing ->
+        result
+    end
+  end
+
+  defp attach_document_title(%{document_title: title} = result, _invocation)
+       when is_binary(title) and byte_size(title) > 0,
+       do: result
+
+  defp attach_document_title(result, invocation) do
+    case Reply.document_title_from_messages(invocation.anthropic_messages) do
+      title when is_binary(title) and byte_size(title) > 0 ->
+        Map.put(result, :document_title, title)
 
       _missing ->
         result

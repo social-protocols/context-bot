@@ -2,79 +2,93 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
   use ExUnit.Case, async: true
 
   alias ContextBot.Research.Reply
+  alias ContextBot.Research.StructuredFixtures
 
-  describe "select/2 with dual-format response" do
-    test "parses dual-format response correctly" do
+  describe "select/2 with structured JSON" do
+    test "selects title, compact reply, and full markdown from valid JSON" do
       content = [
         %{
           "type" => "text",
           "text" =>
-            "This is a detailed research writeup\nwith multiple lines.\n\n" <>
-              "---COMPACT_REPLY---\n" <>
-              "Short summary for Bluesky"
+            StructuredFixtures.structured_json("Short summary for Bluesky",
+              title: "What Is That Bird?",
+              full: "This is a detailed research writeup\nwith multiple lines."
+            )
         }
       ]
 
-      assert {:ok, full, compact} = Reply.select(content, :end_turn)
-      assert full == "This is a detailed research writeup\nwith multiple lines."
-      assert compact == "Short summary for Bluesky"
+      assert {:ok, selected} = Reply.select(content, :end_turn)
+      assert selected.text == "Short summary for Bluesky"
+      assert selected.full_response == "This is a detailed research writeup\nwith multiple lines."
+      assert selected.document_title == "What Is That Bird?"
     end
 
-    test "parses a separator without surrounding newlines" do
+    test "concatenates split JSON text blocks before decoding" do
+      encoded =
+        StructuredFixtures.structured_json("Short summary for Bluesky",
+          title: "Context Bot Launch",
+          full: "Full writeup"
+        )
+
+      {first, second} = String.split_at(encoded, div(String.length(encoded), 2))
+
+      content = [
+        %{"type" => "text", "text" => first},
+        %{"type" => "text", "text" => second}
+      ]
+
+      assert {:ok, selected} = Reply.select(content, :end_turn)
+      assert selected.text == "Short summary for Bluesky"
+      assert selected.full_response == "Full writeup"
+      assert selected.document_title == "Context Bot Launch"
+    end
+
+    test "fails closed when the model returns prose instead of JSON" do
       content = [
         %{
           "type" => "text",
-          "text" => "Full writeup---COMPACT_REPLY---Short summary for Bluesky"
+          "text" => "Just a regular reply without JSON"
         }
       ]
 
-      assert {:ok, full, compact} = Reply.select(content, :end_turn)
-      assert full == "Full writeup"
-      assert compact == "Short summary for Bluesky"
+      assert Reply.select(content, :end_turn) == {:error, :invalid_structured_output}
     end
 
-    test "falls back to single format when separator not found" do
-      content = [
-        %{
-          "type" => "text",
-          "text" => "Just a regular reply without separator"
-        }
-      ]
-
-      assert {:ok, text} = Reply.select(content, :end_turn)
-      assert text == "Just a regular reply without separator"
+    test "fails closed when required JSON fields are missing or blank" do
+      for text <- [
+            ~s({"title":"Bird","compact_reply":"Short"}),
+            ~s({"title":"Bird","compact_reply":"Short","full_response":""}),
+            ~s({"title":"","compact_reply":"Short","full_response":"Writeup."}),
+            ~s({"title":"Bird","compact_reply":"","full_response":"Writeup."}),
+            ~s({"title":1,"compact_reply":"Short","full_response":"Writeup."}),
+            "---COMPACT_REPLY---\nlegacy delimiter"
+          ] do
+        assert Reply.select([%{"type" => "text", "text" => text}], :end_turn) ==
+                 {:error, :invalid_structured_output}
+      end
     end
 
-    test "handles repairable compact reply in dual format" do
-      # 301 graphemes - over the limit
+    test "handles a repairable compact reply inside JSON" do
       long_compact = String.duplicate("a", 301)
 
       content = [
         %{
           "type" => "text",
-          "text" => "Full response here\n---COMPACT_REPLY---\n#{long_compact}"
+          "text" =>
+            StructuredFixtures.structured_json(long_compact,
+              title: "Overlong Reply",
+              full: "Full response here"
+            )
         }
       ]
 
       assert {:repairable, ^long_compact, [:too_many_graphemes]} =
                Reply.select(content, :end_turn)
     end
-
-    test "requires both parts to be non-empty" do
-      content = [
-        %{
-          "type" => "text",
-          "text" => "\n---COMPACT_REPLY---\nOnly compact part"
-        }
-      ]
-
-      assert {:ok, text} = Reply.select(content, :end_turn)
-      assert text == "\n---COMPACT_REPLY---\nOnly compact part"
-    end
   end
 
-  describe "full_response_from_messages/1" do
-    test "returns the full writeup from an earlier dual-format assistant turn" do
+  describe "full_response_from_messages/1 and document_title_from_messages/1" do
+    test "returns the writeup and title from an earlier structured assistant turn" do
       messages = %{
         "messages" => [
           %{"role" => "user", "content" => "thread"},
@@ -83,18 +97,23 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
             "content" => [
               %{
                 "type" => "text",
-                "text" => "Thorough markdown writeup.\n---COMPACT_REPLY---\nToo long compact"
+                "text" =>
+                  StructuredFixtures.structured_json("Too long compact",
+                    title: "What Is That Bird?",
+                    full: "Thorough markdown writeup."
+                  )
               }
             ]
           },
-          %{"role" => "user", "content" => "LENGTH_REPAIR\nReturn only the Bluesky reply text"}
+          %{"role" => "user", "content" => "LENGTH_REPAIR\nReturn the same JSON object"}
         ]
       }
 
       assert Reply.full_response_from_messages(messages) == "Thorough markdown writeup."
+      assert Reply.document_title_from_messages(messages) == "What Is That Bird?"
     end
 
-    test "returns nil when no assistant turn used dual format" do
+    test "returns nil when no assistant turn used structured JSON" do
       messages = %{
         "messages" => [
           %{"role" => "user", "content" => "thread"},
@@ -106,7 +125,9 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       }
 
       assert Reply.full_response_from_messages(messages) == nil
+      assert Reply.document_title_from_messages(messages) == nil
       assert Reply.full_response_from_messages(nil) == nil
+      assert Reply.document_title_from_messages(nil) == nil
     end
   end
 end

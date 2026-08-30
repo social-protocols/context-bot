@@ -133,7 +133,17 @@ defmodule ContextBot.LiveRunWorkflowTest do
     # Stub research response
     POCFixture.set_research_response(fixture, %{
       "stop_reason" => "end_turn",
-      "content" => [%{"type" => "text", "text" => "Public reports indicate this is a test."}]
+      "content" => [
+        %{
+          "type" => "text",
+          "text" =>
+            ContextBot.Research.StructuredFixtures.structured_json(
+              "Public reports indicate this is a test.",
+              title: "Public Reports",
+              full: "Public reports indicate this is a test."
+            )
+        }
+      ]
     })
 
     perform_and_delete!(:research)

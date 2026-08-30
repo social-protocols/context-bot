@@ -37,9 +37,13 @@ defmodule ContextBot.Research.Reply do
           required(:pending_server_tools) => %{optional(String.t()) => server_tool_name()},
           optional(:seen_server_tool_ids) => MapSet.t(String.t())
         }
+  @type selected :: %{
+          text: String.t(),
+          full_response: String.t(),
+          document_title: String.t()
+        }
   @type result ::
-          {:ok, String.t()}
-          | {:ok, String.t(), String.t()}
+          {:ok, selected()}
           | {:repairable, String.t(), [reason()]}
           | {:split, String.t(), String.t()}
           | {:error, reason()}
@@ -114,17 +118,22 @@ defmodule ContextBot.Research.Reply do
   def server_tool_context(_request, _additional_content), do: {:error, :invalid_content}
 
   @doc """
-  Returns the full writeup from the first dual-format assistant turn in a Messages request.
+  Returns the full writeup from the first structured assistant turn in a Messages request.
 
-  Length repair asks the model to return only compact Bluesky text, so callers that still need
-  the Standard.site document must recover it from the earlier research turn.
+  Length repair keeps the same JSON schema but rewrites only `compact_reply`, so callers
+  that still need the Standard.site document recover `full_response` from the earlier
+  research turn.
   """
   @spec full_response_from_messages(map() | nil) :: String.t() | nil
-  def full_response_from_messages(%{"messages" => messages}) when is_list(messages) do
-    Enum.find_value(messages, &assistant_full_response/1)
-  end
+  def full_response_from_messages(messages),
+    do: structured_field_from_messages(messages, :full_response)
 
-  def full_response_from_messages(_messages), do: nil
+  @doc """
+  Returns the Reader title from the first structured assistant turn in a Messages request.
+  """
+  @spec document_title_from_messages(map() | nil) :: String.t() | nil
+  def document_title_from_messages(messages),
+    do: structured_field_from_messages(messages, :document_title)
 
   @doc """
   Attempts to split text into two parts, each ≤300 graphemes and ≤3,000 bytes.
@@ -748,14 +757,23 @@ defmodule ContextBot.Research.Reply do
 
   defp valid_web_search_result?(_result), do: false
 
-  defp assistant_full_response(%{"role" => "assistant", "content" => content}) do
-    case parse_dual_response(assistant_plain_text(content)) do
-      {:ok, full_response, _compact} -> full_response
-      :not_dual_format -> nil
-    end
+  defp structured_field_from_messages(%{"messages" => messages}, field)
+       when is_list(messages) and field in [:full_response, :document_title] do
+    Enum.find_value(messages, fn message ->
+      case assistant_structured(message) do
+        {:ok, selected} -> selected[field]
+        :invalid -> nil
+      end
+    end)
   end
 
-  defp assistant_full_response(_message), do: nil
+  defp structured_field_from_messages(_messages, _field), do: nil
+
+  defp assistant_structured(%{"role" => "assistant", "content" => content}) do
+    parse_structured_response(assistant_plain_text(content))
+  end
+
+  defp assistant_structured(_message), do: :invalid
 
   defp assistant_plain_text(content) when is_binary(content), do: content
 
@@ -776,41 +794,53 @@ defmodule ContextBot.Research.Reply do
         {:error, :empty_reply}
 
       nonempty ->
-        case parse_dual_response(nonempty) do
-          {:ok, full_response, compact_reply} ->
-            classify_dual(full_response, compact_reply, limit_reasons(compact_reply))
+        case parse_structured_response(nonempty) do
+          {:ok, selected} ->
+            classify_structured(selected)
 
-          :not_dual_format ->
-            classify_limits(text, limit_reasons(text))
+          :invalid ->
+            {:error, :invalid_structured_output}
         end
     end
   end
 
-  defp parse_dual_response(text) do
-    case String.split(text, "---COMPACT_REPLY---", parts: 2) do
-      [full_response, compact_reply] ->
-        trimmed_full = String.trim(full_response)
-        trimmed_compact = String.trim(compact_reply)
-
-        if trimmed_full != "" and trimmed_compact != "" do
-          {:ok, trimmed_full, trimmed_compact}
-        else
-          :not_dual_format
-        end
-
-      _ ->
-        :not_dual_format
+  defp parse_structured_response(text) do
+    case Jason.decode(text) do
+      {:ok, decoded} -> structured_fields(decoded)
+      {:error, _reason} -> :invalid
     end
   end
 
-  defp classify_dual(full_response, compact_reply, []) when byte_size(full_response) > 0,
-    do: {:ok, full_response, compact_reply}
+  defp structured_fields(%{
+         "title" => title,
+         "compact_reply" => compact_reply,
+         "full_response" => full_response
+       })
+       when is_binary(title) and is_binary(compact_reply) and is_binary(full_response) do
+    title = String.trim(title)
+    compact_reply = String.trim(compact_reply)
+    full_response = String.trim(full_response)
 
-  defp classify_dual(full_response, compact_reply, reasons) when byte_size(full_response) > 0,
-    do: {:repairable, compact_reply, reasons}
+    if title != "" and compact_reply != "" and full_response != "" do
+      {:ok,
+       %{
+         text: compact_reply,
+         full_response: full_response,
+         document_title: title
+       }}
+    else
+      :invalid
+    end
+  end
 
-  defp classify_limits(text, []), do: {:ok, text}
-  defp classify_limits(text, reasons), do: {:repairable, text, reasons}
+  defp structured_fields(_decoded), do: :invalid
+
+  defp classify_structured(%{text: compact_reply} = selected) do
+    case limit_reasons(compact_reply) do
+      [] -> {:ok, selected}
+      reasons -> {:repairable, compact_reply, reasons}
+    end
+  end
 
   defp limit_reasons(text) do
     []

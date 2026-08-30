@@ -41,7 +41,7 @@ defmodule ContextBot.Research.RequestTest do
     assert request["stream"] == false
     assert request["cache_control"] == %{"type" => "ephemeral"}
     assert request["thinking"] == %{"type" => "adaptive"}
-    assert request["output_config"] == %{"effort" => "medium"}
+    assert_output_config(request, "medium")
     assert request["tool_choice"] == %{"type" => "auto"}
     assert is_binary(request["system"])
 
@@ -64,7 +64,7 @@ defmodule ContextBot.Research.RequestTest do
                "response_inclusion" => "excluded",
                "max_uses" => 3,
                "max_content_tokens" => 24_000,
-               "citations" => %{"enabled" => true}
+               "citations" => %{"enabled" => false}
              }
            ]
 
@@ -78,7 +78,7 @@ defmodule ContextBot.Research.RequestTest do
   test "sends one versioned prompt with the complete research and reply safety contract" do
     prompt = Request.initial(@canonical_thread, config())["system"]
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V5")
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V6")
     assert prompt =~ "ancestor"
     assert prompt =~ "unstable"
     assert prompt =~ "primary sources"
@@ -93,7 +93,11 @@ defmodule ContextBot.Research.RequestTest do
     assert prompt =~ "prompt injection"
     assert prompt =~ "275 Unicode grapheme"
     refute prompt =~ "at most 300 Unicode grapheme clusters"
-    assert prompt =~ "---COMPACT_REPLY---"
+    refute prompt =~ "---COMPACT_REPLY---"
+    assert prompt =~ "title"
+    assert prompt =~ "compact_reply"
+    assert prompt =~ "full_response"
+    assert prompt =~ "What Is That Bird?"
     assert prompt =~ "one Bluesky post"
     assert prompt =~ "images and their alt text"
     assert prompt =~ "directly"
@@ -243,24 +247,28 @@ defmodule ContextBot.Research.RequestTest do
     assert assistant_message == %{"role" => "assistant", "content" => completed_content}
     assert repair_message["role"] == "user"
     assert String.starts_with?(repair_message["content"], "LENGTH_REPAIR\n")
-    assert repair_message["content"] =~ "only the Bluesky reply text for a single post"
+    assert repair_message["content"] =~ "same JSON object"
+    assert repair_message["content"] =~ "compact_reply"
     assert repair_message["content"] =~ "at most 275 Unicode grapheme clusters"
-    assert repair_message["content"] =~ "---COMPACT_REPLY---"
+    refute repair_message["content"] =~ "---COMPACT_REPLY---"
     assert repair_message["content"] =~ "Do not perform additional research"
+    assert repaired["output_config"] == conversation["output_config"]
+    assert repaired["output_config"]["effort"] == "medium"
+    assert repaired["output_config"]["format"]["type"] == "json_schema"
   end
 
   test "exposes a stable hashed identity for the versioned system prompt" do
     prompt = Request.system_prompt()
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V5")
-    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V5"
-    assert Request.system_prompt_semantic_version() == "5.0.0"
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V6")
+    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V6"
+    assert Request.system_prompt_semantic_version() == "6.0.0"
 
     assert Request.system_prompt_sha256() ==
              :sha256 |> :crypto.hash(prompt) |> Base.encode16(case: :lower)
 
     assert Request.system_prompt_rkey() ==
-             "prompt-context-bot-system-v5-#{String.slice(Request.system_prompt_sha256(), 0, 16)}"
+             "prompt-context-bot-system-v6-#{String.slice(Request.system_prompt_sha256(), 0, 16)}"
 
     assert String.starts_with?(Request.length_repair_prompt(), "LENGTH_REPAIR")
 
@@ -279,13 +287,14 @@ defmodule ContextBot.Research.RequestTest do
         research_max_tokens: 4_096
       })
 
-    assert projection.prompt.id == "CONTEXT_BOT_SYSTEM_V5"
-    assert projection.prompt.semantic_version == "5.0.0"
+    assert projection.prompt.id == "CONTEXT_BOT_SYSTEM_V6"
+    assert projection.prompt.semantic_version == "6.0.0"
     assert projection.prompt.sha256 == Request.system_prompt_sha256()
     assert projection.parameters["anthropic-version"] == "2023-06-01"
     assert projection.parameters["model"] == "claude-sonnet-5"
     assert projection.parameters["max_tokens"] == 4_096
     assert projection.parameters["effort"] == "medium"
+    assert projection.parameters["output_format"] == "json_schema"
     assert projection.parameters["thinking"] == "adaptive"
     assert projection.parameters["tool_choice"] == "auto"
     assert projection.parameters["cache_control"] == "ephemeral"
@@ -307,7 +316,8 @@ defmodule ContextBot.Research.RequestTest do
                "allowed_callers" => ["direct"],
                "response_inclusion" => "excluded",
                "max_uses" => 2,
-               "max_content_tokens" => 10_000
+               "max_content_tokens" => 10_000,
+               "citations" => false
              }
            ]
 
@@ -416,6 +426,28 @@ defmodule ContextBot.Research.RequestTest do
     refute inspect(projection) =~ "sk-ant-secret"
     refute inspect(projection) =~ "Bearer secret-token"
     refute inspect(projection) =~ "session=secret"
+  end
+
+  test "sends json_schema format beside effort and omits unsupported length keywords" do
+    request = Request.initial(@canonical_thread, config())
+    schema = Request.output_schema()
+    encoded = Jason.encode!(request)
+
+    assert_output_config(request, "medium")
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] == false
+    assert schema["required"] == ["title", "compact_reply", "full_response"]
+    assert schema["properties"]["title"]["description"] =~ "What Is That Bird?"
+    assert schema["properties"]["compact_reply"]["description"] =~ "275"
+    refute encoded =~ "maxLength"
+    refute encoded =~ "minLength"
+    refute encoded =~ "structured-outputs"
+  end
+
+  defp assert_output_config(request, effort) do
+    assert request["output_config"]["effort"] == effort
+    assert request["output_config"]["format"]["type"] == "json_schema"
+    assert request["output_config"]["format"]["schema"] == Request.output_schema()
   end
 
   defp config do

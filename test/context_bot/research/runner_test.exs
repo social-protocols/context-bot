@@ -23,6 +23,7 @@ defmodule ContextBot.Research.RunnerTest do
   use ContextBot.DataCase, async: false
 
   alias ContextBot.Research.{Budget, BudgetEntry, ResponseEnvelope, Runner}
+  alias ContextBot.Research.StructuredFixtures
   alias ContextBot.Workflow.{Invocation, Store}
   alias Ecto.Adapters.SQL
 
@@ -59,7 +60,13 @@ defmodule ContextBot.Research.RunnerTest do
              "web_fetch_20270809"
            ]
 
-    assert request["output_config"] == %{"effort" => "medium"}
+    assert request["output_config"]["effort"] == "medium"
+    assert request["output_config"]["format"]["type"] == "json_schema"
+
+    assert request["output_config"]["format"]["schema"] ==
+             ContextBot.Research.Request.output_schema()
+
+    assert Enum.at(request["tools"], 1)["citations"] == %{"enabled" => false}
 
     assert Repo.reload!(invocation).anthropic_messages == request
   end
@@ -174,6 +181,8 @@ defmodule ContextBot.Research.RunnerTest do
 
     assert {:ok, result} = Runner.run(invocation, options(decoder: decoder))
     assert result.text == "Useful context from primary sources."
+    assert result.full_response == "Useful context from primary sources."
+    assert result.document_title == "Primary Sources"
 
     assert_received {:attempt_at_send, :sent, %DateTime{}, nil}
     assert_received {:decode_observed, ^raw_body, 200, %DateTime{}}
@@ -555,7 +564,7 @@ defmodule ContextBot.Research.RunnerTest do
       put_in(
         fixture,
         ["primary", "content"],
-        tool_blocks ++ [%{"type" => "text", "text" => String.duplicate("x", 301)}]
+        tool_blocks ++ [structured_text(String.duplicate("x", 301))]
       )["primary"]
 
     primary_raw = Jason.encode!(primary)
@@ -833,7 +842,7 @@ defmodule ContextBot.Research.RunnerTest do
             "content" => []
           }
         },
-        %{"type" => "text", "text" => "Final context only."}
+        structured_text("Final context only.")
       ])["success"]
 
     Process.put(:runner_client_results, [
@@ -871,7 +880,7 @@ defmodule ContextBot.Research.RunnerTest do
             "content" => []
           }
         },
-        %{"type" => "text", "text" => "Useful context from primary sources."}
+        structured_text("Useful context from primary sources.")
       ])
 
     Process.put(:runner_client_results, [{:ok, envelope(200, Jason.encode!(body))}])
@@ -1073,7 +1082,7 @@ defmodule ContextBot.Research.RunnerTest do
             "error_code" => "max_uses_exceeded"
           }
         },
-        %{"type" => "text", "text" => "Useful context from primary sources."}
+        structured_text("Useful context from primary sources.")
       ])
 
     Process.put(:runner_client_results, [{:ok, envelope(200, Jason.encode!(body))}])
@@ -1106,7 +1115,7 @@ defmodule ContextBot.Research.RunnerTest do
             "error_code" => "max_uses_exceeded"
           }
         },
-        %{"type" => "text", "text" => "Useful context from primary sources."}
+        structured_text("Useful context from primary sources.")
       ])
 
     Process.put(:runner_client_results, [{:ok, envelope(200, Jason.encode!(body))}])
@@ -1269,14 +1278,14 @@ defmodule ContextBot.Research.RunnerTest do
       put_in(
         fixture,
         ["primary", "content"],
-        [%{"type" => "text", "text" => String.duplicate("x", 301)}]
+        [structured_text(String.duplicate("x", 301))]
       )["primary"]
 
     repair =
       put_in(
         fixture,
         ["repair", "content"],
-        [%{"type" => "text", "text" => still_over_text}]
+        [structured_text(still_over_text)]
       )["repair"]
 
     Process.put(:runner_client_results, [
@@ -1287,7 +1296,8 @@ defmodule ContextBot.Research.RunnerTest do
     assert {:ok, result} = Runner.run(invocation, options())
     assert result.text == part1
     assert result.text_part2 == part2
-    refute Map.has_key?(result, :full_response)
+    assert result.full_response == "Writeup."
+    assert result.document_title == "Context Request"
     assert result.validation["result"] == "split"
     assert result.validation["repair_used"] == true
     assert result.validation["part1_graphemes"] == 150
@@ -1297,23 +1307,25 @@ defmodule ContextBot.Research.RunnerTest do
     assert_received {:anthropic_call, _request, %{kind: :repair}, false}
   end
 
-  test "a dual-format compact that still splits after repair keeps the original full response" do
+  test "a structured compact that still splits after repair keeps the original full response" do
     invocation = invocation("dual-format-repair-split")
     fixture = decoded_fixture("repair_success.json")
     full = "Thorough markdown writeup with sources."
+    title = "What Is That Bird?"
     part1 = String.duplicate("a", 150)
     part2 = String.duplicate("b", 160)
     still_over_text = part1 <> "\n\n" <> part2
-    dual = full <> "\n---COMPACT_REPLY---\n" <> String.duplicate("c", 328)
 
     primary =
-      put_in(fixture, ["primary", "content"], [%{"type" => "text", "text" => dual}])["primary"]
+      put_in(fixture, ["primary", "content"], [
+        structured_text(String.duplicate("c", 328), title: title, full: full)
+      ])["primary"]
 
     repair =
       put_in(
         fixture,
         ["repair", "content"],
-        [%{"type" => "text", "text" => still_over_text}]
+        [structured_text(still_over_text, title: title, full: full)]
       )["repair"]
 
     Process.put(:runner_client_results, [
@@ -1325,6 +1337,7 @@ defmodule ContextBot.Research.RunnerTest do
     assert result.text == part1
     assert result.text_part2 == part2
     assert result.full_response == full
+    assert result.document_title == title
     assert result.validation["result"] == "split"
     assert result.validation["repair_used"] == true
 
@@ -1332,56 +1345,77 @@ defmodule ContextBot.Research.RunnerTest do
     assert_received {:anthropic_call, _request, %{kind: :repair}, false}
   end
 
-  test "an under-limit reply stays one post without repair or split" do
+  test "an under-limit structured reply stays one post without repair or split" do
     invocation = invocation("under-limit-one-post")
     text = String.duplicate("a", 300)
 
     Process.put(:runner_client_results, [
-      {:ok, envelope(200, Jason.encode!(message_body(text)))}
+      {:ok, envelope(200, Jason.encode!(message_body(structured_json(text))))}
     ])
 
     assert {:ok, result} = Runner.run(invocation, options())
     assert result.text == text
+    assert result.full_response == "Writeup."
+    assert result.document_title == "Context Request"
     refute Map.has_key?(result, :text_part2)
     assert result.validation == %{"result" => "valid", "repair_used" => false}
     assert_received {:anthropic_call, _request, %{kind: :research}, false}
     refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
   end
 
-  test "a dual-format compact that fits in one post does not split" do
+  test "prose instead of structured JSON fails closed without publishing" do
+    invocation = invocation("invalid-structured-output")
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(message_body("Just a regular reply without JSON")))}
+    ])
+
+    assert {:error, :invalid_structured_output} = Runner.run(invocation, options())
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
+  end
+
+  test "a structured compact that fits in one post does not split" do
     invocation = invocation("dual-format-one-post")
     compact = String.duplicate("b", 250)
     full = "Thorough markdown writeup with sources and method."
-    dual = full <> "\n---COMPACT_REPLY---\n" <> compact
+    title = "What Is That Bird?"
 
     Process.put(:runner_client_results, [
-      {:ok, envelope(200, Jason.encode!(message_body(dual)))}
+      {:ok,
+       envelope(
+         200,
+         Jason.encode!(message_body(structured_json(compact, title: title, full: full)))
+       )}
     ])
 
     assert {:ok, result} = Runner.run(invocation, options())
     assert result.text == compact
     assert result.full_response == full
+    assert result.document_title == title
     refute Map.has_key?(result, :text_part2)
     assert result.validation == %{"result" => "valid", "repair_used" => false}
     assert_received {:anthropic_call, _request, %{kind: :research}, false}
     refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
   end
 
-  test "an over-limit dual-format compact that repairs under the limit stays one post" do
+  test "an over-limit structured compact that repairs under the limit stays one post" do
     invocation = invocation("dual-format-repair-one-post")
     fixture = decoded_fixture("repair_success.json")
     compact = String.duplicate("c", 328)
     full = "Thorough markdown writeup."
-    dual = full <> "\n---COMPACT_REPLY---\n" <> compact
+    title = "What Is That Bird?"
 
     primary =
-      put_in(fixture, ["primary", "content"], [%{"type" => "text", "text" => dual}])["primary"]
+      put_in(fixture, ["primary", "content"], [
+        structured_text(compact, title: title, full: full)
+      ])["primary"]
 
     repair =
       put_in(
         fixture,
         ["repair", "content"],
-        [%{"type" => "text", "text" => "A concise repaired answer."}]
+        [structured_text("A concise repaired answer.", title: title, full: full)]
       )["repair"]
 
     Process.put(:runner_client_results, [
@@ -1392,6 +1426,7 @@ defmodule ContextBot.Research.RunnerTest do
     assert {:ok, result} = Runner.run(invocation, options())
     assert result.text == "A concise repaired answer."
     assert result.full_response == full
+    assert result.document_title == title
     refute Map.has_key?(result, :text_part2)
     assert result.validation == %{"result" => "valid", "repair_used" => true}
     assert_received {:anthropic_call, _request, %{kind: :research}, false}
@@ -1408,14 +1443,14 @@ defmodule ContextBot.Research.RunnerTest do
       put_in(
         fixture,
         ["primary", "content"],
-        [%{"type" => "text", "text" => String.duplicate("x", 301)}]
+        [structured_text(String.duplicate("x", 301))]
       )["primary"]
 
     repair =
       put_in(
         fixture,
         ["repair", "content"],
-        [%{"type" => "text", "text" => unsplittable}]
+        [structured_text(unsplittable)]
       )["repair"]
 
     Process.put(:runner_client_results, [
@@ -1673,6 +1708,12 @@ defmodule ContextBot.Research.RunnerTest do
   end
 
   defp decoded_fixture(name), do: name |> fixture() |> Jason.decode!()
+
+  defp structured_json(compact, opts \\ []), do: StructuredFixtures.structured_json(compact, opts)
+
+  defp structured_text(compact, opts \\ []) do
+    %{"type" => "text", "text" => structured_json(compact, opts)}
+  end
 
   defp message_body(text) do
     %{

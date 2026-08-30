@@ -85,7 +85,8 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
         now: fn -> @now end,
         sleep: fn _milliseconds -> :ok end
       ],
-      settings: settings
+      settings: settings,
+      atproto_client: FakeStandardSiteClient
     )
 
     assert :ok = perform(invocation)
@@ -94,9 +95,11 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     persisted = Repo.reload!(invocation)
     assert persisted.stage == :reply_ready
     assert persisted.selected_reply == "Useful context from primary sources."
+    assert persisted.full_response == "Useful context from primary sources."
+    assert persisted.standard_site_document_uri =~ "site.standard.document"
     assert [response] = Store.anthropic_responses(persisted)
     assert response.raw_body == body
-    assert persisted.reply_record["text"] == persisted.selected_reply
+    assert persisted.reply_record["text"] == persisted.selected_reply <> " (full response)"
     assert [%Oban.Job{worker: "ContextBot.Workers.ReplyWorker"}] = Repo.all(Oban.Job)
 
     assert :ok = perform(persisted)

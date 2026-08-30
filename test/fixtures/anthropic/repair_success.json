@@ -12,7 +12,7 @@
       },
       {
         "type": "text",
-        "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        "text": "{\"title\":\"Overlong Reply\",\"compact_reply\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"full_response\":\"Writeup.\"}"
       }
     ],
     "stop_reason": "end_turn",
@@ -35,7 +35,7 @@
     "role": "assistant",
     "model": "claude-sonnet-5",
     "content": [
-      {"type": "text", "text": "A concise repaired answer."}
+      {"type": "text", "text": "{\"title\":\"Overlong Reply\",\"compact_reply\":\"A concise repaired answer.\",\"full_response\":\"Writeup.\"}"}
     ],
     "stop_reason": "end_turn",
     "stop_sequence": null,

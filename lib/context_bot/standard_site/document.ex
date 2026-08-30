@@ -20,6 +20,7 @@ defmodule ContextBot.StandardSite.Document do
     "model",
     "max_tokens",
     "effort",
+    "output_format",
     "thinking",
     "tool_choice",
     "cache_control",
