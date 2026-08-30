@@ -45,7 +45,7 @@ defmodule ContextBot.Research.Reply do
           | {:error, reason()}
 
   @doc """
-  Concatenates final model-authored text in order and classifies it for publication or repair.
+  Concatenates final model-authored text in order and classifies it for publication or a local split.
 
   A bare stop reason means there are no server-tool calls pending from an earlier response. For a
   continued `pause_turn`, pass `%{stop_reason: reason, pending_server_tools: %{id => name}}` so a

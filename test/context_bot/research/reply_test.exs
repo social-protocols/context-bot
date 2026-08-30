@@ -522,7 +522,7 @@ defmodule ContextBot.Research.ReplyTest do
     end)
   end
 
-  test "accepts replies between prompt target and hard cap without repair" do
+  test "accepts replies between prompt target and hard cap without a split" do
     at_276 = String.duplicate("a", 276)
     at_280 = String.duplicate("a", 280)
     at_300 = String.duplicate("a", 300)

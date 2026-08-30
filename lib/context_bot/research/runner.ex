@@ -33,6 +33,7 @@ defmodule ContextBot.Research.Runner do
   @type result :: %{
           required(:messages) => map(),
           required(:text) => String.t(),
+          optional(:text_part2) => String.t(),
           optional(:full_response) => String.t(),
           required(:usage) => map(),
           required(:validation) => map()
@@ -344,7 +345,7 @@ defmodule ContextBot.Research.Runner do
              text: text,
              full_response: full_response,
              usage: usage_evidence(invocation, config),
-             validation: %{"result" => "valid", "repair_used" => repair_request?(invocation)}
+             validation: %{"result" => "valid", "repair_used" => false}
            },
            invocation
          )}
@@ -356,62 +357,42 @@ defmodule ContextBot.Research.Runner do
              messages: invocation.anthropic_messages,
              text: text,
              usage: usage_evidence(invocation, config),
-             validation: %{"result" => "valid", "repair_used" => repair_request?(invocation)}
+             validation: %{"result" => "valid", "repair_used" => false}
            },
            invocation
          )}
 
-      {:repairable, _text, _reasons} ->
-        handle_repairable(invocation, decoded, config)
+      {:repairable, text, _reasons} ->
+        split_over_limit(invocation, text, decoded, config)
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp handle_repairable(invocation, decoded, config) do
-    cond do
-      not repair_request?(invocation) ->
-        start_repair(invocation, decoded, config)
+  defp split_over_limit(invocation, text, decoded, config) do
+    case Reply.split_text(text) do
+      {:ok, part1, part2} ->
+        {:ok,
+         attach_full_response(
+           %{
+             messages: invocation.anthropic_messages,
+             text: part1,
+             text_part2: part2,
+             usage: usage_evidence(invocation, config),
+             validation: %{
+               "result" => "split",
+               "repair_used" => false,
+               "part1_graphemes" => String.length(part1),
+               "part2_graphemes" => String.length(part2)
+             }
+           },
+           invocation,
+           decoded
+         )}
 
-      repair_attempted?(invocation) ->
-        attempt_split_or_fail(invocation, decoded, config)
-
-      true ->
-        start_attempt(invocation, :repair, config)
-    end
-  end
-
-  defp attempt_split_or_fail(invocation, %{"content" => content}, config) do
-    with {:ok, text, _reasons} <- extract_repairable_text(content, invocation),
-         {:ok, part1, part2} <- Reply.split_text(text) do
-      {:ok,
-       attach_full_response(
-         %{
-           messages: invocation.anthropic_messages,
-           text: part1,
-           text_part2: part2,
-           usage: usage_evidence(invocation, config),
-           validation: %{
-             "result" => "split",
-             "repair_used" => true,
-             "part1_graphemes" => String.length(part1),
-             "part2_graphemes" => String.length(part2)
-           }
-         },
-         invocation
-       )}
-    else
-      _failed -> {:error, :invalid_repair}
-    end
-  end
-
-  defp attempt_split_or_fail(_invocation, _decoded, _config), do: {:error, :invalid_repair}
-
-  defp extract_repairable_text(content, invocation) do
-    case select_reply(%{"content" => content, "stop_reason" => "end_turn"}, invocation) do
-      {:repairable, text, reasons} -> {:ok, text, reasons}
-      _other -> :error
+      :error ->
+        {:error, :invalid_repair}
     end
   end
 
@@ -429,22 +410,6 @@ defmodule ContextBot.Research.Runner do
   end
 
   defp continue_pause(_invocation, _decoded, _config),
-    do: {:error, :malformed_provider_response}
-
-  defp start_repair(invocation, %{"content" => content}, config) when is_list(content) do
-    request =
-      Request.repair(
-        invocation.anthropic_messages,
-        content,
-        config.settings.anthropic_length_repair_max_tokens
-      )
-
-    with {:ok, checkpoint} <- checkpoint_request(invocation, request, config) do
-      start_attempt(checkpoint, :repair, config)
-    end
-  end
-
-  defp start_repair(_invocation, _decoded, _config),
     do: {:error, :malformed_provider_response}
 
   defp checkpoint_request(invocation, request, config) do
@@ -593,12 +558,14 @@ defmodule ContextBot.Research.Runner do
     end
   end
 
-  defp attach_full_response(%{full_response: full} = result, _invocation)
+  defp attach_full_response(result, invocation, decoded \\ nil)
+
+  defp attach_full_response(%{full_response: full} = result, _invocation, _decoded)
        when is_binary(full) and byte_size(full) > 0,
        do: result
 
-  defp attach_full_response(result, invocation) do
-    case Reply.full_response_from_messages(invocation.anthropic_messages) do
+  defp attach_full_response(result, invocation, decoded) do
+    case current_or_stored_full_response(invocation, decoded) do
       full when is_binary(full) and byte_size(full) > 0 ->
         Map.put(result, :full_response, full)
 
@@ -606,6 +573,19 @@ defmodule ContextBot.Research.Runner do
         result
     end
   end
+
+  defp current_or_stored_full_response(invocation, decoded) do
+    from_current_envelope(decoded) ||
+      Reply.full_response_from_messages(invocation.anthropic_messages)
+  end
+
+  defp from_current_envelope(%{"content" => content}) when is_list(content) do
+    Reply.full_response_from_messages(%{
+      "messages" => [%{"role" => "assistant", "content" => content}]
+    })
+  end
+
+  defp from_current_envelope(_decoded), do: nil
 
   defp select_reply(%{"content" => content, "stop_reason" => stop_reason}, invocation) do
     with {:ok, tool_context} <- Reply.server_tool_context(invocation.anthropic_messages) do
@@ -724,12 +704,6 @@ defmodule ContextBot.Research.Runner do
   end
 
   defp repair_request?(_invocation), do: false
-
-  defp repair_attempted?(invocation) do
-    BudgetEntry
-    |> where([entry], entry.invocation_id == ^invocation.id and entry.kind == :repair)
-    |> Repo.exists?()
-  end
 
   defp metadata(entry), do: %{attempt_key: entry.attempt_key, kind: entry.kind}
 

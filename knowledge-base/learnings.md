@@ -4,7 +4,7 @@ One-sentence facts and constraints distilled from investigations in this repo. L
 
 - Devbox 0.16 needs explicit Beam flake packages with the Elixir plugin disabled on current macOS nixpkgs. ([reports/2026-07-27-devbox-elixir-macos.md](reports/2026-07-27-devbox-elixir-macos.md))
 - Export Nix's CA bundle as both `SSL_CERT_FILE` and `HEX_CACERTS_PATH` for Erlang HTTPS on macOS. ([reports/2026-07-27-devbox-elixir-macos.md](reports/2026-07-27-devbox-elixir-macos.md))
-- Anthropic prompt caching requires an identical tools/system/messages prefix; keep optional length repair append-only and treat cache hits only as an optimization. ([reports/2026-07-27-audit-protocol-constraints.md](reports/2026-07-27-audit-protocol-constraints.md))
+- Anthropic prompt caching requires an identical tools/system/messages prefix; treat cache hits only as an optimization. Over-cap compact replies split locally rather than calling a length-repair rewrite. ([reports/2026-07-27-audit-protocol-constraints.md](reports/2026-07-27-audit-protocol-constraints.md))
 - Local ATProto CIDs prove content identity; only PDS inclusion authenticates repository state. ([reports/2026-07-27-audit-protocol-constraints.md](reports/2026-07-27-audit-protocol-constraints.md))
 - IPFS adds no durability without operated or paid pins and gateways. ([reports/2026-07-27-audit-protocol-constraints.md](reports/2026-07-27-audit-protocol-constraints.md))
 - Request Skywatch labels from direct `api.bsky.app` and require its labeler-confirmation response header. ([reports/2026-07-28-live-eligibility-signals.md](reports/2026-07-28-live-eligibility-signals.md))

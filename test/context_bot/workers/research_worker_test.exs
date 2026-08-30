@@ -186,7 +186,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
        |> Map.put(:text_part2, part2)
        |> Map.put(:validation, %{
          "result" => "split",
-         "repair_used" => true,
+         "repair_used" => false,
          "part1_graphemes" => 150,
          "part2_graphemes" => 160
        })}
@@ -413,7 +413,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
        |> Map.put(:full_response, "Thorough markdown writeup.")
        |> Map.put(:validation, %{
          "result" => "split",
-         "repair_used" => true,
+         "repair_used" => false,
          "part1_graphemes" => 150,
          "part2_graphemes" => 160
        })}
@@ -491,7 +491,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
        |> Map.put(:full_response, "Thorough markdown writeup.")
        |> Map.put(:validation, %{
          "result" => "split",
-         "repair_used" => true,
+         "repair_used" => false,
          "part1_graphemes" => 150,
          "part2_graphemes" => 160
        })}

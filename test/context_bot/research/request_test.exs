@@ -198,57 +198,6 @@ defmodule ContextBot.Research.RequestTest do
     end
   end
 
-  test "repairs append-only while changing only max_tokens outside the conversation" do
-    initial = Request.initial(@canonical_thread, config())
-
-    paused_content = [
-      %{
-        "type" => "server_tool_use",
-        "id" => "server-call-1",
-        "name" => "web_fetch",
-        "caller" => %{"type" => "direct", "future" => %{"opaque" => true}},
-        "input" => %{"url" => "https://example.test/live"}
-      }
-    ]
-
-    conversation = Request.continue(initial, paused_content, initial["max_tokens"])
-
-    completed_content = [
-      %{
-        "type" => "thinking",
-        "thinking" => "opaque summary",
-        "signature" => "signed-completed-thinking"
-      },
-      %{"type" => "text", "text" => String.duplicate("too long ", 60)},
-      %{
-        "type" => "future_completed_block",
-        "encrypted_content" => "opaque-ciphertext",
-        "nested" => [%{"unknown" => [1, 2, 3]}]
-      }
-    ]
-
-    repaired = Request.repair(conversation, completed_content, 1_024)
-
-    assert repaired["max_tokens"] == 1_024
-
-    assert Map.drop(repaired, ["messages", "max_tokens"]) ==
-             Map.drop(conversation, ["messages", "max_tokens"])
-
-    assert Enum.take(repaired["messages"], length(conversation["messages"])) ==
-             conversation["messages"]
-
-    assert [assistant_message, repair_message] =
-             Enum.drop(repaired["messages"], length(conversation["messages"]))
-
-    assert assistant_message == %{"role" => "assistant", "content" => completed_content}
-    assert repair_message["role"] == "user"
-    assert String.starts_with?(repair_message["content"], "LENGTH_REPAIR\n")
-    assert repair_message["content"] =~ "only the Bluesky reply text for a single post"
-    assert repair_message["content"] =~ "at most 275 Unicode grapheme clusters"
-    assert repair_message["content"] =~ "---COMPACT_REPLY---"
-    assert repair_message["content"] =~ "Do not perform additional research"
-  end
-
   test "exposes a stable hashed identity for the versioned system prompt" do
     prompt = Request.system_prompt()
 
@@ -261,13 +210,6 @@ defmodule ContextBot.Research.RequestTest do
 
     assert Request.system_prompt_rkey() ==
              "prompt-context-bot-system-v5-#{String.slice(Request.system_prompt_sha256(), 0, 16)}"
-
-    assert String.starts_with?(Request.length_repair_prompt(), "LENGTH_REPAIR")
-
-    assert Request.length_repair_sha256() ==
-             :sha256
-             |> :crypto.hash(Request.length_repair_prompt())
-             |> Base.encode16(case: :lower)
   end
 
   test "projects allowlisted Messages parameters and the first user message" do
@@ -356,7 +298,7 @@ defmodule ContextBot.Research.RequestTest do
     refute inspect(projection) =~ "token=abc"
   end
 
-  test "flags continuation and length-repair without copying assistant thinking" do
+  test "flags continuation without copying assistant thinking" do
     initial = Request.initial(@canonical_thread, config())
 
     continued =
@@ -381,23 +323,36 @@ defmodule ContextBot.Research.RequestTest do
     assert continued_projection.continuation == true
     assert continued_projection.length_repair == false
     assert continued_projection.parameters["continuation"] == true
+    assert continued_projection.parameters["length_repair"] == false
     refute inspect(continued_projection) =~ "hidden chain of thought"
     refute inspect(continued_projection) =~ "signed-thinking-payload"
+  end
 
-    repaired = Request.repair(continued, [%{"type" => "text", "text" => "too long"}], 1_024)
+  test "projects a historically stored length-repair conversation without copying the prompt" do
+    request =
+      @canonical_thread
+      |> then(&Request.initial(&1, config()))
+      |> Map.put("max_tokens", 1_024)
+      |> Map.update!("messages", fn messages ->
+        messages ++
+          [
+            %{"role" => "assistant", "content" => [%{"type" => "text", "text" => "too long"}]},
+            %{"role" => "user", "content" => "LENGTH_REPAIR\nrewrite"}
+          ]
+      end)
 
-    repaired_projection =
-      Request.public_projection(repaired, %{
+    projection =
+      Request.public_projection(request, %{
         anthropic_api_version: "2023-06-01",
         research_max_tokens: 4_096
       })
 
-    assert repaired_projection.continuation == true
-    assert repaired_projection.length_repair == true
-    assert repaired_projection.parameters["max_tokens"] == 4_096
-    assert repaired_projection.parameters["research_max_tokens"] == 4_096
-    assert repaired_projection.parameters["length_repair_max_tokens"] == 1_024
-    refute inspect(repaired_projection) =~ "LENGTH_REPAIR\n"
+    assert projection.continuation == false
+    assert projection.length_repair == true
+    assert projection.parameters["max_tokens"] == 4_096
+    assert projection.parameters["research_max_tokens"] == 4_096
+    assert projection.parameters["length_repair_max_tokens"] == 1_024
+    refute inspect(projection) =~ "LENGTH_REPAIR\n"
   end
 
   test "drops injected secrets from the public projection" do
