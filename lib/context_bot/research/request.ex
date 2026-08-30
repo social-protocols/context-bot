@@ -53,14 +53,6 @@ defmodule ContextBot.Research.Request do
      sources, findings, and conclusions. This field has no length limit and should be thorough
      and complete.
   """
-  @length_repair """
-  LENGTH_REPAIR
-  Return the same JSON object with title, compact_reply, and full_response. Rewrite only
-  compact_reply so it is the Bluesky reply text for a single post. compact_reply must be
-  nonempty plain text (no markdown, preamble, labels, or an audit suffix) of at most #{@prompt_target_graphemes} Unicode grapheme clusters and at most 3,000 UTF-8 bytes. Keep title
-  and full_response unchanged. Do not perform additional research and do not use any tool.
-  Rewrite the completed answer to fit one Bluesky post; never truncate it.
-  """
 
   @type canonical_thread ::
           %{required(:version) => 1, required(:text) => String.t()}
@@ -101,10 +93,6 @@ defmodule ContextBot.Research.Request do
   @spec system_prompt() :: String.t()
   def system_prompt, do: @system_prompt
 
-  @doc "User turn appended for compact-reply length repair."
-  @spec length_repair_prompt() :: String.t()
-  def length_repair_prompt, do: @length_repair
-
   @spec system_prompt_id() :: String.t()
   def system_prompt_id, do: @prompt_id
 
@@ -113,9 +101,6 @@ defmodule ContextBot.Research.Request do
 
   @spec system_prompt_sha256() :: String.t()
   def system_prompt_sha256, do: sha256_hex(@system_prompt)
-
-  @spec length_repair_sha256() :: String.t()
-  def length_repair_sha256, do: sha256_hex(@length_repair)
 
   @doc """
   Stable Standard.site document rkey for the current system-prompt bytes.
@@ -269,28 +254,6 @@ defmodule ContextBot.Research.Request do
     else
       raise ArgumentError, "continuation max_tokens must match the existing request"
     end
-  end
-
-  @doc """
-  Appends a complete assistant result and one `LENGTH_REPAIR` user turn.
-
-  The prior conversation and all request settings remain unchanged except for `max_tokens`.
-  Assistant blocks are preserved opaquely so signatures and future provider fields survive.
-  """
-  @spec repair(map(), [map()], pos_integer()) :: map()
-  def repair(%{"messages" => messages} = request, assistant_content, repair_max_tokens)
-      when is_list(messages) and is_list(assistant_content) and is_integer(repair_max_tokens) and
-             repair_max_tokens > 0 do
-    appended_messages =
-      messages ++
-        [
-          %{"role" => "assistant", "content" => assistant_content},
-          %{"role" => "user", "content" => @length_repair}
-        ]
-
-    request
-    |> Map.put("max_tokens", repair_max_tokens)
-    |> Map.put("messages", appended_messages)
   end
 
   @doc """

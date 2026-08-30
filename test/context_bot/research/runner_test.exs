@@ -536,9 +536,10 @@ defmodule ContextBot.Research.RunnerTest do
     assert [%BudgetEntry{state: :settled}] = Repo.all(BudgetEntry)
   end
 
-  test "a retained dynamic-filtering response replays into exactly one length repair" do
-    invocation = invocation("retained-code-execution-repair")
+  test "a retained dynamic-filtering over-limit response resumes into a local split" do
+    invocation = invocation("retained-code-execution-split")
     fixture = decoded_fixture("repair_success.json")
+    {part1, part2, over_text} = over_limit_split_parts()
 
     tool_blocks =
       Enum.flat_map(1..6, fn index ->
@@ -563,16 +564,12 @@ defmodule ContextBot.Research.RunnerTest do
       put_in(
         fixture,
         ["primary", "content"],
-        tool_blocks ++ [structured_text(String.duplicate("x", 301))]
+        tool_blocks ++ [structured_text(over_text)]
       )["primary"]
 
     primary_raw = Jason.encode!(primary)
-    repair_raw = Jason.encode!(fixture["repair"])
 
-    Process.put(:runner_client_results, [
-      {:ok, envelope(200, primary_raw)},
-      {:ok, envelope(200, repair_raw)}
-    ])
+    Process.put(:runner_client_results, [{:ok, envelope(200, primary_raw)}])
 
     crash = crash_once(:after_persistence)
 
@@ -584,15 +581,17 @@ defmodule ContextBot.Research.RunnerTest do
     assert_received {:attempt_at_send, :sent, %DateTime{}, nil}
 
     assert {:ok, result} = Runner.run(invocation, options(crash: crash))
-    assert result.text == "A concise repaired answer."
-    assert result.validation == %{"result" => "valid", "repair_used" => true}
+    assert result.text == part1
+    assert result.text_part2 == part2
+    assert result.validation["result"] == "split"
+    assert result.validation["repair_used"] == false
 
-    assert_received {:anthropic_call, _request, %{kind: :repair}, false}
+    refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
     refute_received {:anthropic_call, _request, %{kind: :research}, _in_transaction}
 
-    assert Enum.map(responses(invocation), & &1.raw_body) == [primary_raw, repair_raw]
+    assert Enum.map(responses(invocation), & &1.raw_body) == [primary_raw]
 
-    assert [{:research, :settled}, {:repair, :settled}] ==
+    assert [{:research, :settled}] ==
              Repo.all(from entry in BudgetEntry, order_by: entry.id)
              |> Enum.map(&{&1.kind, &1.state})
   end
@@ -1190,106 +1189,12 @@ defmodule ContextBot.Research.RunnerTest do
     assert Enum.map(Repo.all(BudgetEntry), & &1.state) == [:sent]
   end
 
-  test "sends exactly one cached repair for an over-limit normal completion" do
-    invocation = invocation("repair-success")
-    fixture = decoded_fixture("repair_success.json")
-    primary_raw = Jason.encode!(fixture["primary"])
-    repair_raw = Jason.encode!(fixture["repair"])
+  test "an over-limit structured compact splits locally without a second Anthropic call" do
+    invocation = invocation("over-limit-split")
+    {part1, part2, over_text} = over_limit_split_parts()
 
     Process.put(:runner_client_results, [
-      {:ok, envelope(200, primary_raw)},
-      {:ok, envelope(200, repair_raw)}
-    ])
-
-    assert {:ok, result} = Runner.run(invocation, options())
-    assert result.text == "A concise repaired answer."
-    assert result.validation == %{"result" => "valid", "repair_used" => true}
-    refute Map.has_key?(result, :text_part2)
-
-    assert result.usage["attempts"] |> List.last() |> get_in(["usage", "cache_read_input_tokens"]) ==
-             0
-
-    assert_received {:anthropic_call, primary_request, %{kind: :research}, false}
-    assert_received {:anthropic_call, repair_request, %{kind: :repair}, false}
-    assert repair_request["max_tokens"] == 256
-
-    assert Map.drop(repair_request, ["messages", "max_tokens"]) ==
-             Map.drop(primary_request, ["messages", "max_tokens"])
-
-    assert Enum.take(repair_request["messages"], length(primary_request["messages"])) ==
-             primary_request["messages"]
-
-    [assistant, repair_instruction] =
-      Enum.drop(repair_request["messages"], length(primary_request["messages"]))
-
-    assert assistant == %{"role" => "assistant", "content" => fixture["primary"]["content"]}
-    assert repair_instruction["role"] == "user"
-    assert String.starts_with?(repair_instruction["content"], "LENGTH_REPAIR\n")
-
-    assert Enum.map(responses(invocation), & &1.raw_body) == [
-             primary_raw,
-             repair_raw
-           ]
-  end
-
-  test "re-settles a retained repair with omitted server-tool usage without another POST" do
-    invocation = invocation("repair-omitted-server-tool-usage")
-    fixture = decoded_fixture("repair_success.json")
-    repair = update_in(fixture["repair"], ["usage"], &Map.delete(&1, "server_tool_use"))
-
-    Process.put(:runner_client_results, [
-      {:ok, envelope(200, Jason.encode!(fixture["primary"]))},
-      {:ok, envelope(200, Jason.encode!(repair))}
-    ])
-
-    assert {:ok, first_result} = Runner.run(invocation, options())
-    assert first_result.text == "A concise repaired answer."
-    assert_received {:anthropic_call, _request, %{kind: :research}, false}
-    assert_received {:anthropic_call, _request, %{kind: :repair}, false}
-
-    repair_entry = Repo.get_by!(BudgetEntry, invocation_id: invocation.id, kind: :repair)
-
-    repair_entry
-    |> Ecto.Changeset.change(%{state: :indeterminate, settled_microdollars: nil})
-    |> Repo.update!()
-
-    Process.put(:runner_client_results, [])
-
-    assert {:ok, replayed_result} = Runner.run(Repo.reload!(invocation), options())
-    assert replayed_result.text == "A concise repaired answer."
-    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
-
-    assert Repo.reload!(repair_entry).state == :settled
-    assert length(responses(invocation)) == 2
-  end
-
-  test "a repair that still exceeds 300 graphemes splits into two valid parts" do
-    invocation = invocation("repair-split")
-    fixture = decoded_fixture("repair_success.json")
-
-    part1 = String.duplicate("a", 150)
-    part2 = String.duplicate("b", 160)
-    still_over_text = part1 <> "\n\n" <> part2
-
-    assert String.length(still_over_text) == 312
-
-    primary =
-      put_in(
-        fixture,
-        ["primary", "content"],
-        [structured_text(String.duplicate("x", 301))]
-      )["primary"]
-
-    repair =
-      put_in(
-        fixture,
-        ["repair", "content"],
-        [structured_text(still_over_text)]
-      )["repair"]
-
-    Process.put(:runner_client_results, [
-      {:ok, envelope(200, Jason.encode!(primary))},
-      {:ok, envelope(200, Jason.encode!(repair))}
+      {:ok, envelope(200, Jason.encode!(message_body(structured_json(over_text))))}
     ])
 
     assert {:ok, result} = Runner.run(invocation, options())
@@ -1297,39 +1202,32 @@ defmodule ContextBot.Research.RunnerTest do
     assert result.text_part2 == part2
     assert result.full_response == "Writeup."
     assert result.document_title == "Context Request"
-    assert result.validation["result"] == "split"
-    assert result.validation["repair_used"] == true
-    assert result.validation["part1_graphemes"] == 150
-    assert result.validation["part2_graphemes"] == 160
+
+    assert result.validation == %{
+             "result" => "split",
+             "repair_used" => false,
+             "part1_graphemes" => String.length(part1),
+             "part2_graphemes" => String.length(part2)
+           }
 
     assert_received {:anthropic_call, _request, %{kind: :research}, false}
-    assert_received {:anthropic_call, _request, %{kind: :repair}, false}
+    refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
+    assert length(responses(invocation)) == 1
+    assert Enum.map(Repo.all(BudgetEntry), & &1.kind) == [:research]
   end
 
-  test "a structured compact that still splits after repair keeps the original full response" do
-    invocation = invocation("dual-format-repair-split")
-    fixture = decoded_fixture("repair_success.json")
+  test "a structured over-limit compact splits and keeps the original title and full response" do
+    invocation = invocation("structured-over-limit-split")
     full = "Thorough markdown writeup with sources."
     title = "What Is That Bird?"
-    part1 = String.duplicate("a", 150)
-    part2 = String.duplicate("b", 160)
-    still_over_text = part1 <> "\n\n" <> part2
-
-    primary =
-      put_in(fixture, ["primary", "content"], [
-        structured_text(String.duplicate("c", 328), title: title, full: full)
-      ])["primary"]
-
-    repair =
-      put_in(
-        fixture,
-        ["repair", "content"],
-        [structured_text(still_over_text, title: title, full: full)]
-      )["repair"]
+    {part1, part2, over_text} = over_limit_split_parts()
 
     Process.put(:runner_client_results, [
-      {:ok, envelope(200, Jason.encode!(primary))},
-      {:ok, envelope(200, Jason.encode!(repair))}
+      {:ok,
+       envelope(
+         200,
+         Jason.encode!(message_body(structured_json(over_text, title: title, full: full)))
+       )}
     ])
 
     assert {:ok, result} = Runner.run(invocation, options())
@@ -1338,10 +1236,10 @@ defmodule ContextBot.Research.RunnerTest do
     assert result.full_response == full
     assert result.document_title == title
     assert result.validation["result"] == "split"
-    assert result.validation["repair_used"] == true
+    assert result.validation["repair_used"] == false
 
     assert_received {:anthropic_call, _request, %{kind: :research}, false}
-    assert_received {:anthropic_call, _request, %{kind: :repair}, false}
+    refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
   end
 
   test "an under-limit structured reply stays one post without repair or split" do
@@ -1398,141 +1296,38 @@ defmodule ContextBot.Research.RunnerTest do
     refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
   end
 
-  test "an over-limit structured compact that repairs under the limit stays one post" do
-    invocation = invocation("dual-format-repair-one-post")
-    fixture = decoded_fixture("repair_success.json")
-    compact = String.duplicate("c", 328)
-    full = "Thorough markdown writeup."
-    title = "What Is That Bird?"
-
-    primary =
-      put_in(fixture, ["primary", "content"], [
-        structured_text(compact, title: title, full: full)
-      ])["primary"]
-
-    repair =
-      put_in(
-        fixture,
-        ["repair", "content"],
-        [structured_text("A concise repaired answer.", title: title, full: full)]
-      )["repair"]
-
-    Process.put(:runner_client_results, [
-      {:ok, envelope(200, Jason.encode!(primary))},
-      {:ok, envelope(200, Jason.encode!(repair))}
-    ])
-
-    assert {:ok, result} = Runner.run(invocation, options())
-    assert result.text == "A concise repaired answer."
-    assert result.full_response == full
-    assert result.document_title == title
-    refute Map.has_key?(result, :text_part2)
-    assert result.validation == %{"result" => "valid", "repair_used" => true}
-    assert_received {:anthropic_call, _request, %{kind: :research}, false}
-    assert_received {:anthropic_call, _request, %{kind: :repair}, false}
-  end
-
-  test "a repair that cannot be split into valid parts fails as invalid_repair" do
-    invocation = invocation("repair-unsplittable")
-    fixture = decoded_fixture("repair_success.json")
-
+  test "an unsplittable over-limit compact fails closed without a repair attempt" do
+    invocation = invocation("over-limit-unsplittable")
     unsplittable = String.duplicate("a", 301)
 
-    primary =
-      put_in(
-        fixture,
-        ["primary", "content"],
-        [structured_text(String.duplicate("x", 301))]
-      )["primary"]
-
-    repair =
-      put_in(
-        fixture,
-        ["repair", "content"],
-        [structured_text(unsplittable)]
-      )["repair"]
-
     Process.put(:runner_client_results, [
-      {:ok, envelope(200, Jason.encode!(primary))},
-      {:ok, envelope(200, Jason.encode!(repair))}
+      {:ok, envelope(200, Jason.encode!(message_body(structured_json(unsplittable))))}
     ])
 
     assert {:error, :invalid_repair} = Runner.run(invocation, options())
     assert_received {:anthropic_call, _request, %{kind: :research}, false}
-    assert_received {:anthropic_call, _request, %{kind: :repair}, false}
+    refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
+    assert Enum.map(Repo.all(BudgetEntry), & &1.kind) == [:research]
   end
 
-  test "a repair tool use or second invalid result never triggers another repair" do
-    for {suffix, repair_response, expected_reason} <- [
-          {
-            "repair-tool",
-            %{
-              "id" => "msg_repair_tool",
-              "type" => "message",
-              "role" => "assistant",
-              "content" => [
-                %{
-                  "type" => "server_tool_use",
-                  "id" => "repair_tool_1",
-                  "name" => "web_search",
-                  "input" => %{"query" => "must not run"}
-                }
-              ],
-              "stop_reason" => "tool_use",
-              "usage" => usage()
-            },
-            :tool_use
-          },
-          {
-            "repair-invalid",
-            decoded_fixture("repair_success.json")["primary"],
-            :invalid_repair
-          }
-        ] do
-      invocation = invocation(suffix)
-      primary = decoded_fixture("repair_success.json")["primary"]
-
-      Process.put(:runner_client_results, [
-        {:ok, envelope(200, Jason.encode!(primary))},
-        {:ok, envelope(200, Jason.encode!(repair_response))}
-      ])
-
-      assert {:error, ^expected_reason} = Runner.run(invocation, options())
-      assert_received {:anthropic_call, _request, %{kind: :research}, false}
-      assert_received {:anthropic_call, _request, %{kind: :repair}, false}
-      refute_received {:anthropic_call, _request, _metadata, _in_transaction}
-      persisted = Repo.reload!(invocation)
-      assert length(responses(invocation)) == 2
-      assert length(persisted.anthropic_usage["attempts"]) == 2
-    end
-  end
-
-  test "resumes a durably checkpointed repair without misclassifying the primary as a second repair" do
-    invocation = invocation("repair-checkpoint-crash")
-    fixture = decoded_fixture("repair_success.json")
+  test "an unsplittable structured compact fails closed and does not rewrite" do
+    invocation = invocation("structured-unsplittable")
+    full = "Thorough markdown writeup."
+    title = "What Is That Bird?"
 
     Process.put(:runner_client_results, [
-      {:ok, envelope(200, Jason.encode!(fixture["primary"]))},
-      {:ok, envelope(200, Jason.encode!(fixture["repair"]))}
+      {:ok,
+       envelope(
+         200,
+         Jason.encode!(
+           message_body(structured_json(String.duplicate("c", 328), title: title, full: full))
+         )
+       )}
     ])
 
-    crash = crash_once(:after_checkpoint)
-
-    assert_raise RuntimeError, "injected crash after_checkpoint", fn ->
-      Runner.run(invocation, options(crash: crash))
-    end
-
-    checkpoint = Repo.reload!(invocation)
-    assert List.last(checkpoint.anthropic_messages["messages"])["content"] =~ "LENGTH_REPAIR"
-    assert [%BudgetEntry{kind: :research, state: :settled}] = Repo.all(BudgetEntry)
-
-    assert {:ok, result} = Runner.run(invocation, options(crash: crash))
-    assert result.text == "A concise repaired answer."
-
-    assert Enum.map(Repo.all(from entry in BudgetEntry, order_by: entry.id), & &1.kind) == [
-             :research,
-             :repair
-           ]
+    assert {:error, :invalid_repair} = Runner.run(invocation, options())
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
   end
 
   defp options(overrides \\ []) do
@@ -1704,6 +1499,14 @@ defmodule ContextBot.Research.RunnerTest do
       research_claim_token: @claim_token
     })
     |> Repo.insert!()
+  end
+
+  defp over_limit_split_parts do
+    part1 = String.duplicate("a", 150)
+    part2 = String.duplicate("b", 160)
+    over_text = part1 <> "\n\n" <> part2
+    assert String.length(over_text) == 312
+    {part1, part2, over_text}
   end
 
   defp decoded_fixture(name), do: name |> fixture() |> Jason.decode!()

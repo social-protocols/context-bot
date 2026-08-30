@@ -36,8 +36,7 @@ defmodule ContextBot.StandardSite.PromptDocumentTest do
       assert markdown =~ Request.system_prompt_semantic_version()
       assert markdown =~ Request.system_prompt_sha256()
       assert markdown =~ Request.system_prompt()
-      assert markdown =~ "LENGTH_REPAIR"
-      assert markdown =~ Request.length_repair_sha256()
+      refute markdown =~ "LENGTH_REPAIR"
       assert markdown =~ "Hidden model reasoning is not available"
     end
 
