@@ -85,7 +85,7 @@ defmodule ContextBot.EligibilityTest do
     Enum.each(invalid_labels, fn label ->
       put_profile(confirmed_headers(), profile([label]))
 
-      assert :ineligible ==
+      assert {:eligible, :public, %{"source" => "public"}} =
                Eligibility.check(@actor_did, "alice.example", @now, settings(), ClientStub)
     end)
 
@@ -95,34 +95,34 @@ defmodule ContextBot.EligibilityTest do
              Eligibility.check(@actor_did, nil, @now, settings(), ClientStub)
   end
 
-  test "treats confirmed authoritative absence as ineligible" do
+  test "treats confirmed authoritative absence as public" do
     put_profile(confirmed_headers(), profile([]))
 
-    assert :ineligible ==
+    assert {:eligible, :public, %{"actor_did" => @actor_did, "source" => "public"}} =
              Eligibility.check(@actor_did, "alice.example", @now, settings(), ClientStub)
   end
 
-  test "treats a missing or non-confirming labeler response header as retryable" do
+  test "treats a missing or non-confirming labeler response header as public" do
     put_profile(%{}, profile([]))
 
-    assert {:error, :labeler_unavailable} ==
+    assert {:eligible, :public, %{"source" => "public"}} =
              Eligibility.check(@actor_did, "alice.example", @now, settings(), ClientStub)
 
     put_profile(%{"atproto-content-labelers" => ["did:plc:not-skywatch"]}, profile([]))
 
-    assert {:error, :labeler_unavailable} ==
+    assert {:eligible, :public, %{"source" => "public"}} =
              Eligibility.check(@actor_did, "alice.example", @now, settings(), ClientStub)
   end
 
-  test "treats profile lookup failures and malformed profile responses as retryable" do
+  test "treats profile lookup failures and malformed profile responses as public" do
     Process.put({ClientStub, :profile}, {:error, :timeout})
 
-    assert {:error, :labeler_unavailable} ==
+    assert {:eligible, :public, %{"source" => "public"}} =
              Eligibility.check(@actor_did, "alice.example", @now, settings(), ClientStub)
 
     put_profile(confirmed_headers(), %{"labels" => "not-a-list"})
 
-    assert {:error, :labeler_unavailable} ==
+    assert {:eligible, :public, %{"source" => "public"}} =
              Eligibility.check(@actor_did, "alice.example", @now, settings(), ClientStub)
   end
 
@@ -167,20 +167,20 @@ defmodule ContextBot.EligibilityTest do
              Eligibility.check(@actor_did, "BSKY.TEAM", @now, settings(), ClientStub)
   end
 
-  test "rejects handles without the exact bsky.team suffix boundary" do
+  test "classifies handles without the exact bsky.team suffix boundary as public" do
     put_profile(confirmed_headers(), profile([]))
 
-    assert :ineligible ==
+    assert {:eligible, :public, %{"source" => "public"}} =
              Eligibility.check(@actor_did, "notbsky.team", @now, settings(), ClientStub)
 
     refute_received {:resolve_handle, _handle}
   end
 
-  test "rejects forward-only and unsupported DID identities" do
+  test "classifies forward-only and unsupported DID identities as public" do
     put_profile(confirmed_headers(), profile([]))
     Process.put({ClientStub, :handle}, {:ok, 200, %{}, %{"did" => "did:plc:someoneelse"}})
 
-    assert :ineligible ==
+    assert {:eligible, :public, %{"source" => "public"}} =
              Eligibility.check(@actor_did, "alice.bsky.team", @now, settings(), ClientStub)
 
     refute_received {:resolve_did, _did}
@@ -192,7 +192,7 @@ defmodule ContextBot.EligibilityTest do
       {:ok, 200, %{}, %{"did" => unsupported_did}}
     )
 
-    assert :ineligible ==
+    assert {:eligible, :public, %{"source" => "public"}} =
              Eligibility.check(
                unsupported_did,
                "alice.bsky.team",
@@ -221,7 +221,7 @@ defmodule ContextBot.EligibilityTest do
     Enum.each(invalid_documents, fn document ->
       Process.put({ClientStub, :did}, {:ok, 200, %{}, document})
 
-      assert :ineligible ==
+      assert {:eligible, :public, %{"source" => "public"}} =
                Eligibility.check(@actor_did, "alice.bsky.team", @now, settings(), ClientStub)
     end)
   end
@@ -243,17 +243,17 @@ defmodule ContextBot.EligibilityTest do
              Eligibility.check(@actor_did, "alice.bsky.team", @now, settings(), ClientStub)
   end
 
-  test "treats handle and DID document lookup failures as retryable" do
+  test "treats handle and DID document lookup failures as public" do
     put_profile(confirmed_headers(), profile([]))
     Process.put({ClientStub, :handle}, {:error, :timeout})
 
-    assert {:error, :identity_unavailable} ==
+    assert {:eligible, :public, %{"source" => "public"}} =
              Eligibility.check(@actor_did, "alice.bsky.team", @now, settings(), ClientStub)
 
     Process.put({ClientStub, :handle}, {:ok, 200, %{}, %{"did" => @actor_did}})
     Process.put({ClientStub, :did}, {:error, {:transient, 503}})
 
-    assert {:error, :identity_unavailable} ==
+    assert {:eligible, :public, %{"source" => "public"}} =
              Eligibility.check(@actor_did, "alice.bsky.team", @now, settings(), ClientStub)
   end
 
@@ -270,13 +270,13 @@ defmodule ContextBot.EligibilityTest do
              Eligibility.check(@actor_did, "alice.bsky.team", @now, settings(), ClientStub)
   end
 
-  test "never authorizes a valid Elder body from a non-2xx profile response" do
+  test "never grants Elder from a non-2xx profile response and degrades to public" do
     Process.put(
       {ClientStub, :profile},
       {:ok, 503, confirmed_headers(), profile([elder_label()])}
     )
 
-    assert {:error, :labeler_unavailable} ==
+    assert {:eligible, :public, %{"source" => "public"}} =
              Eligibility.check(@actor_did, "alice.example", @now, settings(), ClientStub)
   end
 
@@ -289,7 +289,7 @@ defmodule ContextBot.EligibilityTest do
       {:ok, 200, %{}, %{"id" => @actor_did, "alsoKnownAs" => ["at://alice.bsky.team"]}}
     )
 
-    assert {:error, :identity_unavailable} ==
+    assert {:eligible, :public, %{"source" => "public"}} =
              Eligibility.check(@actor_did, "alice.bsky.team", @now, settings(), ClientStub)
   end
 
@@ -302,7 +302,7 @@ defmodule ContextBot.EligibilityTest do
       {:ok, 503, %{}, %{"id" => @actor_did, "alsoKnownAs" => ["at://alice.bsky.team"]}}
     )
 
-    assert {:error, :identity_unavailable} ==
+    assert {:eligible, :public, %{"source" => "public"}} =
              Eligibility.check(@actor_did, "alice.bsky.team", @now, settings(), ClientStub)
   end
 

@@ -35,11 +35,15 @@ kill_timeout = 300
   ATPROTO_SESSION_TIMEOUT_MS = "15000"
   THREAD_FETCH_TIMEOUT_MS = "20000"
 
-  # Eligibility, admission, and queue settings.
+  # Eligibility tiers and admission. Operator DIDs skip actor hourly/daily
+  # windows. Elders and verified bsky.team use ACTOR_DAILY_LIMIT. Everyone
+  # else, including a labeler/identity outage, uses ACTOR_DAILY_LIMIT_PUBLIC.
+  # ACTOR_HOURLY_LIMIT is a burst cap; daily tiers are the actor cap.
   OPERATOR_ALLOWED_DIDS = "did:plc:33avz2l7y5scw3abq3lmylns"
   THREAD_PARENT_HEIGHT = "80"
   ACTOR_HOURLY_LIMIT = "2"
   ACTOR_DAILY_LIMIT = "5"
+  ACTOR_DAILY_LIMIT_PUBLIC = "1"
   GLOBAL_HOURLY_LIMIT = "10"
   GLOBAL_DAILY_LIMIT = "50"
   MAX_PENDING = "25"

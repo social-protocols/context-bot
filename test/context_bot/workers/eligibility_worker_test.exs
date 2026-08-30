@@ -99,18 +99,22 @@ defmodule ContextBot.Workers.EligibilityWorkerTest do
         defer_until: DateTime.add(@now, -1, :second)
       })
 
-    Process.put({GateStub, :result}, :ineligible)
+    Process.put(
+      {GateStub, :result},
+      {:eligible, :public, %{"actor_did" => @actor_did, "source" => "public"}}
+    )
+
     configure(settings(), eligibility: GateStub)
 
     assert :ok = perform(invocation)
 
     assert_received {:eligibility_check, @actor_did, "actor.example", @now, _settings, _client}
     persisted = Repo.reload!(invocation)
-    assert persisted.status == :ineligible
-    assert persisted.eligibility_method == nil
-    assert persisted.eligibility_evidence == %{"result" => "ineligible"}
+    assert persisted.status == :capturing_thread
+    assert persisted.eligibility_method == "public"
+    assert persisted.eligibility_evidence == %{"actor_did" => @actor_did, "source" => "public"}
     assert persisted.defer_until == nil
-    assert Repo.aggregate(Oban.Job, :count) == 0
+    assert Repo.aggregate(Oban.Job, :count) == 1
   end
 
   test "marks an authoritative negative terminal without downstream work" do
@@ -209,6 +213,54 @@ defmodule ContextBot.Workers.EligibilityWorkerTest do
 
     assert [%Oban.Job{worker: "ContextBot.Workers.ThreadWorker", queue: "thread"}] =
              Repo.all(Oban.Job)
+  end
+
+  test "stores only bounded public evidence fields" do
+    invocation = invocation("safe-public-evidence", :received)
+
+    Process.put(
+      {GateStub, :result},
+      {:eligible, :public,
+       %{
+         "actor_did" => @actor_did,
+         "source" => "public",
+         "raw_profile" => %{"description" => String.duplicate("x", 10_000)},
+         "token" => "Bearer should-never-persist"
+       }}
+    )
+
+    configure(settings(), eligibility: GateStub)
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.status == :capturing_thread
+    assert persisted.eligibility_method == "public"
+
+    assert persisted.eligibility_evidence == %{
+             "actor_did" => @actor_did,
+             "source" => "public"
+           }
+  end
+
+  test "defers a public actor at the public daily limit without enqueueing thread work" do
+    historical("public-rate-one", DateTime.add(@now, -2, :hour))
+    invocation = invocation("worker-public-rate", :received)
+
+    Process.put(
+      {GateStub, :result},
+      {:eligible, :public, %{"actor_did" => @actor_did, "source" => "public"}}
+    )
+
+    configure(settings(), eligibility: GateStub)
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.status == :deferred_rate
+    assert persisted.eligibility_method == "public"
+    assert DateTime.after?(persisted.defer_until, @now)
+    assert Repo.aggregate(Oban.Job, :count) == 0
   end
 
   test "stores eligible rate deferral without enqueueing thread work" do

@@ -129,14 +129,15 @@ defmodule ContextBot.POCWorkflowTest do
     assert POCFixture.created_reply_count(fixture) == 0
   end
 
-  test "authoritative Elder absence makes an ordinary actor ineligible and silent" do
+  test "authoritative Elder absence classifies an ordinary actor as public and admits" do
     fixture = POCFixture.start!(eligibility: :ineligible)
     POCFixture.poll_once!(fixture)
     POCFixture.drain_successfully!(fixture, [:eligibility])
 
     invocation = POCFixture.invocation!()
-    assert invocation.stage == :ineligible
-    assert invocation.completed_at
+    assert invocation.stage == :capturing_thread
+    assert invocation.eligibility_method == "public"
+    assert invocation.eligibility_evidence["source"] == "public"
     assert POCFixture.call_count(fixture, :profile) == 1
     refute_downstream_calls(fixture)
   end
@@ -180,20 +181,31 @@ defmodule ContextBot.POCWorkflowTest do
     refute_downstream_calls(fixture)
   end
 
-  test "an unconfirmed Elder response remains retryable and starts no downstream work" do
+  test "an unconfirmed Elder response degrades to public and admits" do
     fixture = POCFixture.start!(eligibility: :invalid_elder_header)
     POCFixture.poll_once!(fixture)
-
-    assert {{:error, :labeler_unavailable}, _job} =
-             POCFixture.perform_next(fixture, :eligibility)
+    POCFixture.drain_successfully!(fixture, [:eligibility])
 
     invocation = POCFixture.invocation!()
-    assert invocation.stage == :checking_eligibility
+    assert invocation.stage == :capturing_thread
+    assert invocation.eligibility_method == "public"
     assert invocation.failure_category == nil
     refute_downstream_calls(fixture)
   end
 
-  test "a stale bsky.team forward identity is ineligible and silent" do
+  test "a Skywatch outage degrades a non-team actor to public and admits" do
+    fixture = POCFixture.start!(eligibility: :labeler_outage)
+    POCFixture.poll_once!(fixture)
+    POCFixture.drain_successfully!(fixture, [:eligibility])
+
+    invocation = POCFixture.invocation!()
+    assert invocation.stage == :capturing_thread
+    assert invocation.eligibility_method == "public"
+    assert POCFixture.call_count(fixture, :profile) == 1
+    refute_downstream_calls(fixture)
+  end
+
+  test "a stale bsky.team forward identity is public and admits" do
     fixture =
       POCFixture.start!(
         eligibility: :stale_team,
@@ -204,7 +216,9 @@ defmodule ContextBot.POCWorkflowTest do
     POCFixture.poll_once!(fixture)
     POCFixture.drain_successfully!(fixture, [:eligibility])
 
-    assert POCFixture.invocation!().stage == :ineligible
+    invocation = POCFixture.invocation!()
+    assert invocation.stage == :capturing_thread
+    assert invocation.eligibility_method == "public"
     assert POCFixture.call_count(fixture, :resolve_handle) == 1
     assert POCFixture.call_count(fixture, :resolve_did) == 0
     refute_downstream_calls(fixture)

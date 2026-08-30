@@ -103,7 +103,9 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
     future =
       invocation("future-rate", :deferred_rate,
         minutes_ago: 6,
-        defer_until: DateTime.add(@now, 60, :second)
+        defer_until: DateTime.add(@now, 60, :second),
+        eligibility_method: "public",
+        eligibility_evidence: %{"source" => "public"}
       )
 
     configure(batch_size: 2)
@@ -210,6 +212,46 @@ defmodule ContextBot.Workers.DeferredWorkerTest do
            ]
 
     assert length(Repo.all(Oban.Job)) == 2
+  end
+
+  test "public deferred_budget stays parked at the public daily actor limit" do
+    public =
+      accepted_budget_invocation("public-daily-budget",
+        minutes_ago: 3,
+        defer_until: DateTime.add(@now, -1, :second),
+        eligibility_method: "public",
+        eligibility_evidence: %{"actor_did" => @actor_did, "source" => "public"}
+      )
+
+    invocation("public-daily-history", :complete,
+      minutes_ago: 2,
+      admitted_at: DateTime.add(@now, -5, :minute),
+      completed_at: @now
+    )
+
+    configure(now: @now)
+    assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
+    assert Repo.reload!(public).stage == :deferred_budget
+    assert [] = Repo.all(Oban.Job)
+  end
+
+  test "elder deferred_budget resumes under the privileged daily actor limit" do
+    elder =
+      accepted_budget_invocation("elder-daily-budget",
+        minutes_ago: 3,
+        defer_until: DateTime.add(@now, -1, :second)
+      )
+
+    invocation("elder-daily-history", :complete,
+      minutes_ago: 2,
+      admitted_at: DateTime.add(@now, -5, :minute),
+      completed_at: @now
+    )
+
+    configure(now: @now)
+    assert :ok = DeferredWorker.perform(%Oban.Job{args: %{}})
+    assert Repo.reload!(elder).stage == :thread_ready
+    assert [%Oban.Job{worker: "ContextBot.Workers.ResearchWorker"}] = Repo.all(Oban.Job)
   end
 
   test "budget work waits for the UTC rollover and all prior admission windows" do

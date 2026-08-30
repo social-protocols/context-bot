@@ -42,8 +42,8 @@ In scope for this repository and the deployed `@getcontext.bot` service:
 Out of scope:
 
 - The bot posting inaccurate or incomplete context
-- Disagreement with the eligibility policy (`bsky.team`, Skywatch
-  `bluesky-elder`, or the operator DID allowlist)
+- Disagreement with the actor rate-limit tiers (`bsky.team`, Skywatch
+  `bluesky-elder`, the operator DID allowlist, or the public daily cap)
 - Bugs in Bluesky, Anthropic, Fly, or Bitwarden themselves
 
 ## Secrets in this project

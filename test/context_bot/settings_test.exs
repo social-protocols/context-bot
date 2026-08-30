@@ -21,6 +21,7 @@ defmodule ContextBot.SettingsTest do
     assert settings.thread_parent_height == 80
     assert settings.actor_hourly_limit == 2
     assert settings.actor_daily_limit == 5
+    assert settings.actor_daily_limit_public == 1
     assert settings.global_hourly_limit == 10
     assert settings.global_daily_limit == 50
     assert settings.max_pending == 25
@@ -222,6 +223,15 @@ defmodule ContextBot.SettingsTest do
   test "loads the canonical public web-search cap from environment and options" do
     assert Settings.load(%{"MAX_WEB_SEARCH_USES" => "3"}).max_web_search_uses == 3
     assert Settings.load(max_web_search_uses: 4).max_web_search_uses == 4
+  end
+
+  test "loads the public actor daily limit from environment and options" do
+    assert Settings.load(%{"ACTOR_DAILY_LIMIT_PUBLIC" => "3"}).actor_daily_limit_public == 3
+    assert Settings.load(actor_daily_limit_public: 2).actor_daily_limit_public == 2
+
+    assert_raise ArgumentError, ~r/ACTOR_DAILY_LIMIT_PUBLIC/, fn ->
+      Settings.load(actor_daily_limit_public: 0)
+    end
   end
 
   test "loads and validates the approved research-runner bounds" do

@@ -9,6 +9,7 @@ defmodule ContextBot.Settings do
   @default_thread_parent_height 80
   @default_actor_hourly_limit 2
   @default_actor_daily_limit 5
+  @default_actor_daily_limit_public 1
   @default_global_hourly_limit 10
   @default_global_daily_limit 50
   @default_max_pending 25
@@ -73,6 +74,7 @@ defmodule ContextBot.Settings do
     :thread_parent_height,
     :actor_hourly_limit,
     :actor_daily_limit,
+    :actor_daily_limit_public,
     :global_hourly_limit,
     :global_daily_limit,
     :max_pending,
@@ -140,6 +142,7 @@ defmodule ContextBot.Settings do
     :thread_parent_height,
     :actor_hourly_limit,
     :actor_daily_limit,
+    :actor_daily_limit_public,
     :global_hourly_limit,
     :global_daily_limit,
     :max_pending,
@@ -186,6 +189,7 @@ defmodule ContextBot.Settings do
           thread_parent_height: pos_integer(),
           actor_hourly_limit: pos_integer(),
           actor_daily_limit: pos_integer(),
+          actor_daily_limit_public: pos_integer(),
           global_hourly_limit: pos_integer(),
           global_daily_limit: pos_integer(),
           max_pending: pos_integer(),
@@ -409,6 +413,13 @@ defmodule ContextBot.Settings do
           :actor_daily_limit,
           @default_actor_daily_limit
         ),
+      actor_daily_limit_public:
+        positive_integer!(
+          environment,
+          "ACTOR_DAILY_LIMIT_PUBLIC",
+          :actor_daily_limit_public,
+          @default_actor_daily_limit_public
+        ),
       global_hourly_limit:
         positive_integer!(
           environment,
@@ -528,6 +539,7 @@ defmodule ContextBot.Settings do
 
     validate_positive!(settings.actor_hourly_limit, "ACTOR_HOURLY_LIMIT")
     validate_positive!(settings.actor_daily_limit, "ACTOR_DAILY_LIMIT")
+    validate_positive!(settings.actor_daily_limit_public, "ACTOR_DAILY_LIMIT_PUBLIC")
     validate_positive!(settings.global_hourly_limit, "GLOBAL_HOURLY_LIMIT")
     validate_positive!(settings.global_daily_limit, "GLOBAL_DAILY_LIMIT")
     validate_positive!(settings.max_pending, "MAX_PENDING")
