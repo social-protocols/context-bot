@@ -41,7 +41,7 @@ defmodule ContextBot.StandardSite.TitleCompletion do
   Returns `:error` when the text is blank or the provider call cannot yield a
   nonempty headline. Never raises to the caller.
   """
-  @spec complete(String.t(), opts()) :: {:ok, String.t()} | :error
+  @spec complete(String.t() | nil, opts()) :: {:ok, String.t()} | :error
   def complete(invocation_text, opts) when is_binary(invocation_text) and is_list(opts) do
     settings = Keyword.fetch!(opts, :settings)
     client = Keyword.get(opts, :client, AnthropicClient)
@@ -54,6 +54,8 @@ defmodule ContextBot.StandardSite.TitleCompletion do
       _failed -> :error
     end
   end
+
+  def complete(_invocation_text, opts) when is_list(opts), do: :error
 
   defp send_title(client, request) do
     client.send_message(request, %{attempt_key: "title", kind: :title})

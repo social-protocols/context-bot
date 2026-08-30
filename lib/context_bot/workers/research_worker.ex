@@ -377,7 +377,7 @@ defmodule ContextBot.Workers.ResearchWorker do
 
   defp attach_document_title(content, result, dependencies) do
     title =
-      case TitleCompletion.complete(content.asked_text || "",
+      case TitleCompletion.complete(content.asked_text,
              settings: dependencies.settings,
              client: Map.get(dependencies, :title_client, AnthropicClient)
            ) do

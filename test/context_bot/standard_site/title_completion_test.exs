@@ -107,6 +107,7 @@ defmodule ContextBot.StandardSite.TitleCompletionTest do
 
   test "skips the provider when the invoking-post text is blank" do
     assert TitleCompletion.complete("   ", settings: @settings, client: BoomClient) == :error
+    assert TitleCompletion.complete(nil, settings: @settings, client: BoomClient) == :error
   end
 
   test "returns error for empty, HTTP, transport, and raised failures" do
