@@ -47,7 +47,7 @@ defmodule ContextBot.AdmissionTest do
     historical("actor-hour-newest", @actor_did, DateTime.add(@now, -1_800, :second))
     invocation = eligible_invocation("actor-hour-current", @actor_did)
 
-    assert {:deferred, :rate, deferred} =
+    assert {:deferred, :actor_rate, deferred} =
              Admission.admit(invocation, @now, settings(), thread_job(invocation))
 
     assert deferred.status == :deferred_rate
@@ -67,7 +67,7 @@ defmodule ContextBot.AdmissionTest do
 
     invocation = eligible_invocation("actor-day-current", @actor_did)
 
-    assert {:deferred, :rate, deferred} =
+    assert {:deferred, :actor_rate, deferred} =
              Admission.admit(invocation, @now, settings(), thread_job(invocation))
 
     assert DateTime.compare(deferred.defer_until, DateTime.add(@now, 1, :hour)) == :eq
@@ -103,7 +103,7 @@ defmodule ContextBot.AdmissionTest do
 
     invocation = eligible_invocation("team-day-current", @actor_did, "bsky_team")
 
-    assert {:deferred, :rate, deferred} =
+    assert {:deferred, :actor_rate, deferred} =
              Admission.admit(invocation, @now, settings(), thread_job(invocation))
 
     assert DateTime.compare(deferred.defer_until, DateTime.add(@now, 1, :hour)) == :eq
@@ -131,7 +131,7 @@ defmodule ContextBot.AdmissionTest do
     historical("public-day-oldest", @actor_did, DateTime.add(@now, -23, :hour))
     invocation = eligible_invocation("public-day-current", @actor_did, "public")
 
-    assert {:deferred, :rate, deferred} =
+    assert {:deferred, :actor_rate, deferred} =
              Admission.admit(invocation, @now, settings(), thread_job(invocation))
 
     assert deferred.status == :deferred_rate
@@ -199,7 +199,7 @@ defmodule ContextBot.AdmissionTest do
         global_daily_limit: 100
       )
 
-    assert {:deferred, :rate, deferred} =
+    assert {:deferred, :actor_rate, deferred} =
              Admission.admit(invocation, @now, limits, thread_job(invocation))
 
     assert deferred.defer_until == ~U[2026-07-30 13:00:00.000000Z]
@@ -355,7 +355,7 @@ defmodule ContextBot.AdmissionTest do
     others_allowlisted =
       settings(operator_allowed_dids: ["did:plc:operatoraaaaaaaaaaaaaaaaaa"])
 
-    assert {:deferred, :rate, deferred} =
+    assert {:deferred, :actor_rate, deferred} =
              Admission.admit(invocation, @now, others_allowlisted, thread_job(invocation))
 
     assert deferred.status == :deferred_rate
@@ -432,7 +432,7 @@ defmodule ContextBot.AdmissionTest do
       |> Task.await_many()
 
     assert Enum.count(results, &match?({:ok, _invocation}, &1)) == 2
-    assert Enum.count(results, &match?({:deferred, :rate, _invocation}, &1)) == 2
+    assert Enum.count(results, &match?({:deferred, :actor_rate, _invocation}, &1)) == 2
     assert Repo.aggregate(Oban.Job, :count) == 2
   end
 

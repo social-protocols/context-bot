@@ -167,6 +167,34 @@ defmodule ContextBot.Workflow.Store do
   end
 
   @doc """
+  Claims the one-shot limit-notice slot without changing stage.
+
+  Used for budget notices that must remain `deferred_budget`. Actor-rate notices
+  claim the kind in the same `reply_ready` transition as the frozen intent.
+  """
+  @spec claim_limit_notice(Invocation.t(), :actor_rate | :budget) ::
+          {:ok, Invocation.t()}
+          | {:error, :already_claimed | :dry_run | :stale_stage | Changeset.t()}
+  def claim_limit_notice(%Invocation{id: id, stage: stage} = invocation, kind)
+      when kind in [:actor_rate, :budget] do
+    if invocation.dry_run do
+      {:error, :dry_run}
+    else
+      transact_limit_notice(fn -> claim_limit_notice!(id, stage, kind) end)
+    end
+  end
+
+  @doc "Records the published limit-notice coordinates after a successful putRecord."
+  @spec record_limit_notice(Invocation.t(), String.t(), String.t(), DateTime.t()) ::
+          {:ok, Invocation.t()} | {:error, :stale_stage | Changeset.t()}
+  def record_limit_notice(%Invocation{id: id, stage: stage}, uri, cid, %DateTime{} = posted_at)
+      when is_binary(uri) and uri != "" and is_binary(cid) and cid != "" do
+    transact_limit_notice(fn ->
+      record_limit_notice!(id, stage, uri, cid, posted_at)
+    end)
+  end
+
+  @doc """
   Fences a research checkpoint or terminal handoff by the currently persisted claim token.
   """
   @spec transition_research(
@@ -1131,4 +1159,47 @@ defmodule ContextBot.Workflow.Store do
 
   defp raise_transaction_error(reason),
     do: raise("invocation receipt transaction failed: #{inspect(reason)}")
+
+  defp transact_limit_notice(fun) do
+    case Repo.transaction(fun, mode: :immediate) do
+      {:ok, updated} -> {:ok, updated}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp claim_limit_notice!(id, stage, kind) do
+    claim_limit_notice_from!(Repo.get!(Invocation, id), stage, kind)
+  end
+
+  defp claim_limit_notice_from!(current, stage, kind) do
+    cond do
+      current.stage != stage -> Repo.rollback(:stale_stage)
+      current.dry_run -> Repo.rollback(:dry_run)
+      not is_nil(current.limit_notice_kind) -> Repo.rollback(:already_claimed)
+      true -> update_limit_notice!(current, %{limit_notice_kind: kind})
+    end
+  end
+
+  defp record_limit_notice!(id, stage, uri, cid, posted_at) do
+    record_limit_notice_from!(Repo.get!(Invocation, id), stage, uri, cid, posted_at)
+  end
+
+  defp record_limit_notice_from!(current, stage, uri, cid, posted_at) do
+    if current.stage != stage or is_nil(current.limit_notice_kind) do
+      Repo.rollback(:stale_stage)
+    else
+      update_limit_notice!(current, %{
+        limit_notice_uri: uri,
+        limit_notice_cid: cid,
+        limit_notice_posted_at: posted_at
+      })
+    end
+  end
+
+  defp update_limit_notice!(invocation, attrs) do
+    case Repo.update(Invocation.transition_changeset(invocation, attrs)) do
+      {:ok, updated} -> updated
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
+  end
 end

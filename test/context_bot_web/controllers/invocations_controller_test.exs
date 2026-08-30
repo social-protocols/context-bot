@@ -55,6 +55,7 @@ defmodule ContextBotWeb.InvocationsControllerTest do
       body = html_response(conn, 200)
 
       # Check summary sections exist
+      assert body =~ ~s(href="/">Rate and funding limits)
       assert body =~ "Last 24 Hours"
       assert body =~ "Last 7 Days"
       assert body =~ "Last 30 Days"

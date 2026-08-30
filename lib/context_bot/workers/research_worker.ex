@@ -11,7 +11,7 @@ defmodule ContextBot.Workers.ResearchWorker do
   import Ecto.Query
 
   alias ContextBot.ATProto.{Client, TID}
-  alias ContextBot.{Operations, Repo}
+  alias ContextBot.{LimitNotice, Operations, Repo}
   alias ContextBot.Reply.Intent
   alias ContextBot.Research.{Request, Runner}
   alias ContextBot.StandardSite.{Document, PageCopy, PromptDocument, Publication}
@@ -88,10 +88,10 @@ defmodule ContextBot.Workers.ResearchWorker do
         {:snooze, snooze_seconds(remaining_ms)}
 
       {:deferred, %DateTime{} = defer_until, kind} ->
-        defer_budget(invocation, defer_until, kind, token)
+        defer_budget(invocation, defer_until, kind, token, dependencies)
 
       {:deferred, %DateTime{} = defer_until} ->
-        defer_budget(invocation, defer_until, :research, token)
+        defer_budget(invocation, defer_until, :research, token, dependencies)
 
       {:error, :stale_claim} ->
         :ok
@@ -418,7 +418,7 @@ defmodule ContextBot.Workers.ResearchWorker do
 
   defp document_reader_url(_document), do: nil
 
-  defp defer_budget(invocation, defer_until, kind, token) do
+  defp defer_budget(invocation, defer_until, kind, token, dependencies) do
     case Store.transition_research(
            Repo.reload!(invocation),
            token,
@@ -432,7 +432,8 @@ defmodule ContextBot.Workers.ResearchWorker do
            nil,
            defer_until
          ) do
-      {:ok, _deferred} ->
+      {:ok, deferred} ->
+        dependencies.limit_notice.maybe_post_budget(deferred, dependencies)
         :ok
 
       {:error, :stale_claim} ->
@@ -542,6 +543,7 @@ defmodule ContextBot.Workers.ResearchWorker do
       runner_options: Keyword.get(config, :runner_options, []),
       settings: Keyword.get(config, :settings, Application.fetch_env!(:context_bot, :settings)),
       atproto_client: Keyword.get(config, :atproto_client, ContextBot.ATProto.ReqClient),
+      limit_notice: Keyword.get(config, :limit_notice, LimitNotice),
       tid_generator: Keyword.get(config, :tid_generator, &TID.generate/1)
     }
   end

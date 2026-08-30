@@ -10,9 +10,12 @@ defmodule ContextBot.Workers.EligibilityWorker do
 
   import Ecto.Query
 
-  alias ContextBot.{Admission, Eligibility, Operations, Repo}
-  alias ContextBot.ATProto.ReqClient
+  alias ContextBot.{Admission, Eligibility, LimitNotice, Operations, Repo}
+  alias ContextBot.ATProto.{ReqClient, TID}
+  alias ContextBot.Reply.Intent
   alias ContextBot.Workflow.{Invocation, Store}
+
+  @reply_worker "ContextBot.Workers.ReplyWorker"
 
   @thread_worker "ContextBot.Workers.ThreadWorker"
   @evidence_value_max_bytes 256
@@ -120,7 +123,7 @@ defmodule ContextBot.Workers.EligibilityWorker do
           dependencies.settings,
           thread_job(evidenced)
         )
-        |> admission_result()
+        |> admission_result(dependencies)
 
       {:error, :stale_stage} ->
         :ok
@@ -179,8 +182,13 @@ defmodule ContextBot.Workers.EligibilityWorker do
     end
   end
 
-  defp admission_result({:ok, _invocation}), do: :ok
-  defp admission_result({:deferred, _reason, _invocation}), do: :ok
+  defp admission_result({:ok, _invocation}, _dependencies), do: :ok
+
+  defp admission_result({:deferred, :actor_rate, invocation}, dependencies) do
+    dependencies.limit_notice.handoff_actor_rate(invocation, dependencies)
+  end
+
+  defp admission_result({:deferred, _reason, _invocation}, _dependencies), do: :ok
 
   defp thread_job(invocation) do
     Oban.Job.new(
@@ -255,8 +263,20 @@ defmodule ContextBot.Workers.EligibilityWorker do
       admission: Keyword.get(config, :admission, Admission),
       client: Keyword.get(config, :client, ReqClient),
       eligibility: Keyword.get(config, :eligibility, Eligibility),
+      intent_builder: Keyword.get(config, :intent_builder, &Intent.build/5),
+      limit_notice: Keyword.get(config, :limit_notice, LimitNotice),
       now: Keyword.get(config, :now, DateTime.utc_now()),
-      settings: Keyword.get(config, :settings, Application.fetch_env!(:context_bot, :settings))
+      reply_job_builder: Keyword.get(config, :reply_job_builder, &reply_job/1),
+      settings: Keyword.get(config, :settings, Application.fetch_env!(:context_bot, :settings)),
+      tid_generator: Keyword.get(config, :tid_generator, &TID.generate/1)
     }
+  end
+
+  defp reply_job(invocation) do
+    Oban.Job.new(
+      %{"uri" => invocation.invocation_uri, "cid" => invocation.notification_cid},
+      worker: @reply_worker,
+      queue: :reply
+    )
   end
 end

@@ -34,7 +34,8 @@ defmodule ContextBot.Admission do
   end
 
   @spec admit(Invocation.t(), DateTime.t(), Settings.t(), Changeset.t()) ::
-          {:ok, Invocation.t()} | {:deferred, :rate | :capacity, Invocation.t()}
+          {:ok, Invocation.t()}
+          | {:deferred, :actor_rate | :rate | :capacity, Invocation.t()}
   def admit(
         %Invocation{id: id} = invocation,
         %DateTime{} = now,
@@ -42,53 +43,84 @@ defmodule ContextBot.Admission do
         %Changeset{} = thread_job
       ) do
     validate_thread_job!(thread_job, invocation)
+    finalize_admission(run_admission(id, now, settings, thread_job))
+  end
 
-    result =
-      Repo.transaction(
-        fn ->
-          invocation = Repo.get!(Invocation, id)
+  defp run_admission(id, now, settings, thread_job) do
+    Repo.transaction(
+      fn ->
+        invocation = Repo.get!(Invocation, id)
+        apply_admission(invocation, now, settings, thread_job)
+      end,
+      mode: :immediate
+    )
+  end
 
-          if invocation.stage != :checking_eligibility do
-            Repo.rollback(:stale_stage)
-          end
+  defp apply_admission(invocation, now, settings, thread_job) do
+    if invocation.stage != :checking_eligibility do
+      Repo.rollback(:stale_stage)
+    end
 
-          cond do
-            pending_count(invocation.id) >= settings.max_pending ->
-              {:capacity, defer(invocation, :deferred_capacity, nil)}
+    apply_admission_decision(
+      admission_decision(invocation, now, settings),
+      invocation,
+      now,
+      thread_job
+    )
+  end
 
-            defer_until = rate_defer_until(invocation, now, settings) ->
-              {:rate, defer(invocation, :deferred_rate, defer_until)}
+  defp apply_admission_decision(:capacity, invocation, _now, _thread_job) do
+    {:capacity, defer(invocation, :deferred_capacity, nil)}
+  end
 
-            true ->
-              admitted =
-                invocation
-                |> Invocation.transition_changeset(%{
-                  status: :capturing_thread,
-                  stage: :capturing_thread,
-                  admitted_at: now,
-                  defer_until: nil
-                })
-                |> Repo.update!()
+  defp apply_admission_decision({:actor_rate, actor_until}, invocation, _now, _thread_job) do
+    {:actor_rate, defer(invocation, :deferred_rate, actor_until)}
+  end
 
-              Repo.insert!(thread_job)
-              {:admitted, admitted}
-          end
-        end,
-        mode: :immediate
-      )
+  defp apply_admission_decision({:rate, global_until}, invocation, _now, _thread_job) do
+    {:rate, defer(invocation, :deferred_rate, global_until)}
+  end
 
-    case result do
-      {:ok, {:admitted, invocation}} ->
-        {:ok, invocation}
+  defp apply_admission_decision(:admit, invocation, now, thread_job) do
+    admitted =
+      invocation
+      |> Invocation.transition_changeset(%{
+        status: :capturing_thread,
+        stage: :capturing_thread,
+        admitted_at: now,
+        defer_until: nil
+      })
+      |> Repo.update!()
 
-      {:ok, {:rate, invocation}} ->
-        {:deferred, :rate, invocation}
+    Repo.insert!(thread_job)
+    {:admitted, admitted}
+  end
 
-      {:ok, {:capacity, invocation}} ->
-        {:deferred, :capacity, invocation}
+  defp finalize_admission({:ok, {:admitted, invocation}}), do: {:ok, invocation}
 
-      {:error, :stale_stage} ->
-        raise ArgumentError, "invocation is no longer checking eligibility"
+  defp finalize_admission({:ok, {:actor_rate, invocation}}),
+    do: {:deferred, :actor_rate, invocation}
+
+  defp finalize_admission({:ok, {:rate, invocation}}), do: {:deferred, :rate, invocation}
+  defp finalize_admission({:ok, {:capacity, invocation}}), do: {:deferred, :capacity, invocation}
+
+  defp finalize_admission({:error, :stale_stage}) do
+    raise ArgumentError, "invocation is no longer checking eligibility"
+  end
+
+  defp admission_decision(invocation, now, settings) do
+    cond do
+      pending_count(invocation.id) >= settings.max_pending ->
+        :capacity
+
+      actor_until = actor_rate_defer_until(invocation, now, settings) ->
+        {:actor_rate, actor_until}
+
+      global_until = global_rate_defer_until(now, settings) ->
+        {:rate, global_until}
+
+      true ->
+        :admit
     end
   end
 
@@ -103,36 +135,50 @@ defmodule ContextBot.Admission do
     |> Repo.update!()
   end
 
-  defp rate_defer_until(%Invocation{} = invocation, now, settings, excluded_invocation_id \\ nil) do
-    actor_did = invocation.actor_did
+  defp rate_defer_until(%Invocation{} = invocation, now, settings, excluded_invocation_id) do
+    [
+      actor_rate_defer_until(invocation, now, settings, excluded_invocation_id),
+      global_rate_defer_until(now, settings, excluded_invocation_id)
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.max(DateTime, fn -> nil end)
+  end
 
-    actor_windows =
-      if skip_actor_rate_windows?(actor_did, settings) do
-        []
-      else
-        [
-          breached_window(
-            actor_did,
-            now,
-            :hour,
-            settings.actor_hourly_limit,
-            excluded_invocation_id
-          ),
-          breached_window(
-            actor_did,
-            now,
-            :day,
-            actor_daily_limit(invocation, settings),
-            excluded_invocation_id
-          )
-        ]
-      end
+  defp actor_rate_defer_until(
+         %Invocation{} = invocation,
+         now,
+         settings,
+         excluded_invocation_id \\ nil
+       ) do
+    if skip_actor_rate_windows?(invocation.actor_did, settings) do
+      nil
+    else
+      [
+        breached_window(
+          invocation.actor_did,
+          now,
+          :hour,
+          settings.actor_hourly_limit,
+          excluded_invocation_id
+        ),
+        breached_window(
+          invocation.actor_did,
+          now,
+          :day,
+          actor_daily_limit(invocation, settings),
+          excluded_invocation_id
+        )
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.max(DateTime, fn -> nil end)
+    end
+  end
 
-    (actor_windows ++
-       [
-         breached_window(nil, now, :hour, settings.global_hourly_limit, excluded_invocation_id),
-         breached_window(nil, now, :day, settings.global_daily_limit, excluded_invocation_id)
-       ])
+  defp global_rate_defer_until(now, settings, excluded_invocation_id \\ nil) do
+    [
+      breached_window(nil, now, :hour, settings.global_hourly_limit, excluded_invocation_id),
+      breached_window(nil, now, :day, settings.global_daily_limit, excluded_invocation_id)
+    ]
     |> Enum.reject(&is_nil/1)
     |> Enum.max(DateTime, fn -> nil end)
   end

@@ -32,6 +32,18 @@ Anyone can mention it; it joins a thread when invited. Ask a concrete question, 
 
 Daily mention limits apply.
 
+## Limits
+
+Anyone may mention [@getcontext.bot](https://bsky.app/profile/getcontext.bot).
+
+- **Operator** (Jonathan): no daily or hourly actor cap.
+- **Bluesky elders** (Skywatch `bluesky-elder`) and verified `bsky.team` / `*.bsky.team`: 5 invocations per rolling day.
+- **Everyone else:** 1 invocation per rolling day.
+
+A shared hourly and daily cap, and a pending-work limit, can still delay a reply.
+
+Research is paid from a shared operator Anthropic budget (currently $20 per UTC day). When that budget is spent, the bot posts a short notice instead of researching. Later, people will be able to enter their own funding keys.
+
 ---
 
 See on [github](https://github.com/social-protocols/context-bot/).

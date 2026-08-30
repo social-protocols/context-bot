@@ -224,15 +224,26 @@ defmodule ContextBot.POCWorkflowTest do
     refute_downstream_calls(fixture)
   end
 
-  test "the actor rolling limit defers before thread or provider HTTP" do
+  test "the actor rolling limit freezes one notice without thread or research HTTP" do
     fixture = POCFixture.start!(eligibility: :elder, settings: [actor_hourly_limit: 1])
     insert_invocation!("history-actor", @actor_did, :complete, admitted_at: now())
 
     POCFixture.poll_once!(fixture)
     POCFixture.drain_successfully!(fixture, [:eligibility])
 
-    assert POCFixture.invocation!().stage == :deferred_rate
-    refute_downstream_calls(fixture)
+    invocation = POCFixture.invocation!()
+    assert invocation.stage == :reply_ready
+    assert invocation.admitted_at == nil
+    assert invocation.limit_notice_kind == :actor_rate
+    assert invocation.selected_reply =~ "limit for your tier"
+    refute invocation.selected_reply =~ "@"
+    assert invocation.full_response == nil
+    assert POCFixture.call_count(fixture, :thread) == 0
+    assert POCFixture.call_count(fixture, :anthropic_post) == 0
+    assert POCFixture.call_count(fixture, :pds_put) == 0
+
+    assert [%Oban.Job{worker: "ContextBot.Workers.ReplyWorker", queue: "reply"}] =
+             Repo.all(Oban.Job)
   end
 
   test "the global rolling limit defers before thread or provider HTTP" do
@@ -281,11 +292,14 @@ defmodule ContextBot.POCWorkflowTest do
     POCFixture.poll_once!(fixture)
     POCFixture.drain_successfully!(fixture, [:eligibility, :thread, :research])
 
-    assert POCFixture.invocation!().stage == :deferred_budget
+    invocation = POCFixture.invocation!()
+    assert invocation.stage == :deferred_budget
+    assert invocation.limit_notice_kind == :budget
+    assert invocation.reply_record == nil
     assert Repo.aggregate(BudgetEntry, :count) == 1
     assert POCFixture.call_count(fixture, :anthropic_post) == 0
-    assert POCFixture.call_count(fixture, :pds_put) == 0
-    assert POCFixture.created_reply_count(fixture) == 0
+    assert POCFixture.call_count(fixture, :pds_put) == 1
+    assert invocation.limit_notice_uri
   end
 
   test "duplicate polls, repeated jobs, restarts, and ambiguous publication writes converge once" do

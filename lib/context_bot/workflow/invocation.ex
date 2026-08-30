@@ -96,7 +96,11 @@ defmodule ContextBot.Workflow.Invocation do
     :reply_part3_cid,
     :failure_category,
     :failure_detail,
-    :completed_at
+    :completed_at,
+    :limit_notice_kind,
+    :limit_notice_uri,
+    :limit_notice_cid,
+    :limit_notice_posted_at
   ]
 
   @type status ::
@@ -171,6 +175,10 @@ defmodule ContextBot.Workflow.Invocation do
     field :failure_category, Ecto.Enum, values: @failure_categories
     field :failure_detail, :map
     field :completed_at, :utc_datetime_usec
+    field :limit_notice_kind, Ecto.Enum, values: [:actor_rate, :budget]
+    field :limit_notice_uri, :string
+    field :limit_notice_cid, :string
+    field :limit_notice_posted_at, :utc_datetime_usec
 
     timestamps(type: :utc_datetime_usec)
   end
