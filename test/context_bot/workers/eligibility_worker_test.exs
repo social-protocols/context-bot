@@ -16,7 +16,7 @@ defmodule ContextBot.Workers.EligibilityWorkerTest do
 
   import ExUnit.CaptureLog
 
-  alias ContextBot.{LimitNotice, LimitNoticeNoop, LimitNoticeRecorder, Settings}
+  alias ContextBot.{LimitNotice, LimitNoticeRecorder, Settings}
   alias ContextBot.Reply.Intent
   alias ContextBot.Workers.EligibilityWorker
   alias ContextBot.Workers.EligibilityWorkerTest.GateStub

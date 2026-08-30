@@ -278,7 +278,7 @@ defmodule ContextBot.LimitNoticeTest do
     Map.new(Keyword.merge(defaults, overrides))
   end
 
-  defp invocation(rkey, status, extra \\ %{}) do
+  defp invocation(rkey, status, extra) do
     uri = "at://#{@actor_did}/app.bsky.feed.post/#{rkey}"
     cid = "bafy#{rkey}"
 
