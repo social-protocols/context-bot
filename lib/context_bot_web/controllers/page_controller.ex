@@ -91,6 +91,9 @@ defmodule ContextBotWeb.PageController do
         .bluesky-embed {
           margin: 1rem 0;
         }
+        iframe[src*="embed.bsky.app"] {
+          min-height: 280px;
+        }
         hr {
           border: none;
           border-top: 1px solid #e0e0e0;
