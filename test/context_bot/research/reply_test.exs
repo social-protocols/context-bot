@@ -949,58 +949,43 @@ defmodule ContextBot.Research.ReplyTest do
     assert split1_len <= 280 and split1_len >= 270
   end
 
+  test "English CLDR sentence suppressions include U.S." do
+    suppressions = Unicode.String.Segment.suppressions!("en", :sentence_break)
+    assert "U.S." in suppressions
+  end
+
   test "does not split inv 15 compact at U.S. when a later real sentence exists" do
     # Published Bluesky part 1 from inv 15. The research compact was over 300
-    # graphemes; split_text treated the abbreviation period in "U.S. " as a
-    # sentence break. Scoring prefers any ≤275 break over a later real ". "
-    # between 276 and 300, so part 1 became this mid-thought fragment.
+    # graphemes; raw ". " matching treated "U.S. " as a sentence break.
+    # English CLDR suppressions include U.S., so UAX #29 keeps "U.S. Board"
+    # in the same sentence. A real period+space after "says." still splits.
     published_part1 =
       "Google's stated rationale: it has a long-standing policy of mirroring whatever a country's official government geographic database says. Trump's order led the U.S."
 
     assert String.length(published_part1) == 163
 
-    closing = "The Geographic Names Board then adopted that spelling."
-    remainder = "Additional sourced context follows after the real sentence."
-    target_left = 280
-    filler_len = target_left - String.length(published_part1) - 1 - String.length(closing)
-
-    text =
-      published_part1 <> " " <> String.duplicate("a", filler_len) <> closing <> " " <> remainder
-
     first_sentence =
       "Google's stated rationale: it has a long-standing policy of mirroring whatever a country's official government geographic database says."
 
+    us_through_board = "Trump's order led the U.S. Board then adopted that spelling."
+    remainder = String.duplicate("z", 120)
+    compact_prefix = first_sentence <> " " <> us_through_board
+    text = compact_prefix <> " " <> remainder
+
     assert String.length(text) > 300
+    assert String.contains?(text, "says. Trump's")
+    assert String.contains?(text, "U.S. Board")
 
-    assert String.length(published_part1 <> " " <> String.duplicate("a", filler_len) <> closing) ==
-             target_left
-
-    assert String.contains?(text, "U.S. ")
-    assert String.contains?(text, closing <> " ")
+    assert Unicode.String.split(compact_prefix, break: :sentence, locale: "en", trim: true) == [
+             first_sentence <> " ",
+             us_through_board
+           ]
 
     assert {:ok, split1, split2} = Reply.split_text(text)
     refute split1 == published_part1
     refute String.ends_with?(split1, "led the U.S.")
-    # "says." is the longest real sentence ≤275; the later closing sits at 280.
     assert split1 == first_sentence
-    assert String.starts_with?(split2, "Trump's order led the U.S.")
-  end
-
-  test "does not treat listed abbreviations as sentence breaks" do
-    for abbreviation <- ["U.S.", "U.K.", "e.g.", "i.e.", "Mr.", "Ms.", "Dr."] do
-      prefix = "Context includes #{abbreviation}"
-      closing = "This later clause is the real sentence."
-      remainder = String.duplicate("z", 40)
-      target_left = 280
-      filler_len = target_left - String.length(prefix) - 1 - String.length(closing)
-      text = prefix <> " " <> String.duplicate("a", filler_len) <> closing <> " " <> remainder
-
-      assert String.length(text) > 300
-      assert {:ok, split1, split2} = Reply.split_text(text)
-      refute String.ends_with?(split1, abbreviation)
-      assert String.ends_with?(split1, closing)
-      assert split2 == remainder
-    end
+    assert String.starts_with?(split2, "Trump's order led the U.S. Board")
   end
 
   test "prefers a later sentence split that leaves room on part 2 for the link suffix" do

@@ -16,16 +16,6 @@ defmodule ContextBot.Research.Reply do
 
   @hard_max_graphemes ReplyLimits.hard_max_graphemes()
   @max_bytes ReplyLimits.max_bytes()
-  # Period-space matches that are common abbreviations, not sentence ends.
-  # Inv 15 split at "U.S. " because scoring prefers any ≤275 break over a later
-  # real ". " between 276 and 300.
-  @sentence_abbreviations ~w(
-    u.s. u.k. u.n. u.s.a. e.u.
-    e.g. i.e. etc. vs. cf.
-    mr. mrs. ms. dr. prof. sr. jr.
-    inc. ltd. corp.
-    a.m. p.m.
-  )
   @web_server_tools ~w(web_search web_fetch)
   # Dated web_search/web_fetch default `allowed_callers` to auto-provisioned code execution.
   # Requests pin `allowed_callers: ["direct"]` so searches are native `server_tool_use` only.
@@ -167,139 +157,55 @@ defmodule ContextBot.Research.Reply do
   end
 
   defp try_split_at_paragraph(text) do
-    # Split at all paragraph breaks and try to find the best one
-    parts = String.split(text, "\n\n")
-
-    if length(parts) < 2 do
-      :error
-    else
-      find_best_paragraph_split(parts)
+    case String.split(text, "\n\n") do
+      [_single] -> :error
+      parts -> find_best_joined_split(parts, "\n\n")
     end
   end
 
-  defp find_best_paragraph_split(parts) do
-    target_graphemes = ReplyLimits.prompt_target_graphemes()
+  # UAX #29 sentence breaks with English CLDR suppressions (U.S., Mr., e.g., …).
+  # Inv 15 chopped at "U.S. " because raw ". " / ".\n" matching treated that
+  # period as a break. Scoring prefers any ≤275 split over a later real
+  # sentence between 276 and 300.
+  defp try_split_at_sentence(text) do
+    case Unicode.String.split(text, break: :sentence, locale: "en", trim: true) do
+      parts when is_list(parts) and length(parts) >= 2 ->
+        find_best_joined_split(parts, "")
 
-    # Build cumulative parts and check each potential split
-    {_, valid_splits} =
-      Enum.reduce(parts, {[], []}, fn part, {acc_parts, valid_splits} ->
-        new_parts = acc_parts ++ [part]
-        left = Enum.join(new_parts, "\n\n")
-        right = parts |> Enum.drop(length(new_parts)) |> Enum.join("\n\n")
+      _error_or_single ->
+        :error
+    end
+  end
 
-        if right != "" and String.length(left) <= target_graphemes do
-          {new_parts, valid_splits ++ [{left, right}]}
-        else
-          {new_parts, valid_splits}
-        end
-      end)
-
-    case pick_split_with_part2_room(valid_splits) do
+  defp find_best_joined_split(parts, joiner) do
+    case pick_joined_split(parts, joiner, ReplyLimits.prompt_target_graphemes()) do
       {left, right} ->
         validate_split_parts(left, right)
 
       :none ->
-        find_paragraph_fallback_splits(parts)
+        case pick_joined_split(parts, joiner, @hard_max_graphemes) do
+          {left, right} -> validate_split_parts(left, right)
+          :none -> :error
+        end
     end
   end
 
-  defp find_paragraph_fallback_splits(parts) do
-    # No split within target, try with hard max
-    {_, fallback_splits} =
-      Enum.reduce(parts, {[], []}, fn part, {acc_parts, valid_splits} ->
-        new_parts = acc_parts ++ [part]
-        left = Enum.join(new_parts, "\n\n")
-        right = parts |> Enum.drop(length(new_parts)) |> Enum.join("\n\n")
+  defp pick_joined_split(parts, joiner, max_left) do
+    splits =
+      parts
+      |> Enum.with_index(1)
+      |> Enum.flat_map(fn {_part, count} ->
+        left = parts |> Enum.take(count) |> Enum.join(joiner)
+        right = parts |> Enum.drop(count) |> Enum.join(joiner)
 
-        if right != "" and String.length(left) <= @hard_max_graphemes do
-          {new_parts, valid_splits ++ [{left, right}]}
+        if right != "" and String.length(left) <= max_left do
+          [{left, right}]
         else
-          {new_parts, valid_splits}
+          []
         end
       end)
 
-    case pick_split_with_part2_room(fallback_splits) do
-      {left, right} -> validate_split_parts(left, right)
-      :none -> :error
-    end
-  end
-
-  defp try_split_at_sentence(text) do
-    case sentence_break_matches(text) do
-      [] ->
-        :error
-
-      matches ->
-        find_best_sentence_split(text, matches)
-    end
-  end
-
-  defp sentence_break_matches(text) do
-    text
-    |> :binary.matches([". ", ".\n"])
-    |> Enum.reject(fn {pos, _len} -> abbreviation_period?(text, pos) end)
-  end
-
-  defp abbreviation_period?(text, period_pos) do
-    Enum.any?(@sentence_abbreviations, fn abbreviation ->
-      size = byte_size(abbreviation)
-      start = period_pos + 1 - size
-
-      start >= 0 and abbreviation_boundary?(text, start) and
-        ascii_downcase_equals?(text, start, size, abbreviation)
-    end)
-  end
-
-  defp abbreviation_boundary?(_text, 0), do: true
-
-  defp abbreviation_boundary?(text, start) do
-    :binary.at(text, start - 1) in [?\s, ?\n, ?\t, ?(, ?[, ?", ?']
-  end
-
-  defp ascii_downcase_equals?(text, start, size, abbreviation) do
-    start + size <= byte_size(text) and
-      text |> binary_part(start, size) |> String.downcase(:ascii) == abbreviation
-  end
-
-  defp find_best_sentence_split(text, matches) do
-    byte_length = byte_size(text)
-    prompt_target = ReplyLimits.prompt_target_graphemes()
-
-    # Find the sentence break that maximizes part1 length while staying ≤ prompt_target graphemes
-    # If none fit within prompt_target, find the one closest to prompt_target
-    matches
-    |> Enum.map(fn {pos, len} ->
-      split_pos = pos + len
-      left = binary_part(text, 0, split_pos)
-      left_graphemes = String.length(left)
-      {split_pos, left_graphemes}
-    end)
-    |> Enum.filter(fn {_split_pos, left_graphemes} ->
-      left_graphemes <= @hard_max_graphemes
-    end)
-    |> case do
-      [] ->
-        :error
-
-      candidates ->
-        with_room =
-          Enum.filter(candidates, fn {split_pos, _left_graphemes} ->
-            right = binary_part(text, split_pos, byte_length - split_pos)
-            part2_has_link_room?(String.trim(right))
-          end)
-
-        usable = if with_room == [], do: candidates, else: with_room
-
-        best =
-          Enum.max_by(usable, fn {_split_pos, left_graphemes} ->
-            score_split_candidate(left_graphemes, prompt_target)
-          end)
-
-        {split_pos, _graphemes} = best
-        left = binary_part(text, 0, split_pos)
-        right = binary_part(text, split_pos, byte_length - split_pos)
-        validate_split_parts(left, right)
-    end
+    pick_split_with_part2_room(splits)
   end
 
   defp try_split_at_whitespace(text) do
