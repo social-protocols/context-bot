@@ -1,8 +1,9 @@
 defmodule ContextBot.StandardSite.PageCopy do
   @moduledoc """
-  Builds Standard Reader title, description, and Asked-block copy from the invoking post.
+  Builds Standard Reader title, description, and responding-to copy from the invoking post.
 
-  New full-response documents only. Existing published records are not rewritten.
+  New full-response documents only. Existing published records are not rewritten
+  by the publication path.
   """
 
   alias ContextBot.ATProto.ATURI
@@ -22,7 +23,9 @@ defmodule ContextBot.StandardSite.PageCopy do
   @type subject :: %{
           asked_text: String.t(),
           parent_uri: String.t() | nil,
-          invocation_uri: String.t() | nil
+          invocation_uri: String.t() | nil,
+          invoker_handle: String.t() | nil,
+          parent_handle: String.t() | nil
         }
 
   @doc "Card-length cap for `description`. The lexicon hard cap is 3000 graphemes."
@@ -30,19 +33,23 @@ defmodule ContextBot.StandardSite.PageCopy do
   def description_max_graphemes, do: @description_card_graphemes
 
   @doc """
-  Extracts the invoking-post text as written and an optional parent URI.
+  Extracts the invoking-post text as written, optional parent URI, and handles.
 
-  Mentions are kept. Missing parent data is omitted. Document create must not
-  fail for that reason.
+  Mentions are kept. Missing parent or handle data is omitted. Document create
+  must not fail for that reason.
   """
   @spec subject(Invocation.t() | map(), settings()) :: subject()
   def subject(invocation, _settings) do
     record = invocation_record(invocation)
+    thread = field(invocation, :raw_thread)
+    notification = field(invocation, :raw_notification)
 
     %{
       asked_text: raw_invocation_text(record, invocation),
       parent_uri: parent_uri(record),
-      invocation_uri: field(invocation, :invocation_uri)
+      invocation_uri: field(invocation, :invocation_uri),
+      invoker_handle: invoker_handle(thread, notification, invocation),
+      parent_handle: parent_handle(thread)
     }
   end
 
@@ -88,33 +95,37 @@ defmodule ContextBot.StandardSite.PageCopy do
   end
 
   @doc """
-  Markdown Asked block placed above `# Research Analysis`.
+  One responding-to line placed above the Claude continue link.
 
-  Uses the invoking-post text as written. Includes a public bsky.app link to the
-  invoking post. A parent link is added only when the invocation is a reply and
-  that URI is parseable.
+  Uses a public bsky.app **post** URL for the invocation and, when the
+  invocation is a reply with a parseable parent URI, for the parent. Handles
+  from thread or notification records are preferred in both the link text and
+  the profile segment; a missing handle falls back to the AT-URI repo. A
+  missing or unusable parent uses the root sentence. Create must not fail.
   """
   @spec asked_markdown(content()) :: String.t()
   def asked_markdown(content) when is_map(content) do
-    text = asked_text(content)
-    invocation_url = bsky_url(field(content, :invocation_uri))
-    parent_url = bsky_url(field(content, :parent_uri))
+    invocation_uri = field(content, :invocation_uri)
+    parent_uri = parseable_uri(field(content, :parent_uri))
+    invoker = actor_ref(field(content, :invoker_handle), invocation_uri)
+    parent = actor_ref(field(content, :parent_handle), parent_uri)
 
-    [
-      "## Asked",
-      text_lines(text),
-      link_line(invocation_url, "Invoking post"),
-      link_line(parent_url, "Parent post")
-    ]
-    |> List.flatten()
-    |> Enum.join("\n")
+    cond do
+      match?({_, url} when is_binary(url), invoker) and
+          match?({_, url} when is_binary(url), parent) ->
+        {invoker_label, invoker_url} = invoker
+        {parent_label, parent_url} = parent
+
+        "Responding to [@#{invoker_label}](#{invoker_url})'s reply to [@#{parent_label}](#{parent_url})'s post."
+
+      match?({_, url} when is_binary(url), invoker) ->
+        {invoker_label, invoker_url} = invoker
+        "Responding to [@#{invoker_label}](#{invoker_url})'s post."
+
+      true ->
+        ""
+    end
   end
-
-  defp text_lines(""), do: []
-  defp text_lines(text), do: ["", text]
-
-  defp link_line(nil, _label), do: []
-  defp link_line(url, label), do: ["", "[#{label}](#{url})"]
 
   defp invocation_record(invocation) do
     thread = field(invocation, :raw_thread)
@@ -145,14 +156,86 @@ defmodule ContextBot.StandardSite.PageCopy do
     end
   end
 
-  defp parent_uri(%{"reply" => %{"parent" => %{"uri" => uri}}}) when is_binary(uri) do
+  defp parent_uri(record), do: parseable_uri(parent_uri_raw(record))
+
+  defp parent_uri_raw(%{"reply" => %{"parent" => %{"uri" => uri}}}) when is_binary(uri), do: uri
+  defp parent_uri_raw(_record), do: nil
+
+  defp parseable_uri(uri) when is_binary(uri) do
     case ATURI.parse(uri) do
       {:ok, _parsed} -> uri
       :error -> nil
     end
   end
 
-  defp parent_uri(_record), do: nil
+  defp parseable_uri(_uri), do: nil
+
+  defp invoker_handle(thread, notification, invocation) do
+    usable_handle(
+      thread_author_handle(thread) ||
+        notification_author_handle(notification) ||
+        field(invocation, :actor_handle)
+    )
+  end
+
+  defp parent_handle(thread), do: usable_handle(thread_parent_author_handle(thread))
+
+  defp thread_author_handle(%{"thread" => %{"post" => %{"author" => author}}}),
+    do: author_handle(author)
+
+  defp thread_author_handle(_thread), do: nil
+
+  defp thread_parent_author_handle(%{
+         "thread" => %{"parent" => %{"post" => %{"author" => author}}}
+       }),
+       do: author_handle(author)
+
+  defp thread_parent_author_handle(_thread), do: nil
+
+  defp notification_author_handle(%{"author" => author}), do: author_handle(author)
+  defp notification_author_handle(_notification), do: nil
+
+  defp author_handle(author) when is_map(author) do
+    case field(author, :handle) do
+      handle when is_binary(handle) -> String.trim(handle)
+      _missing -> nil
+    end
+  end
+
+  defp author_handle(_author), do: nil
+
+  defp actor_ref(handle, uri) do
+    case {usable_handle(handle), parsed_post(uri)} do
+      {label, %{repo: _repo, rkey: rkey}} when is_binary(label) ->
+        {label, "#{@bsky_profile_base}/#{label}/post/#{rkey}"}
+
+      {_missing, %{repo: repo, rkey: rkey}} ->
+        {repo, "#{@bsky_profile_base}/#{repo}/post/#{rkey}"}
+
+      {_handle, _unusable} ->
+        nil
+    end
+  end
+
+  defp parsed_post(uri) when is_binary(uri) do
+    case ATURI.parse(uri) do
+      {:ok, parsed} -> parsed
+      :error -> nil
+    end
+  end
+
+  defp parsed_post(_uri), do: nil
+
+  defp usable_handle(handle) when is_binary(handle) do
+    trimmed = String.trim(handle)
+
+    if trimmed != "" and String.contains?(trimmed, ".") and
+         String.match?(trimmed, ~r/\A[a-zA-Z0-9.-]+\z/) do
+      trimmed
+    end
+  end
+
+  defp usable_handle(_handle), do: nil
 
   defp asked_text(content) do
     case field(content, :asked_text) do
@@ -256,15 +339,6 @@ defmodule ContextBot.StandardSite.PageCopy do
       text |> String.graphemes() |> Enum.take(max) |> Enum.join()
     end
   end
-
-  defp bsky_url(uri) when is_binary(uri) do
-    case ATURI.parse(uri) do
-      {:ok, %{repo: repo, rkey: rkey}} -> "#{@bsky_profile_base}/#{repo}/post/#{rkey}"
-      :error -> nil
-    end
-  end
-
-  defp bsky_url(_uri), do: nil
 
   defp field(map, key) when is_map(map) and is_atom(key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))

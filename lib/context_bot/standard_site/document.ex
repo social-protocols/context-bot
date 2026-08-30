@@ -3,8 +3,9 @@ defmodule ContextBot.StandardSite.Document do
   Builds and publishes Standard.site document records containing full research responses.
 
   New documents use a short topic summary as Reader `title`, the invoking-post
-  text as written as `description`, and open the Markpub body with an Asked block
-  plus a Claude continue link. Existing published records are not rewritten.
+  text as written as `description`, and open the Markpub body with a responding-to
+  line plus a Claude continue link. Existing published records are not rewritten
+  by the publication path.
   """
 
   alias ContextBot.ATProto.{Client, TID}
@@ -43,6 +44,8 @@ defmodule ContextBot.StandardSite.Document do
           required(:user_message) => %{required(String.t()) => term()},
           optional(:asked_text) => String.t(),
           optional(:parent_uri) => String.t() | nil,
+          optional(:invoker_handle) => String.t() | nil,
+          optional(:parent_handle) => String.t() | nil,
           optional(:document_title) => String.t() | nil,
           optional(:document_reader_url) => String.t()
         }
@@ -166,7 +169,8 @@ defmodule ContextBot.StandardSite.Document do
 
   New documents also include a `claude.ai/new?q=` continue link whose starter
   prompt names this document's Standard Reader URL. The writeup and system
-  prompt are not copied into the query string.
+  prompt are not copied into the query string. The responding-to line sits
+  above that continue link and does not repeat the invocation text.
   """
   @spec format_markdown(document_content()) :: String.t()
   def format_markdown(

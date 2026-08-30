@@ -364,6 +364,8 @@ defmodule ContextBot.Workers.ResearchWorker do
       invocation_uri: invocation.invocation_uri,
       asked_text: subject.asked_text,
       parent_uri: subject.parent_uri,
+      invoker_handle: subject.invoker_handle,
+      parent_handle: subject.parent_handle,
       document_title: Map.get(result, :document_title),
       prompt: Map.put(projection.prompt, :reader_url, prompt_doc.reader_url),
       parameters: projection.parameters,
