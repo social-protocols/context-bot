@@ -3,7 +3,7 @@ defmodule ContextBot.DryRunWorkflowTest do
 
   alias ContextBot.ATProto.PublicClient
   alias ContextBot.DryRun
-  alias ContextBot.Research.{AnthropicClient, BudgetEntry}
+  alias ContextBot.Research.{AnthropicClient, BudgetEntry, Request, StructuredFixtures}
   alias ContextBot.Settings
   alias ContextBot.Workflow.{Invocation, Store}
 
@@ -56,8 +56,7 @@ defmodule ContextBot.DryRunWorkflowTest do
       assert conn.body_params["output_config"]["effort"] == "medium"
       assert conn.body_params["output_config"]["format"]["type"] == "json_schema"
 
-      assert conn.body_params["output_config"]["format"]["schema"] ==
-               ContextBot.Research.Request.output_schema()
+      assert conn.body_params["output_config"]["format"]["schema"] == Request.output_schema()
 
       assert Enum.at(conn.body_params["tools"], 1)["citations"] == %{"enabled" => false}
 
@@ -241,7 +240,7 @@ defmodule ContextBot.DryRunWorkflowTest do
           %{
             "type" => "text",
             "text" =>
-              ContextBot.Research.StructuredFixtures.structured_json(
+              StructuredFixtures.structured_json(
                 "Based on public reporting, this event occurred.",
                 title: "Public Reporting",
                 full: "Based on public reporting, this event occurred."

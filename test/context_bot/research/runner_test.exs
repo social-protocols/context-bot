@@ -22,7 +22,7 @@ end
 defmodule ContextBot.Research.RunnerTest do
   use ContextBot.DataCase, async: false
 
-  alias ContextBot.Research.{Budget, BudgetEntry, ResponseEnvelope, Runner}
+  alias ContextBot.Research.{Budget, BudgetEntry, Request, ResponseEnvelope, Runner}
   alias ContextBot.Research.StructuredFixtures
   alias ContextBot.Workflow.{Invocation, Store}
   alias Ecto.Adapters.SQL
@@ -63,8 +63,7 @@ defmodule ContextBot.Research.RunnerTest do
     assert request["output_config"]["effort"] == "medium"
     assert request["output_config"]["format"]["type"] == "json_schema"
 
-    assert request["output_config"]["format"]["schema"] ==
-             ContextBot.Research.Request.output_schema()
+    assert request["output_config"]["format"]["schema"] == Request.output_schema()
 
     assert Enum.at(request["tools"], 1)["citations"] == %{"enabled" => false}
 
