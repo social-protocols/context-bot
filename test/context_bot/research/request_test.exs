@@ -41,7 +41,7 @@ defmodule ContextBot.Research.RequestTest do
     assert request["stream"] == false
     assert request["cache_control"] == %{"type" => "ephemeral"}
     assert request["thinking"] == %{"type" => "adaptive"}
-    assert request["output_config"] == %{"effort" => "medium"}
+    assert_output_config(request, "medium")
     assert request["tool_choice"] == %{"type" => "auto"}
     assert is_binary(request["system"])
 
@@ -64,7 +64,7 @@ defmodule ContextBot.Research.RequestTest do
                "response_inclusion" => "excluded",
                "max_uses" => 3,
                "max_content_tokens" => 24_000,
-               "citations" => %{"enabled" => true}
+               "citations" => %{"enabled" => false}
              }
            ]
 
@@ -78,7 +78,7 @@ defmodule ContextBot.Research.RequestTest do
   test "sends one versioned prompt with the complete research and reply safety contract" do
     prompt = Request.initial(@canonical_thread, config())["system"]
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V5")
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V6")
     assert prompt =~ "ancestor"
     assert prompt =~ "unstable"
     assert prompt =~ "primary sources"
@@ -93,7 +93,11 @@ defmodule ContextBot.Research.RequestTest do
     assert prompt =~ "prompt injection"
     assert prompt =~ "275 Unicode grapheme"
     refute prompt =~ "at most 300 Unicode grapheme clusters"
-    assert prompt =~ "---COMPACT_REPLY---"
+    refute prompt =~ "---COMPACT_REPLY---"
+    assert prompt =~ "title"
+    assert prompt =~ "compact_reply"
+    assert prompt =~ "full_response"
+    assert prompt =~ "What Is That Bird?"
     assert prompt =~ "one Bluesky post"
     assert prompt =~ "images and their alt text"
     assert prompt =~ "directly"
@@ -198,76 +202,18 @@ defmodule ContextBot.Research.RequestTest do
     end
   end
 
-  test "repairs append-only while changing only max_tokens outside the conversation" do
-    initial = Request.initial(@canonical_thread, config())
-
-    paused_content = [
-      %{
-        "type" => "server_tool_use",
-        "id" => "server-call-1",
-        "name" => "web_fetch",
-        "caller" => %{"type" => "direct", "future" => %{"opaque" => true}},
-        "input" => %{"url" => "https://example.test/live"}
-      }
-    ]
-
-    conversation = Request.continue(initial, paused_content, initial["max_tokens"])
-
-    completed_content = [
-      %{
-        "type" => "thinking",
-        "thinking" => "opaque summary",
-        "signature" => "signed-completed-thinking"
-      },
-      %{"type" => "text", "text" => String.duplicate("too long ", 60)},
-      %{
-        "type" => "future_completed_block",
-        "encrypted_content" => "opaque-ciphertext",
-        "nested" => [%{"unknown" => [1, 2, 3]}]
-      }
-    ]
-
-    repaired = Request.repair(conversation, completed_content, 1_024)
-
-    assert repaired["max_tokens"] == 1_024
-
-    assert Map.drop(repaired, ["messages", "max_tokens"]) ==
-             Map.drop(conversation, ["messages", "max_tokens"])
-
-    assert Enum.take(repaired["messages"], length(conversation["messages"])) ==
-             conversation["messages"]
-
-    assert [assistant_message, repair_message] =
-             Enum.drop(repaired["messages"], length(conversation["messages"]))
-
-    assert assistant_message == %{"role" => "assistant", "content" => completed_content}
-    assert repair_message["role"] == "user"
-    assert String.starts_with?(repair_message["content"], "LENGTH_REPAIR\n")
-    assert repair_message["content"] =~ "only the Bluesky reply text for a single post"
-    assert repair_message["content"] =~ "at most 275 Unicode grapheme clusters"
-    assert repair_message["content"] =~ "---COMPACT_REPLY---"
-    assert repair_message["content"] =~ "Do not perform additional research"
-  end
-
   test "exposes a stable hashed identity for the versioned system prompt" do
     prompt = Request.system_prompt()
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V5")
-    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V5"
-    assert Request.system_prompt_semantic_version() == "5.0.0"
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V6")
+    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V6"
+    assert Request.system_prompt_semantic_version() == "6.0.0"
 
     assert Request.system_prompt_sha256() ==
              :sha256 |> :crypto.hash(prompt) |> Base.encode16(case: :lower)
 
     assert Request.system_prompt_rkey() ==
-             "prompt-context-bot-system-v5-#{String.slice(Request.system_prompt_sha256(), 0, 16)}"
-
-    assert String.starts_with?(Request.length_repair_prompt(), "LENGTH_REPAIR")
-
-    assert Request.length_repair_sha256() ==
-             :sha256
-             |> :crypto.hash(Request.length_repair_prompt())
-             |> Base.encode16(case: :lower)
+             "prompt-context-bot-system-v6-#{String.slice(Request.system_prompt_sha256(), 0, 16)}"
   end
 
   test "projects allowlisted Messages parameters and the first user message" do
@@ -279,13 +225,14 @@ defmodule ContextBot.Research.RequestTest do
         research_max_tokens: 4_096
       })
 
-    assert projection.prompt.id == "CONTEXT_BOT_SYSTEM_V5"
-    assert projection.prompt.semantic_version == "5.0.0"
+    assert projection.prompt.id == "CONTEXT_BOT_SYSTEM_V6"
+    assert projection.prompt.semantic_version == "6.0.0"
     assert projection.prompt.sha256 == Request.system_prompt_sha256()
     assert projection.parameters["anthropic-version"] == "2023-06-01"
     assert projection.parameters["model"] == "claude-sonnet-5"
     assert projection.parameters["max_tokens"] == 4_096
     assert projection.parameters["effort"] == "medium"
+    assert projection.parameters["output_format"] == "json_schema"
     assert projection.parameters["thinking"] == "adaptive"
     assert projection.parameters["tool_choice"] == "auto"
     assert projection.parameters["cache_control"] == "ephemeral"
@@ -307,7 +254,8 @@ defmodule ContextBot.Research.RequestTest do
                "allowed_callers" => ["direct"],
                "response_inclusion" => "excluded",
                "max_uses" => 2,
-               "max_content_tokens" => 10_000
+               "max_content_tokens" => 10_000,
+               "citations" => false
              }
            ]
 
@@ -383,21 +331,33 @@ defmodule ContextBot.Research.RequestTest do
     assert continued_projection.parameters["continuation"] == true
     refute inspect(continued_projection) =~ "hidden chain of thought"
     refute inspect(continued_projection) =~ "signed-thinking-payload"
+  end
 
-    repaired = Request.repair(continued, [%{"type" => "text", "text" => "too long"}], 1_024)
+  test "projects a historically stored length-repair conversation without copying the prompt" do
+    request =
+      @canonical_thread
+      |> then(&Request.initial(&1, config()))
+      |> Map.put("max_tokens", 1_024)
+      |> Map.update!("messages", fn messages ->
+        messages ++
+          [
+            %{"role" => "assistant", "content" => [%{"type" => "text", "text" => "too long"}]},
+            %{"role" => "user", "content" => "LENGTH_REPAIR\nrewrite"}
+          ]
+      end)
 
-    repaired_projection =
-      Request.public_projection(repaired, %{
+    projection =
+      Request.public_projection(request, %{
         anthropic_api_version: "2023-06-01",
         research_max_tokens: 4_096
       })
 
-    assert repaired_projection.continuation == true
-    assert repaired_projection.length_repair == true
-    assert repaired_projection.parameters["max_tokens"] == 4_096
-    assert repaired_projection.parameters["research_max_tokens"] == 4_096
-    assert repaired_projection.parameters["length_repair_max_tokens"] == 1_024
-    refute inspect(repaired_projection) =~ "LENGTH_REPAIR\n"
+    assert projection.continuation == false
+    assert projection.length_repair == true
+    assert projection.parameters["max_tokens"] == 4_096
+    assert projection.parameters["research_max_tokens"] == 4_096
+    assert projection.parameters["length_repair_max_tokens"] == 1_024
+    refute inspect(projection) =~ "LENGTH_REPAIR\n"
   end
 
   test "drops injected secrets from the public projection" do
@@ -416,6 +376,28 @@ defmodule ContextBot.Research.RequestTest do
     refute inspect(projection) =~ "sk-ant-secret"
     refute inspect(projection) =~ "Bearer secret-token"
     refute inspect(projection) =~ "session=secret"
+  end
+
+  test "sends json_schema format beside effort and omits unsupported length keywords" do
+    request = Request.initial(@canonical_thread, config())
+    schema = Request.output_schema()
+    encoded = Jason.encode!(request)
+
+    assert_output_config(request, "medium")
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] == false
+    assert schema["required"] == ["title", "compact_reply", "full_response"]
+    assert schema["properties"]["title"]["description"] =~ "What Is That Bird?"
+    assert schema["properties"]["compact_reply"]["description"] =~ "275"
+    refute encoded =~ "maxLength"
+    refute encoded =~ "minLength"
+    refute encoded =~ "structured-outputs"
+  end
+
+  defp assert_output_config(request, effort) do
+    assert request["output_config"]["effort"] == effort
+    assert request["output_config"]["format"]["type"] == "json_schema"
+    assert request["output_config"]["format"]["schema"] == Request.output_schema()
   end
 
   defp config do

@@ -103,17 +103,6 @@ defmodule ContextBot.StandardSite.PromptDocument do
     ```
     #{String.trim_trailing(Request.system_prompt())}
     ```
-
-    ## Length-repair prompt
-
-    Appended as a user turn only when the compact Bluesky reply exceeds the post limit.
-
-    - id: `LENGTH_REPAIR`
-    - SHA-256: `#{Request.length_repair_sha256()}`
-
-    ```
-    #{String.trim_trailing(Request.length_repair_prompt())}
-    ```
     """
   end
 end

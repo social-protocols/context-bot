@@ -4,6 +4,7 @@ defmodule ContextBot.Research.ReplyTest do
   alias ContextBot.ATProto.Post
   alias ContextBot.Research.Reply
   alias ContextBot.Research.ReplyLimits
+  alias ContextBot.Research.StructuredFixtures
   alias Unicode.String.Segment
 
   test "accepts ordered model text at exactly 300 graphemes and 3,000 bytes" do
@@ -16,20 +17,21 @@ defmodule ContextBot.Research.ReplyTest do
     assert String.length(reply) == 300
     assert byte_size(reply) == 3_000
 
-    {first, second} = String.split_at(reply, 150)
+    encoded = StructuredFixtures.structured_json(reply)
+    {first, second} = String.split_at(encoded, div(String.length(encoded), 2))
 
     content = [
       %{"type" => "text", "text" => first},
       %{"type" => "text", "text" => second}
     ]
 
-    assert Reply.select(content, "end_turn") == {:ok, reply}
+    assert Reply.select(content, "end_turn") == StructuredFixtures.selected(reply)
   end
 
   test "ignores opaque thinking and completed expected server-tool blocks" do
     content = [
       %{"type" => "thinking", "thinking" => "opaque", "signature" => "signed"},
-      %{"type" => "text", "text" => "First "},
+      structured_text("First second."),
       %{
         "type" => "server_tool_use",
         "id" => "search-1",
@@ -65,11 +67,10 @@ defmodule ContextBot.Research.ReplyTest do
           "content" => %{"type" => "document", "opaque" => "opaque-fetch"},
           "retrieved_at" => nil
         }
-      },
-      %{"type" => "text", "text" => "second."}
+      }
     ]
 
-    assert Reply.select(content, :end_turn) == {:ok, "First second."}
+    assert Reply.select(content, :end_turn) == StructuredFixtures.selected("First second.")
   end
 
   test "accepts paired dynamic-filtering code execution while selecting only model text" do
@@ -92,11 +93,10 @@ defmodule ContextBot.Research.ReplyTest do
           "content" => []
         }
       },
-      text("First "),
-      text("second.")
+      structured_text("First second.")
     ]
 
-    assert Reply.select(content, :end_turn) == {:ok, "First second."}
+    assert Reply.select(content, :end_turn) == StructuredFixtures.selected("First second.")
   end
 
   test "fails closed on malformed, duplicate, mismatched, and orphaned code execution blocks" do
@@ -137,7 +137,7 @@ defmodule ContextBot.Research.ReplyTest do
         "tool_use_id" => "paused-code-1",
         "content" => %{"type" => "code_execution_result", "content" => []}
       },
-      text("Final context only.")
+      structured_text("Final context only.")
     ]
 
     context = %{
@@ -145,7 +145,8 @@ defmodule ContextBot.Research.ReplyTest do
       pending_server_tools: %{"paused-code-1" => "code_execution"}
     }
 
-    assert Reply.select(completed_content, context) == {:ok, "Final context only."}
+    assert Reply.select(completed_content, context) ==
+             StructuredFixtures.selected("Final context only.")
   end
 
   test "accepts paired bash and text-editor code execution while selecting only model text" do
@@ -208,11 +209,11 @@ defmodule ContextBot.Research.ReplyTest do
         "tool_use_id" => "code-2",
         "content" => %{"type" => "code_execution_result", "content" => []}
       },
-      text("Publish this. "),
-      text("Not the tool output.")
+      structured_text("Publish this. Not the tool output.")
     ]
 
-    assert Reply.select(content, :end_turn) == {:ok, "Publish this. Not the tool output."}
+    assert Reply.select(content, :end_turn) ==
+             StructuredFixtures.selected("Publish this. Not the tool output.")
   end
 
   test "fails closed when bash_code_execution returns a non-zero return_code" do
@@ -326,10 +327,11 @@ defmodule ContextBot.Research.ReplyTest do
           "content" => []
         }
       },
-      text("No primary source found.")
+      structured_text("No primary source found.")
     ]
 
-    assert Reply.select(content, :end_turn) == {:ok, "No primary source found."}
+    assert Reply.select(content, :end_turn) ==
+             StructuredFixtures.selected("No primary source found.")
   end
 
   test "fails closed on unexpected_tool_use even when compact reply text follows" do
@@ -383,7 +385,7 @@ defmodule ContextBot.Research.ReplyTest do
         "tool_use_id" => "paused-bash-1",
         "content" => %{"type" => "bash_code_execution_result", "stdout" => "done\n"}
       },
-      text("Final context only.")
+      structured_text("Final context only.")
     ]
 
     context = %{
@@ -391,7 +393,8 @@ defmodule ContextBot.Research.ReplyTest do
       pending_server_tools: %{"paused-bash-1" => "bash_code_execution"}
     }
 
-    assert Reply.select(completed_content, context) == {:ok, "Final context only."}
+    assert Reply.select(completed_content, context) ==
+             StructuredFixtures.selected("Final context only.")
   end
 
   test "fails closed when a paused bash_code_execution completes with return_code 1" do
@@ -440,7 +443,7 @@ defmodule ContextBot.Research.ReplyTest do
           "content" => %{"type" => "document", "opaque" => %{"future" => true}}
         }
       },
-      text("Final context only.")
+      structured_text("Final context only.")
     ]
 
     context = %{
@@ -448,7 +451,8 @@ defmodule ContextBot.Research.ReplyTest do
       pending_server_tools: %{"paused-fetch-1" => "web_fetch"}
     }
 
-    assert Reply.select(completed_content, context) == {:ok, "Final context only."}
+    assert Reply.select(completed_content, context) ==
+             StructuredFixtures.selected("Final context only.")
   end
 
   test "rejects mismatched, unknown, orphaned, and still-pending cross-response tools" do
@@ -531,9 +535,14 @@ defmodule ContextBot.Research.ReplyTest do
     assert String.length(at_280) == 280
     assert String.length(at_300) == 300
 
-    assert Reply.select([text(at_276)], "end_turn") == {:ok, at_276}
-    assert Reply.select([text(at_280)], "end_turn") == {:ok, at_280}
-    assert Reply.select([text(at_300)], "end_turn") == {:ok, at_300}
+    assert Reply.select([structured_text(at_276)], "end_turn") ==
+             StructuredFixtures.selected(at_276)
+
+    assert Reply.select([structured_text(at_280)], "end_turn") ==
+             StructuredFixtures.selected(at_280)
+
+    assert Reply.select([structured_text(at_300)], "end_turn") ==
+             StructuredFixtures.selected(at_300)
   end
 
   test "classifies over-limit normal completions as repairable without truncating" do
@@ -545,13 +554,13 @@ defmodule ContextBot.Research.ReplyTest do
     assert byte_size(over_bytes) == 3_001
     assert String.length(over_bytes) == 281
 
-    assert Reply.select([text(over_graphemes)], "end_turn") ==
+    assert Reply.select([structured_text(over_graphemes)], "end_turn") ==
              {:repairable, over_graphemes, [:too_many_graphemes]}
 
-    assert Reply.select([text(over_bytes)], "end_turn") ==
+    assert Reply.select([structured_text(over_bytes)], "end_turn") ==
              {:repairable, over_bytes, [:too_many_bytes]}
 
-    assert Reply.select([text(over_both)], "end_turn") ==
+    assert Reply.select([structured_text(over_both)], "end_turn") ==
              {:repairable, over_both, [:too_many_graphemes, :too_many_bytes]}
   end
 
@@ -683,10 +692,10 @@ defmodule ContextBot.Research.ReplyTest do
         "tool_use_id" => "search-opaque-input",
         "content" => []
       },
-      text("publishable")
+      structured_text("publishable")
     ]
 
-    assert Reply.select(content, :end_turn) == {:ok, "publishable"}
+    assert Reply.select(content, :end_turn) == StructuredFixtures.selected("publishable")
   end
 
   test "rejects malformed known server-tool result payloads" do
@@ -766,10 +775,10 @@ defmodule ContextBot.Research.ReplyTest do
           "content" => result_content,
           "caller" => %{"type" => "direct", "opaque" => true}
         },
-        text("publishable")
+        structured_text("publishable")
       ]
 
-      assert Reply.select(content, :end_turn) == {:ok, "publishable"}
+      assert Reply.select(content, :end_turn) == StructuredFixtures.selected("publishable")
     end)
   end
 
@@ -793,10 +802,11 @@ defmodule ContextBot.Research.ReplyTest do
             "error_code" => "max_uses_exceeded"
           }
         },
-        text("publishable after cap")
+        structured_text("publishable after cap")
       ]
 
-      assert Reply.select(content, :end_turn) == {:ok, "publishable after cap"}
+      assert Reply.select(content, :end_turn) ==
+               StructuredFixtures.selected("publishable after cap")
     end
   end
 
@@ -1015,6 +1025,10 @@ defmodule ContextBot.Research.ReplyTest do
     assert String.contains?(split1, "U.S.")
     assert String.length(split1) == 274
     assert String.starts_with?(split2, "b")
+  end
+
+  defp structured_text(compact, opts \\ []) do
+    text(StructuredFixtures.structured_json(compact, opts))
   end
 
   defp text(value), do: %{"type" => "text", "text" => value}

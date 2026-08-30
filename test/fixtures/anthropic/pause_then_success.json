@@ -53,7 +53,7 @@
       },
       {
         "type": "text",
-        "text": "The cited primary source resolves the disputed date."
+        "text": "{\"title\":\"Disputed Date\",\"compact_reply\":\"The cited primary source resolves the disputed date.\",\"full_response\":\"The cited primary source resolves the disputed date.\"}"
       }
     ],
     "stop_reason": "end_turn",

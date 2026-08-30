@@ -6,7 +6,7 @@ defmodule ContextBot.LiveRunWorkflowTest do
   alias ContextBot.ATProto.PublicClient
   alias ContextBot.LiveRun
   alias ContextBot.POCFixture
-  alias ContextBot.Research.BudgetEntry
+  alias ContextBot.Research.{BudgetEntry, StructuredFixtures}
   alias ContextBot.Workflow.Invocation
 
   setup {Req.Test, :verify_on_exit!}
@@ -133,7 +133,17 @@ defmodule ContextBot.LiveRunWorkflowTest do
     # Stub research response
     POCFixture.set_research_response(fixture, %{
       "stop_reason" => "end_turn",
-      "content" => [%{"type" => "text", "text" => "Public reports indicate this is a test."}]
+      "content" => [
+        %{
+          "type" => "text",
+          "text" =>
+            StructuredFixtures.structured_json(
+              "Public reports indicate this is a test.",
+              title: "Public Reports",
+              full: "Public reports indicate this is a test."
+            )
+        }
+      ]
     })
 
     perform_and_delete!(:research)

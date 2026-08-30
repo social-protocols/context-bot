@@ -1,12 +1,16 @@
 defmodule ContextBot.StandardSite.TitlePrompt do
   @moduledoc """
-  Dedicated Reader title-completion prompt.
+  Reader title style used by the structured research JSON schema.
 
-  Kept separate from `CONTEXT_BOT_SYSTEM_V5` so the dual-format research prompt
-  hash and published prompt document stay unchanged.
+  Title guidance lives in the research schema field description and system
+  prompt. This module is the shared wording; it is not a second Messages call.
   """
 
   @id "READER_TITLE_V1"
+
+  @schema_description """
+  Standard Reader page title. A Title Case headline of the topic or question, typically 2 to 8 words and at most 80 Unicode grapheme clusters. Summarize what the page is about; do not narrate the mention or greeting. Match this style: Context Bot Launch; What Is That Bird?; The Story on the Yosemite Land Deal; 'The Range of Acceptable Opinion' on Bluesky; Planned Explosion? Do not copy the invocation verbatim, take the first six words, strip @mentions and leave punctuation holes, use a TID or a title that starts with "Context on", copy the compact Bluesky reply, or include @handles unless the handle itself is the subject. No trailing period unless it is part of an abbreviation.
+  """
 
   @prompt """
   READER_TITLE_V1
@@ -34,6 +38,9 @@ defmodule ContextBot.StandardSite.TitlePrompt do
 
   @spec id() :: String.t()
   def id, do: @id
+
+  @spec schema_description() :: String.t()
+  def schema_description, do: String.trim(@schema_description)
 
   @spec prompt() :: String.t()
   def prompt, do: @prompt

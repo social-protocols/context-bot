@@ -3,7 +3,7 @@ defmodule ContextBot.DryRunWorkflowTest do
 
   alias ContextBot.ATProto.PublicClient
   alias ContextBot.DryRun
-  alias ContextBot.Research.{AnthropicClient, BudgetEntry}
+  alias ContextBot.Research.{AnthropicClient, BudgetEntry, Request, StructuredFixtures}
   alias ContextBot.Settings
   alias ContextBot.Workflow.{Invocation, Store}
 
@@ -53,7 +53,12 @@ defmodule ContextBot.DryRunWorkflowTest do
       assert conn.request_path == "/v1/messages"
       assert Plug.Conn.get_req_header(conn, "x-api-key") == ["anthropic-test-key-never-expose"]
       assert conn.body_params["max_tokens"] == 4_096
-      assert conn.body_params["output_config"] == %{"effort" => "medium"}
+      assert conn.body_params["output_config"]["effort"] == "medium"
+      assert conn.body_params["output_config"]["format"]["type"] == "json_schema"
+
+      assert conn.body_params["output_config"]["format"]["schema"] == Request.output_schema()
+
+      assert Enum.at(conn.body_params["tools"], 1)["citations"] == %{"enabled" => false}
 
       assert [search, fetch] = conn.body_params["tools"]
       assert search["max_uses"] == 5
@@ -232,7 +237,15 @@ defmodule ContextBot.DryRunWorkflowTest do
         "model" => "claude-opus-5-sonnet-20250210",
         "stop_reason" => "end_turn",
         "content" => [
-          %{"type" => "text", "text" => "Based on public reporting, this event occurred."}
+          %{
+            "type" => "text",
+            "text" =>
+              StructuredFixtures.structured_json(
+                "Based on public reporting, this event occurred.",
+                title: "Public Reporting",
+                full: "Based on public reporting, this event occurred."
+              )
+          }
         ],
         "usage" => %{
           "input_tokens" => 100,

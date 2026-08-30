@@ -6,7 +6,7 @@
   "content": [
     {
       "type": "text",
-      "text": "Useful context from primary sources."
+      "text": "{\"title\":\"Primary Sources\",\"compact_reply\":\"Useful context from primary sources.\",\"full_response\":\"Useful context from primary sources.\"}"
     }
   ],
   "stop_reason": "end_turn",

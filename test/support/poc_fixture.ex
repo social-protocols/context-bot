@@ -430,13 +430,12 @@ defmodule ContextBot.POCFixture do
         provider_response(conn, state.thread_result)
 
       "/xrpc/com.atproto.repo.getRecord" ->
-        observe(fixture, :pds_get)
-        state = record_call(fixture, :pds_get, conn)
+        endpoint = repo_endpoint(:get, query_params(conn)["collection"])
+        observe(fixture, endpoint)
+        state = record_call(fixture, endpoint, conn)
         get_record_response(conn, state)
 
       "/xrpc/com.atproto.repo.putRecord" ->
-        observe(fixture, :pds_put)
-        record_call(fixture, :pds_put, conn)
         put_record_response(conn, fixture)
 
       path ->
@@ -514,7 +513,28 @@ defmodule ContextBot.POCFixture do
   defp resolve_did_response(conn, state),
     do: Req.Test.json(conn, %{"id" => state.actor_did, "alsoKnownAs" => ["at://old.bsky.team"]})
 
-  defp get_record_response(conn, %{pds_mode: :conflict}) do
+  defp repo_endpoint(_kind, collection)
+       when collection in ["site.standard.publication", "site.standard.document"],
+       do: :standard_site
+
+  defp repo_endpoint(:get, _collection), do: :pds_get
+  defp repo_endpoint(:put, _collection), do: :pds_put
+
+  defp site_collection?(collection)
+       when collection in ["site.standard.publication", "site.standard.document"],
+       do: true
+
+  defp site_collection?(_collection), do: false
+
+  defp get_record_response(conn, state) do
+    if site_collection?(query_params(conn)["collection"]) do
+      record_not_found(conn)
+    else
+      get_feed_record_response(conn, state)
+    end
+  end
+
+  defp get_feed_record_response(conn, %{pds_mode: :conflict}) do
     query = query_params(conn)
     uri = "at://#{query["repo"]}/#{query["collection"]}/#{query["rkey"]}"
 
@@ -525,16 +545,21 @@ defmodule ContextBot.POCFixture do
     })
   end
 
-  defp get_record_response(conn, %{pds_visible: nil}) do
+  defp get_feed_record_response(conn, %{pds_visible: nil}), do: record_not_found(conn)
+
+  defp get_feed_record_response(conn, %{pds_visible: visible}), do: Req.Test.json(conn, visible)
+
+  defp record_not_found(conn) do
     conn
     |> Plug.Conn.put_status(400)
     |> Req.Test.json(%{"error" => "RecordNotFound", "message" => "record not found"})
   end
 
-  defp get_record_response(conn, %{pds_visible: visible}), do: Req.Test.json(conn, visible)
-
   defp put_record_response(conn, fixture) do
     request = request_body!(conn)
+    endpoint = repo_endpoint(:put, request["collection"])
+    observe(fixture, endpoint)
+    record_call(fixture, endpoint, conn)
 
     outcome =
       Agent.get_and_update(fixture.state, fn state ->
@@ -546,6 +571,19 @@ defmodule ContextBot.POCFixture do
       :timeout -> Req.Test.transport_error(conn, :timeout)
       :conflict -> conn |> Plug.Conn.put_status(400) |> Req.Test.json(%{"error" => "InvalidSwap"})
     end
+  end
+
+  defp next_put_outcome(state, %{"collection" => collection} = request)
+       when collection in ["site.standard.publication", "site.standard.document"] do
+    uri = "at://#{request["repo"]}/#{collection}/#{request["rkey"]}"
+
+    visible = %{
+      "uri" => uri,
+      "cid" => fixture_cid("created-site"),
+      "value" => request["record"]
+    }
+
+    {{:ok, visible}, state}
   end
 
   defp next_put_outcome(%{pds_visible: visible} = state, _request) when not is_nil(visible),

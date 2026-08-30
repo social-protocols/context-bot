@@ -350,8 +350,9 @@ defmodule ContextBot.StandardSite.PageCopyTest do
   end
 
   describe "TitlePrompt" do
-    test "is a dedicated title-completion prompt, not the V5 dual-format research prompt" do
+    test "is Reader title wording for the research schema, not a second Messages call" do
       prompt = TitlePrompt.prompt()
+      description = TitlePrompt.schema_description()
 
       assert TitlePrompt.id() == "READER_TITLE_V1"
       assert String.starts_with?(prompt, "READER_TITLE_V1")
@@ -361,7 +362,9 @@ defmodule ContextBot.StandardSite.PageCopyTest do
       assert prompt =~ "The Story on the Yosemite Land Deal"
       assert prompt =~ "'The Range of Acceptable Opinion' on Bluesky"
       assert prompt =~ "first six words"
-      refute prompt =~ "CONTEXT_BOT_SYSTEM_V5"
+      assert description =~ "What Is That Bird?"
+      assert description =~ "80 Unicode grapheme"
+      refute prompt =~ "CONTEXT_BOT_SYSTEM_V6"
       refute prompt =~ "---COMPACT_REPLY---"
     end
 
