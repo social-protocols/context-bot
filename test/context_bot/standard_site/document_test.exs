@@ -132,7 +132,33 @@ defmodule ContextBot.StandardSite.DocumentTest do
       refute record["description"] =~ @content.selected_reply
     end
 
-    test "falls back to truncated invocation text when the model title is junk" do
+    test "uses a Title Case model headline and keeps mentions in the description" do
+      launch =
+        "I have just launched @getcontext.bot. Mention it in a post or reply and get a response from Claude. @getcontext.bot, say hello!"
+
+      content =
+        @content
+        |> Map.put(:asked_text, launch)
+        |> Map.put(:document_title, "Context Bot Launch")
+        |> Map.put(:selected_reply, "Hello! I'm @getcontext.bot.")
+
+      assert {:ok, _result} =
+               Document.create(
+                 TrackingDocClient,
+                 @repo,
+                 @publication_uri,
+                 content,
+                 @created_at
+               )
+
+      assert_received {:document_put, record}
+      assert record["title"] == "Context Bot Launch"
+      assert record["description"] == launch
+      refute record["title"] == "I have just launched. Mention."
+      refute record["description"] =~ "launched ."
+    end
+
+    test "falls back to a sentence of the raw invocation when the model title is junk" do
       asked =
         "Can you help me understand the historical context of this planned explosion near the harbor?"
 
@@ -152,7 +178,10 @@ defmodule ContextBot.StandardSite.DocumentTest do
                )
 
       assert_received {:document_put, record}
-      assert record["title"] == "Can you help me understand the"
+      refute record["title"] == "Can you help me understand the"
+      refute record["title"] =~ "Context on"
+      refute record["title"] =~ "3k123"
+      assert String.starts_with?(asked, record["title"])
       assert record["description"] == asked
     end
 

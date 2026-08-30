@@ -2,82 +2,67 @@ defmodule ContextBot.StandardSite.PageCopyTest do
   use ExUnit.Case, async: true
 
   alias ContextBot.StandardSite.PageCopy
+  alias ContextBot.StandardSite.TitlePrompt
 
   @bot_did "did:plc:contextbot"
   @bot_handle "getcontext.bot"
   @invocation_uri "at://did:plc:alice/app.bsky.feed.post/3muajo3wxyz"
   @parent_uri "at://did:plc:bob/app.bsky.feed.post/3parentrkey12"
 
-  describe "strip_bot_mentions/4" do
-    test "removes the public @getcontext.bot handle and configured handle" do
-      assert PageCopy.strip_bot_mentions(
-               "@getcontext.bot What bird is that?",
-               %{},
-               @bot_did,
-               @bot_handle
-             ) == "What bird is that?"
+  @launch_invocation """
+                     I have just launched @getcontext.bot. Mention it in a post or reply and get a response from Claude. @getcontext.bot, say hello!
+                     """
+                     |> String.trim()
 
-      assert PageCopy.strip_bot_mentions(
-               "hey @contextbot.test is this planned?",
-               %{},
-               @bot_did,
-               "contextbot.test"
-             ) == "hey is this planned?"
-    end
-
-    test "removes every bot mention by UTF-8 facet byte offsets" do
-      text = "¿Por qué? @getcontext.bot y @getcontext.bot"
-      first_start = byte_size("¿Por qué? ")
-      first_end = first_start + byte_size("@getcontext.bot")
-      second_start = first_end + byte_size(" y ")
-      second_end = second_start + byte_size("@getcontext.bot")
-
-      record = %{
-        "text" => text,
-        "facets" => [
-          mention_facet(first_start, first_end, @bot_did),
-          mention_facet(second_start, second_end, @bot_did)
-        ]
-      }
-
-      assert PageCopy.strip_bot_mentions(text, record, @bot_did, @bot_handle) == "¿Por qué? y"
-    end
-
-    test "leaves other accounts' mentions in place" do
-      text = "@alice.test @getcontext.bot what happened?"
-
-      assert PageCopy.strip_bot_mentions(text, %{}, @bot_did, @bot_handle) ==
-               "@alice.test what happened?"
-    end
-
-    test "does not fail when facets are missing or unusable" do
-      assert PageCopy.strip_bot_mentions(
-               "@getcontext.bot Planned explosion?",
-               %{"facets" => "nope"},
-               @bot_did,
-               nil
-             ) == "Planned explosion?"
-    end
-  end
+  @bird_invocation "@getcontext.bot what bird is that?"
 
   describe "title/1" do
-    test "uses a usable model headline of the question" do
+    test "uses a Title Case model headline such as Context Bot Launch" do
       assert PageCopy.title(%{
-               asked_text: "hey can you identify this bird in the photo",
-               document_title: "What bird is that?",
-               selected_reply: "That's a Himalayan Monal in breeding plumage."
-             }) == "What bird is that?"
+               asked_text: @launch_invocation,
+               document_title: "Context Bot Launch",
+               selected_reply: "Hello! I'm @getcontext.bot — mention me in a thread."
+             }) == "Context Bot Launch"
     end
 
-    test "falls back to short stripped invocation text and strips a trailing period" do
+    test "uses What Is That Bird? rather than a mention-stripped remnant" do
+      assert PageCopy.title(%{
+               asked_text: @bird_invocation,
+               document_title: "What Is That Bird?",
+               selected_reply: "That's a Himalayan Monal in breeding plumage."
+             }) == "What Is That Bird?"
+    end
+
+    test "does not turn the launch invocation into a six-word remnant" do
+      title =
+        PageCopy.title(%{
+          asked_text: @launch_invocation,
+          document_title: nil,
+          selected_reply: "Hello! I'm @getcontext.bot."
+        })
+
+      refute title == "I have just launched. Mention."
+      refute title == "I have just launched . Mention"
+      refute title =~ "launched ."
+      refute title =~ ", say hello"
+      assert title =~ "@getcontext.bot" or title == "Context request"
+    end
+
+    test "falls back to the first raw sentence and keeps mentions" do
       assert PageCopy.title(%{
                asked_text: "Planned explosion.",
                document_title: nil,
                selected_reply: "No, that was a controlled demolition."
              }) == "Planned explosion"
+
+      assert PageCopy.title(%{
+               asked_text: @bird_invocation,
+               document_title: nil,
+               selected_reply: "That's a Himalayan Monal in breeding plumage."
+             }) == @bird_invocation
     end
 
-    test "tightly truncates a long stripped question instead of using the rkey TID" do
+    test "does not use a six-word slice of a long question as the title" do
       asked =
         "Can you help me understand the historical context of this planned explosion near the harbor?"
 
@@ -89,9 +74,11 @@ defmodule ContextBot.StandardSite.PageCopyTest do
           selected_reply: "The blast was a planned demolition."
         })
 
-      assert title == "Can you help me understand the"
+      refute title == "Can you help me understand the"
       refute title =~ "3muajo3w"
       refute title =~ "Context on"
+      assert String.starts_with?(asked, title)
+      assert String.contains?(title, "historical") or String.length(title) > 40
     end
 
     test "discards junk model titles and never falls back to the invocation TID" do
@@ -133,14 +120,31 @@ defmodule ContextBot.StandardSite.PageCopyTest do
   end
 
   describe "description/1" do
-    test "uses the stripped invocation text rather than the Bluesky reply" do
+    test "keeps the launch invocation intact, including @getcontext.bot" do
       assert PageCopy.description(%{
-               asked_text: "What bird is that?",
-               selected_reply: "That's a Himalayan Monal in breeding plumage."
-             }) == "What bird is that?"
+               asked_text: @launch_invocation,
+               selected_reply: "Hello! I'm @getcontext.bot."
+             }) == @launch_invocation
+
+      description =
+        PageCopy.description(%{
+          asked_text: @launch_invocation,
+          selected_reply: "Hello! I'm @getcontext.bot."
+        })
+
+      assert description =~ "@getcontext.bot"
+      refute description =~ "launched ."
+      refute description =~ "Claude. , say"
     end
 
-    test "truncates only when the stripped text exceeds the card grapheme cap" do
+    test "keeps @getcontext.bot what bird is that? as written" do
+      assert PageCopy.description(%{
+               asked_text: @bird_invocation,
+               selected_reply: "That's a Himalayan Monal in breeding plumage."
+             }) == @bird_invocation
+    end
+
+    test "truncates only when the raw text exceeds the card grapheme cap" do
       asked = String.duplicate("字", PageCopy.description_max_graphemes() + 20)
 
       description = PageCopy.description(%{asked_text: asked, selected_reply: "unused"})
@@ -149,22 +153,22 @@ defmodule ContextBot.StandardSite.PageCopyTest do
       assert String.starts_with?(asked, description)
     end
 
-    test "returns nil when there is no stripped invocation text" do
+    test "returns nil when there is no invocation text" do
       assert PageCopy.description(%{asked_text: "", selected_reply: "That's a Himalayan Monal."}) ==
                nil
     end
   end
 
   describe "asked_markdown/1" do
-    test "renders the stripped invocation and a public Bluesky link" do
+    test "renders the raw invocation and a public Bluesky link" do
       markdown =
         PageCopy.asked_markdown(%{
-          asked_text: "What bird is that?",
+          asked_text: @bird_invocation,
           invocation_uri: @invocation_uri
         })
 
       assert markdown =~ "## Asked"
-      assert markdown =~ "What bird is that?"
+      assert markdown =~ @bird_invocation
       assert markdown =~ "https://bsky.app/profile/did:plc:alice/post/3muajo3wxyz"
       refute markdown =~ "Parent post"
     end
@@ -172,7 +176,7 @@ defmodule ContextBot.StandardSite.PageCopyTest do
     test "adds a parent link when the invoking post is a reply" do
       markdown =
         PageCopy.asked_markdown(%{
-          asked_text: "What bird is that?",
+          asked_text: @bird_invocation,
           invocation_uri: @invocation_uri,
           parent_uri: @parent_uri
         })
@@ -184,7 +188,7 @@ defmodule ContextBot.StandardSite.PageCopyTest do
     test "omits the parent link when the parent URI is missing or unusable" do
       markdown =
         PageCopy.asked_markdown(%{
-          asked_text: "What bird is that?",
+          asked_text: @bird_invocation,
           invocation_uri: @invocation_uri,
           parent_uri: "not-an-at-uri"
         })
@@ -195,7 +199,7 @@ defmodule ContextBot.StandardSite.PageCopyTest do
   end
 
   describe "subject/2" do
-    test "prefers the thread target record, strips the mention, and keeps the parent URI" do
+    test "prefers the thread target record, keeps mentions, and keeps the parent URI" do
       invocation = %{
         invocation_uri: @invocation_uri,
         invocation_text: nil,
@@ -206,7 +210,7 @@ defmodule ContextBot.StandardSite.PageCopyTest do
             "post" => %{
               "uri" => @invocation_uri,
               "record" => %{
-                "text" => "@getcontext.bot What bird is that?",
+                "text" => @bird_invocation,
                 "facets" => [mention_facet(0, 15, @bot_did)],
                 "reply" => %{"parent" => %{"uri" => @parent_uri}}
               }
@@ -217,7 +221,7 @@ defmodule ContextBot.StandardSite.PageCopyTest do
 
       subject = PageCopy.subject(invocation, %{bot_did: @bot_did, bot_handle: @bot_handle})
 
-      assert subject.asked_text == "What bird is that?"
+      assert subject.asked_text == @bird_invocation
       assert subject.parent_uri == @parent_uri
       assert subject.invocation_uri == @invocation_uri
     end
@@ -238,7 +242,7 @@ defmodule ContextBot.StandardSite.PageCopyTest do
 
       subject = PageCopy.subject(invocation, %{bot_did: @bot_did, bot_handle: @bot_handle})
 
-      assert subject.asked_text == "Planned explosion?"
+      assert subject.asked_text == "@getcontext.bot Planned explosion?"
       assert subject.parent_uri == nil
     end
 
@@ -265,15 +269,55 @@ defmodule ContextBot.StandardSite.PageCopyTest do
         raw_thread: nil,
         raw_notification: %{
           "post" => %{
-            "record" => %{"text" => "@getcontext.bot What bird is that?"}
+            "record" => %{"text" => @bird_invocation}
           }
         }
       }
 
       subject = PageCopy.subject(invocation, %{bot_did: @bot_did, bot_handle: @bot_handle})
 
-      assert subject.asked_text == "What bird is that?"
+      assert subject.asked_text == @bird_invocation
       assert subject.parent_uri == nil
+    end
+
+    test "keeps the launch invocation text as written" do
+      invocation = %{
+        invocation_uri: @invocation_uri,
+        invocation_text: nil,
+        canonical_thread: nil,
+        raw_thread: nil,
+        raw_notification: %{
+          "record" => %{"text" => @launch_invocation}
+        }
+      }
+
+      subject = PageCopy.subject(invocation, %{bot_did: @bot_did, bot_handle: @bot_handle})
+
+      assert subject.asked_text == @launch_invocation
+    end
+  end
+
+  describe "TitlePrompt" do
+    test "is a dedicated title-completion prompt, not the V5 dual-format research prompt" do
+      prompt = TitlePrompt.prompt()
+
+      assert TitlePrompt.id() == "READER_TITLE_V1"
+      assert String.starts_with?(prompt, "READER_TITLE_V1")
+      assert prompt =~ "Title Case"
+      assert prompt =~ "Context Bot Launch"
+      assert prompt =~ "What Is That Bird?"
+      assert prompt =~ "The Story on the Yosemite Land Deal"
+      assert prompt =~ "'The Range of Acceptable Opinion' on Bluesky"
+      assert prompt =~ "first six words"
+      refute prompt =~ "CONTEXT_BOT_SYSTEM_V5"
+      refute prompt =~ "---COMPACT_REPLY---"
+    end
+
+    test "asks for a title from the raw invocation, mentions included" do
+      message = TitlePrompt.user_message(@launch_invocation)
+
+      assert message =~ @launch_invocation
+      assert message =~ "@getcontext.bot"
     end
   end
 
