@@ -2,7 +2,7 @@
 
 An experimental, on-demand Bluesky / ATProto context bot. The proof of concept acts only when directly mentioned in a public thread; it is not a proactive moderation system.
 
-The POC durably receives mentions, checks a narrow eligibility policy, captures the invocation and ancestor chain, requests Claude analysis with server-side research, and publishes exactly one correctly rooted Bluesky reply. SQLite holds workflow, budget, provider-response, and frozen reply state. The compact Bluesky reply links a Standard.site document that includes the research writeup, the hashed versioned system prompt, the allowlisted Messages API parameters, and the canonical thread that was sent. Custom `org.social-protocols.contextbot.*` audit-record publication, audit pages, IPFS, descendants, and a UI are intentionally out of scope.
+The POC durably receives mentions, classifies the actor into a rate-limit tier, captures the invocation and ancestor chain, requests Claude analysis with server-side research, and publishes exactly one correctly rooted Bluesky reply. SQLite holds workflow, budget, provider-response, and frozen reply state. The compact Bluesky reply links a Standard.site document that includes the research writeup, the hashed versioned system prompt, the allowlisted Messages API parameters, and the canonical thread that was sent. Custom `org.social-protocols.contextbot.*` audit-record publication, audit pages, IPFS, descendants, and a UI are intentionally out of scope.
 
 ## Prerequisites
 
@@ -285,7 +285,7 @@ The release entrypoint migrates `/data/context_bot.db` before starting Phoenix. 
 
 Live tests call Bluesky and Anthropic and publish a public reply. They always require explicit authorization.
 
-For the eligible test, use either a bidirectionally verified `bsky.team` account, an account with the `bluesky-elder` Skywatch label, or an exact DID listed in `OPERATOR_ALLOWED_DIDS`.
+Anyone who directly mentions the bot is eligible. Actor daily limits are tiered: unlimited for `OPERATOR_ALLOWED_DIDS` (actor hourly/daily windows skipped), 5/day for a bidirectionally verified `bsky.team` handle or a confirmed Skywatch `bluesky-elder` label (`ACTOR_DAILY_LIMIT`), and 1/day for everyone else (`ACTOR_DAILY_LIMIT_PUBLIC`). A Skywatch or identity outage degrades the actor to the public tier instead of rejecting the mention. Global hourly/daily limits and `max_pending` still apply to everyone, including the operator. `ACTOR_HOURLY_LIMIT` remains a burst cap for non-operator actors; daily tiers are the actor cap.
 
 1. With explicit authorization, record the current invocation, sent-budget-entry, provider-response, and completed-reply counts using the aggregate-only `fly ssh console` queries above.
 2. Create a public ancestor chain. Mention the bot in a new reply and ask for context.
@@ -294,11 +294,11 @@ For the eligible test, use either a bidirectionally verified `bsky.team` account
 5. Create a direct reply below the invocation before its poll is processed; confirm that descendant text is absent from the stored canonical thread/provider prompt.
 6. Wait through another notification poll and confirm the same invocation still has one reply URI/CID and Bluesky still shows one bot reply.
 
-For the ineligible test, use an account that is not `bsky.team`, has no `bluesky-elder` label, and is absent from `OPERATOR_ALLOWED_DIDS`.
+For a public-tier rate-limit check, use an account that is not `bsky.team`, has no `bluesky-elder` label, and is absent from `OPERATOR_ALLOWED_DIDS`, then mention the bot a second time the same day.
 
-1. Record the sent-budget-entry, provider-response, and completed-reply counts.
-2. Mention the bot publicly and wait through a poll and job cycle.
-3. Confirm the invocation becomes `ineligible` and every recorded count remains unchanged. There must be no Claude request and no bot reply.
+1. Record the sent-budget-entry, provider-response, and completed-reply counts after the first public mention has completed.
+2. Mention the bot publicly again from the same account and wait through a poll and job cycle.
+3. Confirm the second invocation becomes `deferred_rate` until the rolling 24-hour window opens. There must be no additional Claude request and no second bot reply until that window expires.
 
 ## Rollback
 

@@ -486,6 +486,12 @@ defmodule ContextBot.POCFixture do
     Req.Test.json(conn, %{"labels" => [elder_label(actor_did)]})
   end
 
+  defp profile_response(conn, %{eligibility: :labeler_outage}) do
+    conn
+    |> Plug.Conn.put_status(503)
+    |> Req.Test.json(%{"error" => "Unavailable"})
+  end
+
   defp profile_response(conn, state)
        when state.eligibility in [:team, :stale_team, :ineligible] do
     conn

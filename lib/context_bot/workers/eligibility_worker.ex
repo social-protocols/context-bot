@@ -1,6 +1,6 @@
 defmodule ContextBot.Workers.EligibilityWorker do
   @moduledoc """
-  Rechecks current actor eligibility before atomically attempting admission.
+  Rechecks the current actor rate-limit tier before atomically attempting admission.
 
   Provider calls happen only after the invocation owns the resumable
   `checking_eligibility` checkpoint. Admission alone may enqueue thread capture.
@@ -207,6 +207,7 @@ defmodule ContextBot.Workers.EligibilityWorker do
   defp evidence_keys(:operator_allowlist), do: ["actor_did", "source"]
   defp evidence_keys(:bluesky_elder), do: ["actor_did", "label", "labeler_did"]
   defp evidence_keys(:bsky_team), do: ["actor_did", "handle", "verification"]
+  defp evidence_keys(:public), do: ["actor_did", "source"]
   defp evidence_keys(_method), do: []
 
   defp fetch(map, "actor_did"), do: fetch_key(map, "actor_did", :actor_did)

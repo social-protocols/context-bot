@@ -28,9 +28,9 @@ defmodule ContextBot.Admission do
 
   @doc "Read-only admission gate for an already accepted workflow resuming after deferral."
   @spec resume_available?(Invocation.t(), DateTime.t(), Settings.t()) :: boolean()
-  def resume_available?(%Invocation{id: id, actor_did: actor_did}, %DateTime{} = now, settings) do
+  def resume_available?(%Invocation{id: id} = invocation, %DateTime{} = now, settings) do
     capacity_available?(settings, id) and
-      is_nil(rate_defer_until(actor_did, now, settings, id))
+      is_nil(rate_defer_until(invocation, now, settings, id))
   end
 
   @spec admit(Invocation.t(), DateTime.t(), Settings.t(), Changeset.t()) ::
@@ -56,7 +56,7 @@ defmodule ContextBot.Admission do
             pending_count(invocation.id) >= settings.max_pending ->
               {:capacity, defer(invocation, :deferred_capacity, nil)}
 
-            defer_until = rate_defer_until(invocation.actor_did, now, settings) ->
+            defer_until = rate_defer_until(invocation, now, settings) ->
               {:rate, defer(invocation, :deferred_rate, defer_until)}
 
             true ->
@@ -103,7 +103,9 @@ defmodule ContextBot.Admission do
     |> Repo.update!()
   end
 
-  defp rate_defer_until(actor_did, now, settings, excluded_invocation_id \\ nil) do
+  defp rate_defer_until(%Invocation{} = invocation, now, settings, excluded_invocation_id \\ nil) do
+    actor_did = invocation.actor_did
+
     actor_windows =
       if skip_actor_rate_windows?(actor_did, settings) do
         []
@@ -120,7 +122,7 @@ defmodule ContextBot.Admission do
             actor_did,
             now,
             :day,
-            settings.actor_daily_limit,
+            actor_daily_limit(invocation, settings),
             excluded_invocation_id
           )
         ]
@@ -142,6 +144,15 @@ defmodule ContextBot.Admission do
        do: actor_did in allowed
 
   defp skip_actor_rate_windows?(_actor_did, _settings), do: false
+
+  # Elders and verified bsky.team share ACTOR_DAILY_LIMIT. Everyone else,
+  # including an unclassified or public mention, uses ACTOR_DAILY_LIMIT_PUBLIC.
+  # Daily tiers are the actor cap; ACTOR_HOURLY_LIMIT remains a burst window.
+  defp actor_daily_limit(%Invocation{eligibility_method: method}, settings)
+       when method in ["bluesky_elder", "bsky_team"],
+       do: settings.actor_daily_limit
+
+  defp actor_daily_limit(_invocation, settings), do: settings.actor_daily_limit_public
 
   defp breached_window(actor_did, now, window, limit, excluded_invocation_id) do
     window_seconds = window_seconds(window)

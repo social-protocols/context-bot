@@ -81,7 +81,7 @@ Preserve these POC invariants:
 
 - ingest only exact direct mentions and never call notification `updateSeen`;
 - fetch only the invocation plus ancestors (`depth=0`), never descendants;
-- fail closed unless the actor has a bidirectionally verified `bsky.team` handle, a confirmed Skywatch `bluesky-elder` label, or an exact operator-allowlisted DID;
+- admit every exact direct mention and classify the actor into a rate-limit tier: operator allowlist (skip actor hourly/daily windows), confirmed Skywatch `bluesky-elder` or bidirectionally verified `bsky.team` (`ACTOR_DAILY_LIMIT`, default 5), or public (`ACTOR_DAILY_LIMIT_PUBLIC`, default 1); a labeler or identity outage degrades to public instead of rejecting; `ACTOR_HOURLY_LIMIT` remains a burst cap for non-operator actors; global hourly/daily and `max_pending` still apply to everyone;
 - reserve integer-microdollar budget before Anthropic work and mark attempts sent before a request can escape;
 - preserve complete provider responses within the configured per-response and cumulative storage bounds;
 - treat `dry_run = true` as permanently non-publishable: use only unauthenticated public AppView reads, skip eligibility/mention rates, retain all Anthropic spending and safety limits, and never create a reply intent or publication claim;

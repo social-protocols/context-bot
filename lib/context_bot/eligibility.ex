@@ -1,13 +1,17 @@
 defmodule ContextBot.Eligibility do
   @moduledoc """
-  Resolves the current, externally verifiable eligibility of an invocation actor.
+  Classifies an invocation actor into a rate-limit tier.
 
-  All provider access is injected so the decision stays deterministic for a supplied clock.
+  Operator allowlist, a confirmed Skywatch Elder label, and a bidirectionally
+  verified `bsky.team` handle remain privileged tiers. Everyone else is
+  `:public`. Labeler or identity outages degrade to `:public` instead of
+  rejecting the mention. All provider access is injected so the decision stays
+  deterministic for a supplied clock.
   """
 
   alias ContextBot.Settings
 
-  @type method :: :operator_allowlist | :bluesky_elder | :bsky_team
+  @type method :: :operator_allowlist | :bluesky_elder | :bsky_team | :public
   @type result :: {:eligible, method(), map()} | :ineligible | {:error, atom()}
 
   @spec check(String.t(), String.t() | nil, DateTime.t(), Settings.t(), module()) :: result()
@@ -36,17 +40,17 @@ defmodule ContextBot.Eligibility do
         )
 
       {:ok, status, _headers, _body} when is_integer(status) ->
-        {:error, :labeler_unavailable}
+        team_or_public(actor_did, observed_handle, client)
 
       _error ->
-        team_or_labeler_error(actor_did, observed_handle, client)
+        team_or_public(actor_did, observed_handle, client)
     end
   end
 
   defp evaluate_profile(actor_did, observed_handle, now, settings, client, headers, labels) do
     cond do
       not confirmed_labeler?(headers, settings.skywatch_did) ->
-        team_or_labeler_error(actor_did, observed_handle, client)
+        team_or_public(actor_did, observed_handle, client)
 
       Enum.any?(labels, &active_elder_label?(&1, actor_did, now, settings)) ->
         {:eligible, :bluesky_elder,
@@ -102,16 +106,16 @@ defmodule ContextBot.Eligibility do
     if team_handle?(handle) do
       verify_forward_identity(actor_did, handle, client)
     else
-      :ineligible
+      public_eligible(actor_did)
     end
   end
 
-  defp check_team(_actor_did, _observed_handle, _client), do: :ineligible
+  defp check_team(actor_did, _observed_handle, _client), do: public_eligible(actor_did)
 
-  defp team_or_labeler_error(actor_did, observed_handle, client) do
+  defp team_or_public(actor_did, observed_handle, client) do
     case check_team(actor_did, observed_handle, client) do
       {:eligible, :bsky_team, _evidence} = eligible -> eligible
-      _not_independently_eligible -> {:error, :labeler_unavailable}
+      _not_independently_eligible -> public_eligible(actor_did)
     end
   end
 
@@ -121,21 +125,18 @@ defmodule ContextBot.Eligibility do
         if supported_did?(actor_did) do
           verify_did_document(actor_did, handle, client)
         else
-          :ineligible
+          public_eligible(actor_did)
         end
 
       {:ok, status, _headers, %{"did" => resolved_did}}
       when status in 200..299 and is_binary(resolved_did) ->
-        :ineligible
+        public_eligible(actor_did)
 
-      {:ok, status, _headers, _body} when is_integer(status) and status not in 200..299 ->
-        {:error, :identity_unavailable}
-
-      {:ok, status, _headers, _malformed_body} when status in 200..299 ->
-        {:error, :identity_unavailable}
+      {:ok, status, _headers, _body} when is_integer(status) ->
+        public_eligible(actor_did)
 
       {:error, _reason} ->
-        {:error, :identity_unavailable}
+        public_eligible(actor_did)
     end
   end
 
@@ -144,11 +145,11 @@ defmodule ContextBot.Eligibility do
       {:ok, status, _headers, body} when status in 200..299 ->
         verify_did_document_body(body, actor_did, handle)
 
-      {:ok, status, _headers, _body} when is_integer(status) and status not in 200..299 ->
-        {:error, :identity_unavailable}
+      {:ok, status, _headers, _body} when is_integer(status) ->
+        public_eligible(actor_did)
 
       {:error, _reason} ->
-        {:error, :identity_unavailable}
+        public_eligible(actor_did)
     end
   end
 
@@ -166,14 +167,14 @@ defmodule ContextBot.Eligibility do
          "verification" => "bidirectional"
        }}
     else
-      :ineligible
+      public_eligible(actor_did)
     end
   end
 
-  defp verify_did_document_body(body, _actor_did, _handle) when is_map(body), do: :ineligible
+  defp verify_did_document_body(body, actor_did, _handle) when is_map(body),
+    do: public_eligible(actor_did)
 
-  defp verify_did_document_body(_body, _actor_did, _handle),
-    do: {:error, :identity_unavailable}
+  defp verify_did_document_body(_body, actor_did, _handle), do: public_eligible(actor_did)
 
   defp first_valid_handle_claim(aliases) do
     Enum.find_value(aliases, fn
@@ -208,4 +209,8 @@ defmodule ContextBot.Eligibility do
   defp supported_did?("did:plc:" <> identifier), do: identifier != ""
   defp supported_did?("did:web:" <> identifier), do: identifier != ""
   defp supported_did?(_did), do: false
+
+  defp public_eligible(actor_did) do
+    {:eligible, :public, %{"actor_did" => actor_did, "source" => "public"}}
+  end
 end

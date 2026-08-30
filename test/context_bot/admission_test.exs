@@ -56,7 +56,7 @@ defmodule ContextBot.AdmissionTest do
     assert Repo.aggregate(Oban.Job, :count) == 0
   end
 
-  test "enforces the actor rolling-24-hour limit" do
+  test "enforces the privileged actor rolling-24-hour limit for elders" do
     for {hours_ago, index} <- Enum.with_index([2, 3, 4, 5, 23], 1) do
       historical(
         "actor-day-#{index}",
@@ -72,6 +72,81 @@ defmodule ContextBot.AdmissionTest do
 
     assert DateTime.compare(deferred.defer_until, DateTime.add(@now, 1, :hour)) == :eq
     assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "admits an elder below the privileged daily limit" do
+    for {hours_ago, index} <- Enum.with_index([2, 3, 4, 5], 1) do
+      historical(
+        "elder-day-#{index}",
+        @actor_did,
+        DateTime.add(@now, -hours_ago, :hour)
+      )
+    end
+
+    invocation = eligible_invocation("elder-day-current", @actor_did, "bluesky_elder")
+
+    assert {:ok, admitted} =
+             Admission.admit(invocation, @now, settings(), thread_job(invocation))
+
+    assert admitted.status == :capturing_thread
+    assert Repo.aggregate(Oban.Job, :count) == 1
+  end
+
+  test "enforces the privileged actor daily limit for verified bsky.team" do
+    for {hours_ago, index} <- Enum.with_index([2, 3, 4, 5, 23], 1) do
+      historical(
+        "team-day-#{index}",
+        @actor_did,
+        DateTime.add(@now, -hours_ago, :hour)
+      )
+    end
+
+    invocation = eligible_invocation("team-day-current", @actor_did, "bsky_team")
+
+    assert {:deferred, :rate, deferred} =
+             Admission.admit(invocation, @now, settings(), thread_job(invocation))
+
+    assert DateTime.compare(deferred.defer_until, DateTime.add(@now, 1, :hour)) == :eq
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "admits a verified bsky.team actor below the privileged daily limit" do
+    for {hours_ago, index} <- Enum.with_index([2, 3, 4, 5], 1) do
+      historical(
+        "team-under-#{index}",
+        @actor_did,
+        DateTime.add(@now, -hours_ago, :hour)
+      )
+    end
+
+    invocation = eligible_invocation("team-under-current", @actor_did, "bsky_team")
+
+    assert {:ok, admitted} =
+             Admission.admit(invocation, @now, settings(), thread_job(invocation))
+
+    assert admitted.status == :capturing_thread
+  end
+
+  test "enforces the public actor daily limit of one" do
+    historical("public-day-oldest", @actor_did, DateTime.add(@now, -23, :hour))
+    invocation = eligible_invocation("public-day-current", @actor_did, "public")
+
+    assert {:deferred, :rate, deferred} =
+             Admission.admit(invocation, @now, settings(), thread_job(invocation))
+
+    assert deferred.status == :deferred_rate
+    assert DateTime.compare(deferred.defer_until, DateTime.add(@now, 1, :hour)) == :eq
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "admits a first public mention in the daily window" do
+    invocation = eligible_invocation("public-first", @actor_did, "public")
+
+    assert {:ok, admitted} =
+             Admission.admit(invocation, @now, settings(), thread_job(invocation))
+
+    assert admitted.status == :capturing_thread
+    assert Repo.aggregate(Oban.Job, :count) == 1
   end
 
   test "enforces the global rolling-hour limit" do
@@ -198,6 +273,32 @@ defmodule ContextBot.AdmissionTest do
 
     historical("recovery-other", @actor_did, DateTime.add(@now, -5, :minute))
     refute Admission.resume_available?(invocation, @now, restrictive)
+  end
+
+  test "resume_available? uses the public daily tier for a public actor" do
+    invocation =
+      insert_invocation("public-resume", @actor_did, :deferred_budget, %{
+        admitted_at: DateTime.add(@now, -10, :minute),
+        eligibility_method: "public",
+        eligibility_evidence: %{"source" => "public"}
+      })
+
+    historical("public-resume-other", @actor_did, DateTime.add(@now, -5, :minute))
+
+    refute Admission.resume_available?(invocation, @now, settings())
+  end
+
+  test "resume_available? uses the privileged daily tier for an elder" do
+    invocation =
+      insert_invocation("elder-resume", @actor_did, :deferred_budget, %{
+        admitted_at: DateTime.add(@now, -10, :minute),
+        eligibility_method: "bluesky_elder",
+        eligibility_evidence: %{"label" => "bluesky-elder"}
+      })
+
+    historical("elder-resume-other", @actor_did, DateTime.add(@now, -5, :minute))
+
+    assert Admission.resume_available?(invocation, @now, settings())
   end
 
   test "defers without a thread job when pending capacity is already full" do
