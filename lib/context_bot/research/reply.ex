@@ -15,6 +15,16 @@ defmodule ContextBot.Research.Reply do
 
   @hard_max_graphemes ReplyLimits.hard_max_graphemes()
   @max_bytes ReplyLimits.max_bytes()
+  # Period-space matches that are common abbreviations, not sentence ends.
+  # Inv 15 split at "U.S. " because scoring prefers any ≤275 break over a later
+  # real ". " between 276 and 300.
+  @sentence_abbreviations ~w(
+    u.s. u.k. u.n. u.s.a. e.u.
+    e.g. i.e. etc. vs. cf.
+    mr. mrs. ms. dr. prof. sr. jr.
+    inc. ltd. corp.
+    a.m. p.m.
+  )
   @web_server_tools ~w(web_search web_fetch)
   # Dated web_search/web_fetch default `allowed_callers` to auto-provisioned code execution.
   # Requests pin `allowed_callers: ["direct"]` so searches are native `server_tool_use` only.
@@ -212,13 +222,40 @@ defmodule ContextBot.Research.Reply do
   end
 
   defp try_split_at_sentence(text) do
-    case :binary.matches(text, [". ", ".\n"]) do
+    case sentence_break_matches(text) do
       [] ->
         :error
 
       matches ->
         find_best_sentence_split(text, matches)
     end
+  end
+
+  defp sentence_break_matches(text) do
+    text
+    |> :binary.matches([". ", ".\n"])
+    |> Enum.reject(fn {pos, _len} -> abbreviation_period?(text, pos) end)
+  end
+
+  defp abbreviation_period?(text, period_pos) do
+    Enum.any?(@sentence_abbreviations, fn abbreviation ->
+      size = byte_size(abbreviation)
+      start = period_pos + 1 - size
+
+      start >= 0 and abbreviation_boundary?(text, start) and
+        ascii_downcase_equals?(text, start, size, abbreviation)
+    end)
+  end
+
+  defp abbreviation_boundary?(_text, 0), do: true
+
+  defp abbreviation_boundary?(text, start) do
+    :binary.at(text, start - 1) in [?\s, ?\n, ?\t, ?(, ?[, ?", ?']
+  end
+
+  defp ascii_downcase_equals?(text, start, size, abbreviation) do
+    start + size <= byte_size(text) and
+      text |> binary_part(start, size) |> String.downcase(:ascii) == abbreviation
   end
 
   defp find_best_sentence_split(text, matches) do
