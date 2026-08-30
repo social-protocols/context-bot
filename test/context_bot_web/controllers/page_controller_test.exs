@@ -55,6 +55,12 @@ defmodule ContextBotWeb.PageControllerTest do
     assert response =~
              ~s(data-bluesky-uri="at://did:plc:33avz2l7y5scw3abq3lmylns/app.bsky.feed.post/3muda3adex22u")
 
+    assert response =~
+             ~s(data-bluesky-uri="at://did:plc:anbhmngzs3exwbq47xxzogk4/app.bsky.feed.post/3mudelkjrym23")
+
+    assert response =~
+             ~s(data-bluesky-uri="at://did:plc:anbhmngzs3exwbq47xxzogk4/app.bsky.feed.post/3mudellmx6b24")
+
     assert response =~ ~s(src="https://embed.bsky.app/static/embed.js")
 
     assert response =~
