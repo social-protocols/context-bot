@@ -13,8 +13,8 @@ defmodule ContextBot.Workers.ResearchWorker do
   alias ContextBot.ATProto.{Client, TID}
   alias ContextBot.{Operations, Repo}
   alias ContextBot.Reply.Intent
-  alias ContextBot.Research.{Request, Runner}
-  alias ContextBot.StandardSite.{Document, PageCopy, PromptDocument, Publication}
+  alias ContextBot.Research.{AnthropicClient, Request, Runner}
+  alias ContextBot.StandardSite.{Document, PageCopy, PromptDocument, Publication, TitleCompletion}
   alias ContextBot.Workflow.{Invocation, Store}
 
   @reply_worker "ContextBot.Workers.ReplyWorker"
@@ -286,7 +286,7 @@ defmodule ContextBot.Workers.ResearchWorker do
             repo,
             publication_uri,
             created_at,
-            dependencies.settings
+            dependencies
           )
 
         {:error, reason} ->
@@ -304,7 +304,7 @@ defmodule ContextBot.Workers.ResearchWorker do
          repo,
          publication_uri,
          created_at,
-         settings
+         dependencies
        ) do
     case PromptDocument.ensure_exists(client, repo, publication_uri, created_at) do
       {:ok, prompt_doc} ->
@@ -316,7 +316,7 @@ defmodule ContextBot.Workers.ResearchWorker do
           publication_uri,
           created_at,
           prompt_doc,
-          settings
+          dependencies
         )
 
       {:error, reason} ->
@@ -332,9 +332,12 @@ defmodule ContextBot.Workers.ResearchWorker do
          publication_uri,
          created_at,
          prompt_doc,
-         settings
+         dependencies
        ) do
-    content = full_response_content(invocation, result, prompt_doc, settings)
+    content =
+      invocation
+      |> full_response_content(result, prompt_doc, dependencies.settings)
+      |> attach_document_title(result, dependencies)
 
     case Document.create(client, repo, publication_uri, content, created_at) do
       {:ok, doc_result} ->
@@ -366,11 +369,23 @@ defmodule ContextBot.Workers.ResearchWorker do
       parent_uri: subject.parent_uri,
       invoker_handle: subject.invoker_handle,
       parent_handle: subject.parent_handle,
-      document_title: Map.get(result, :document_title),
       prompt: Map.put(projection.prompt, :reader_url, prompt_doc.reader_url),
       parameters: projection.parameters,
       user_message: projection.user_message
     }
+  end
+
+  defp attach_document_title(content, result, dependencies) do
+    title =
+      case TitleCompletion.complete(content.asked_text || "",
+             settings: dependencies.settings,
+             client: Map.get(dependencies, :title_client, AnthropicClient)
+           ) do
+        {:ok, completed} -> completed
+        :error -> Map.get(result, :document_title)
+      end
+
+    Map.put(content, :document_title, title)
   end
 
   defp fail_standard_site(invocation, collection, reason) do
@@ -540,6 +555,7 @@ defmodule ContextBot.Workers.ResearchWorker do
       runner_options: Keyword.get(config, :runner_options, []),
       settings: Keyword.get(config, :settings, Application.fetch_env!(:context_bot, :settings)),
       atproto_client: Keyword.get(config, :atproto_client, ContextBot.ATProto.ReqClient),
+      title_client: Keyword.get(config, :title_client, AnthropicClient),
       tid_generator: Keyword.get(config, :tid_generator, &TID.generate/1)
     }
   end

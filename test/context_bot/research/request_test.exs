@@ -259,6 +259,10 @@ defmodule ContextBot.Research.RequestTest do
     assert Request.system_prompt_sha256() ==
              :sha256 |> :crypto.hash(prompt) |> Base.encode16(case: :lower)
 
+    # READER_TITLE_V1 is a separate Messages call. Do not change V5 bytes for titles.
+    assert Request.system_prompt_sha256() ==
+             "10aec6ff8ff04242de150aa8e185bee21f12db26fe5241a3dd3f3ef2104372c4"
+
     assert Request.system_prompt_rkey() ==
              "prompt-context-bot-system-v5-#{String.slice(Request.system_prompt_sha256(), 0, 16)}"
 

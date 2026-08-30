@@ -38,6 +38,29 @@ defmodule ContextBot.Workers.ResearchWorkerTest.AnthropicClient do
   end
 end
 
+defmodule ContextBot.Workers.ResearchWorkerTest.TitleClient do
+  @moduledoc false
+
+  def send_message(request, metadata) do
+    send(self(), {:title_call, request, metadata})
+
+    case Process.get(:research_worker_title_result, {:error, :transport}) do
+      {:ok, text} when is_binary(text) ->
+        {:ok,
+         %{
+           status: 200,
+           headers: %{},
+           raw_body: Jason.encode!(%{"content" => [%{"type" => "text", "text" => text}]}),
+           received_at: ~U[2026-07-29 12:34:56.123456Z],
+           duration_ms: 5
+         }}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+end
+
 defmodule ContextBot.Workers.ResearchWorkerTest do
   use ContextBot.DataCase, async: false
 
@@ -46,8 +69,9 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
   alias ContextBot.ATProto.TID
   alias ContextBot.Research.Request
   alias ContextBot.Settings
+  alias ContextBot.StandardSite.{PageCopy, TitlePrompt}
   alias ContextBot.Workers.ResearchWorker
-  alias ContextBot.Workers.ResearchWorkerTest.{AnthropicClient, Runner}
+  alias ContextBot.Workers.ResearchWorkerTest.{AnthropicClient, Runner, TitleClient}
   alias ContextBot.Workflow.{Invocation, Store}
 
   @now ~U[2026-07-29 12:34:56.123456Z]
@@ -63,6 +87,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
       restore_env(Runner, original_runner_config)
       Process.delete(:research_worker_integration_pid)
       Process.delete(:research_worker_integration_body)
+      Process.delete(:research_worker_title_result)
     end)
 
     :ok
@@ -305,6 +330,89 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
              "https://standard-reader.app/a/#{@bot_did}/#{doc_rkey}"
   end
 
+  test "uses a successful READER_TITLE_V1 completion as the document title" do
+    invocation = bird_invocation("title-success")
+    Process.put(:research_worker_title_result, {:ok, "What Is That Bird?"})
+
+    configure_runner(
+      {:ok, runner_result() |> Map.put(:full_response, "Thorough markdown writeup.")}
+    )
+
+    configure_worker(atproto_client: FakeStandardSiteTrackingClient)
+
+    assert :ok = perform(invocation)
+    assert_received {:standard_site_get, "site.standard.publication", "context-bot"}
+    assert_received {:standard_site_put, "site.standard.publication", "context-bot", _pub}
+    prompt_rkey = Request.system_prompt_rkey()
+    assert_received {:standard_site_get, "site.standard.document", ^prompt_rkey}
+    assert_received {:standard_site_put, "site.standard.document", ^prompt_rkey, _prompt}
+    assert_received {:title_call, request, metadata}
+    assert_received {:standard_site_put, "site.standard.document", _doc_rkey, doc_record}
+
+    assert request["system"] == TitlePrompt.prompt()
+
+    assert request["messages"] == [
+             %{
+               "role" => "user",
+               "content" => TitlePrompt.user_message("@getcontext.bot What bird is that?")
+             }
+           ]
+
+    refute Map.has_key?(request, "tools")
+    assert metadata.kind == :title
+    assert doc_record["title"] == "What Is That Bird?"
+    refute doc_record["title"] == "@getcontext.bot What bird is that?"
+    assert Repo.reload!(invocation).stage == :reply_ready
+  end
+
+  test "falls back to PageCopy when the title call fails, is empty, overlong, or reply-like" do
+    asked = "@getcontext.bot What bird is that?"
+    reply = "That's a Himalayan Monal in breeding plumage on a Himalayan ridge."
+
+    fallback =
+      PageCopy.title(%{
+        asked_text: asked,
+        document_title: nil,
+        selected_reply: reply
+      })
+
+    overlong = String.duplicate("word ", 40) |> String.trim()
+
+    for {suffix, title_result} <- [
+          {"title-transport", {:error, :transport}},
+          {"title-empty", {:ok, "   "}},
+          {"title-overlong", {:ok, overlong}},
+          {"title-reply-like", {:ok, reply}}
+        ] do
+      invocation = bird_invocation(suffix, asked)
+      Process.put(:research_worker_title_result, title_result)
+
+      configure_runner(
+        {:ok,
+         runner_result()
+         |> Map.put(:full_response, "Thorough markdown writeup.")
+         |> Map.put(:text, reply)}
+      )
+
+      configure_worker(
+        atproto_client: FakeStandardSiteTrackingClient,
+        tid_generator: fn _timestamp -> "3m#{suffix |> String.replace("-", "")}z" end
+      )
+
+      assert :ok = perform(invocation)
+      assert_received {:standard_site_get, "site.standard.publication", "context-bot"}
+      assert_received {:standard_site_put, "site.standard.publication", "context-bot", _pub}
+      prompt_rkey = Request.system_prompt_rkey()
+      assert_received {:standard_site_get, "site.standard.document", ^prompt_rkey}
+      assert_received {:standard_site_put, "site.standard.document", ^prompt_rkey, _prompt}
+      assert_received {:standard_site_put, "site.standard.document", _doc_rkey, doc_record}
+
+      assert Repo.reload!(invocation).stage == :reply_ready
+      assert doc_record["title"] == fallback
+      refute doc_record["title"] == "What Is That Bird?"
+    end
+  end
+
   test "fails closed without freezing a reply when publication create fails" do
     invocation = invocation("publication-lexicon-unknown", :thread_ready)
 
@@ -455,6 +563,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
 
     assert :ok = perform(invocation)
     assert_received {:runner_called, :researching, _options, false}
+    refute_received {:title_call, _request, _metadata}
 
     persisted = Repo.reload!(invocation)
     assert persisted.status == :complete
@@ -766,6 +875,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
       runner: Runner,
       runner_options: [evidence: :runner_options_forwarded],
       settings: Settings.load(bot_did: @bot_did),
+      title_client: TitleClient,
       tid_generator: fn timestamp_us ->
         assert timestamp_us == DateTime.to_unix(@now, :microsecond)
         @rkey
@@ -823,6 +933,19 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     "../../fixtures/anthropic/#{name}"
     |> Path.expand(__DIR__)
     |> File.read!()
+  end
+
+  defp bird_invocation(suffix, asked \\ "@getcontext.bot What bird is that?") do
+    invocation(suffix, :thread_ready, %{
+      raw_notification: %{
+        "uri" => "at://did:plc:actor/app.bsky.feed.post/#{suffix}",
+        "cid" => "bafy-#{suffix}",
+        "record" => %{
+          "$type" => "app.bsky.feed.post",
+          "text" => asked
+        }
+      }
+    })
   end
 
   defp invocation(suffix, stage, extra \\ %{}) do
