@@ -78,7 +78,7 @@ defmodule ContextBot.Research.RequestTest do
   test "sends one versioned prompt with the complete research and reply safety contract" do
     prompt = Request.initial(@canonical_thread, config())["system"]
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V6")
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V7")
     assert prompt =~ "ancestor"
     assert prompt =~ "unstable"
     assert prompt =~ "primary sources"
@@ -94,6 +94,11 @@ defmodule ContextBot.Research.RequestTest do
     assert prompt =~ "275 Unicode grapheme"
     refute prompt =~ "at most 300 Unicode grapheme clusters"
     refute prompt =~ "---COMPACT_REPLY---"
+    assert prompt =~ "disposition"
+    assert prompt =~ "no_reply"
+    assert prompt =~ "getcontext.bot is great"
+    assert prompt =~ "you should ask getcontext.bot"
+    assert prompt =~ "When in doubt, reply"
     assert prompt =~ "title"
     assert prompt =~ "compact_reply"
     assert prompt =~ "full_response"
@@ -205,15 +210,15 @@ defmodule ContextBot.Research.RequestTest do
   test "exposes a stable hashed identity for the versioned system prompt" do
     prompt = Request.system_prompt()
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V6")
-    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V6"
-    assert Request.system_prompt_semantic_version() == "6.0.0"
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V7")
+    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V7"
+    assert Request.system_prompt_semantic_version() == "7.0.0"
 
     assert Request.system_prompt_sha256() ==
              :sha256 |> :crypto.hash(prompt) |> Base.encode16(case: :lower)
 
     assert Request.system_prompt_rkey() ==
-             "prompt-context-bot-system-v6-#{String.slice(Request.system_prompt_sha256(), 0, 16)}"
+             "prompt-context-bot-system-v7-#{String.slice(Request.system_prompt_sha256(), 0, 16)}"
   end
 
   test "projects allowlisted Messages parameters and the first user message" do
@@ -225,8 +230,8 @@ defmodule ContextBot.Research.RequestTest do
         research_max_tokens: 4_096
       })
 
-    assert projection.prompt.id == "CONTEXT_BOT_SYSTEM_V6"
-    assert projection.prompt.semantic_version == "6.0.0"
+    assert projection.prompt.id == "CONTEXT_BOT_SYSTEM_V7"
+    assert projection.prompt.semantic_version == "7.0.0"
     assert projection.prompt.sha256 == Request.system_prompt_sha256()
     assert projection.parameters["anthropic-version"] == "2023-06-01"
     assert projection.parameters["model"] == "claude-sonnet-5"
@@ -386,7 +391,10 @@ defmodule ContextBot.Research.RequestTest do
     assert_output_config(request, "medium")
     assert schema["type"] == "object"
     assert schema["additionalProperties"] == false
-    assert schema["required"] == ["title", "compact_reply", "full_response"]
+    assert schema["required"] == ["disposition", "title", "compact_reply", "full_response"]
+    assert schema["properties"]["disposition"]["enum"] == ["reply", "no_reply"]
+    assert schema["properties"]["disposition"]["description"] =~ "no_reply"
+    assert schema["properties"]["disposition"]["description"] =~ "ambiguous"
     assert schema["properties"]["title"]["description"] =~ "What Is That Bird?"
     assert schema["properties"]["compact_reply"]["description"] =~ "275"
     refute encoded =~ "maxLength"

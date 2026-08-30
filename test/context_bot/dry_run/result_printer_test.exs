@@ -95,6 +95,30 @@ defmodule ContextBot.DryRun.ResultPrinterTest do
     assert List.last(lines) == "(full response) link: Post 2 (remainder + link)"
   end
 
+  test "prints a completed no-reply without inventing posts or a writeup" do
+    lines =
+      ResultPrinter.format_complete(
+        %Invocation{
+          no_reply: true,
+          selected_reply: nil,
+          full_response: nil,
+          reply_validation: %{"result" => "no_reply", "repair_used" => false},
+          anthropic_usage: %{
+            "totals" => %{"input_tokens" => 4, "output_tokens" => 1},
+            "tool_uses" => 0
+          }
+        },
+        12
+      )
+
+    assert lines == [
+             "status=complete",
+             "disposition=no_reply",
+             "usage input_tokens=4 output_tokens=1 tool_uses=0 cost_microdollars=12",
+             "(full response) link: none"
+           ]
+  end
+
   test "strips ANSI from the writeup and posts while keeping newlines" do
     lines =
       ResultPrinter.format_complete(

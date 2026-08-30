@@ -71,6 +71,29 @@ defmodule ContextBot.Workflow.InvocationTest do
     assert persisted.full_response == "Detailed writeup."
     assert persisted.standard_site_document_uri == uri
     assert persisted.standard_site_document_rkey == "3kfullresp"
+    assert persisted.no_reply == false
+  end
+
+  test "persists a completed no-reply decision" do
+    invocation =
+      %Invocation{}
+      |> Invocation.changeset(public_attrs())
+      |> Repo.insert!()
+
+    invocation
+    |> Invocation.transition_changeset(%{
+      status: :complete,
+      stage: :complete,
+      no_reply: true,
+      reply_validation: %{"result" => "no_reply", "repair_used" => false},
+      completed_at: @received_at
+    })
+    |> Repo.update!()
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.no_reply == true
+    assert persisted.stage == :complete
+    assert persisted.reply_validation == %{"result" => "no_reply", "repair_used" => false}
   end
 
   defp public_attrs do

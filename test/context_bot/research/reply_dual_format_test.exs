@@ -21,6 +21,7 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       assert selected.text == "Short summary for Bluesky"
       assert selected.full_response == "This is a detailed research writeup\nwith multiple lines."
       assert selected.document_title == "What Is That Bird?"
+      assert selected.disposition == :reply
     end
 
     test "concatenates split JSON text blocks before decoding" do
@@ -61,11 +62,46 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
             ~s({"title":"","compact_reply":"Short","full_response":"Writeup."}),
             ~s({"title":"Bird","compact_reply":"","full_response":"Writeup."}),
             ~s({"title":1,"compact_reply":"Short","full_response":"Writeup."}),
+            ~s({"disposition":"reply","title":"Bird","compact_reply":"Short","full_response":""}),
+            ~s({"disposition":"maybe","title":"Bird","compact_reply":"Short","full_response":"Writeup."}),
+            ~s({"disposition":true,"title":"Bird","compact_reply":"Short","full_response":"Writeup."}),
             "---COMPACT_REPLY---\nlegacy delimiter"
           ] do
         assert Reply.select([%{"type" => "text", "text" => text}], :end_turn) ==
                  {:error, :invalid_structured_output}
       end
+    end
+
+    test "selects no_reply when the mention is clearly not a request" do
+      for text <- [
+            StructuredFixtures.no_reply_json(),
+            StructuredFixtures.no_reply_json(omit_fields: true),
+            StructuredFixtures.no_reply_json(title: "Unused", compact: "unused", full: "unused")
+          ] do
+        assert {:ok, selected} = Reply.select([%{"type" => "text", "text" => text}], :end_turn)
+        assert selected.disposition == :no_reply
+        assert selected.text == ""
+        assert selected.full_response == ""
+        assert selected.document_title == ""
+      end
+    end
+
+    test "treats legacy JSON without disposition as a reply" do
+      content = [
+        %{
+          "type" => "text",
+          "text" =>
+            StructuredFixtures.structured_json("Short summary for Bluesky",
+              title: "What Is That Bird?",
+              full: "Writeup.",
+              omit_disposition: true
+            )
+        }
+      ]
+
+      assert {:ok, selected} = Reply.select(content, :end_turn)
+      assert selected.disposition == :reply
+      assert selected.text == "Short summary for Bluesky"
     end
 
     test "handles a repairable compact reply inside JSON" do

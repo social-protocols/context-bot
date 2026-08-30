@@ -364,7 +364,7 @@ defmodule ContextBot.StandardSite.PageCopyTest do
       assert prompt =~ "first six words"
       assert description =~ "What Is That Bird?"
       assert description =~ "80 Unicode grapheme"
-      refute prompt =~ "CONTEXT_BOT_SYSTEM_V6"
+      refute prompt =~ "CONTEXT_BOT_SYSTEM"
       refute prompt =~ "---COMPACT_REPLY---"
     end
 

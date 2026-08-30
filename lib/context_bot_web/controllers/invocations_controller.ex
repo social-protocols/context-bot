@@ -37,6 +37,7 @@ defmodule ContextBotWeb.InvocationsController do
         anthropic_attempt_sequence: i.anthropic_attempt_sequence,
         failure_category: i.failure_category,
         failure_detail: i.failure_detail,
+        no_reply: i.no_reply,
         inserted_at: i.inserted_at,
         completed_at: i.completed_at
       })
@@ -198,6 +199,7 @@ defmodule ContextBotWeb.InvocationsController do
           white-space: nowrap;
         }
         .dry-run { color: #666; font-style: italic; }
+        .no-reply { color: #666; }
       </style>
     </head>
     <body>
@@ -248,9 +250,7 @@ defmodule ContextBotWeb.InvocationsController do
               #{invocation_link(inv.invocation_uri)}
             </td>
             <td>
-              #{reply_link(inv.reply_uri, "1")}
-              #{reply_link(inv.reply_part2_uri, "2")}
-              #{reply_link(inv.reply_part3_uri, "3")}
+              #{reply_cell(inv)}
             </td>
             <td>
               #{full_response_link(inv.standard_site_document_uri)}
@@ -284,6 +284,16 @@ defmodule ContextBotWeb.InvocationsController do
       nil -> ""
       url -> ~s(<a href="#{url}" target="_blank">view</a>)
     end
+  end
+
+  defp reply_cell(%{no_reply: true}), do: ~s(<span class="no-reply">no reply</span>)
+
+  defp reply_cell(inv) do
+    """
+              #{reply_link(inv.reply_uri, "1")}
+              #{reply_link(inv.reply_part2_uri, "2")}
+              #{reply_link(inv.reply_part3_uri, "3")}
+    """
   end
 
   defp reply_link(nil, _label), do: ""

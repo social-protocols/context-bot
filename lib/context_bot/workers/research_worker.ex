@@ -101,7 +101,15 @@ defmodule ContextBot.Workers.ResearchWorker do
     end
   end
 
-  defp freeze_handoff(%Invocation{dry_run: true} = invocation, result, token, dependencies) do
+  defp freeze_handoff(invocation, result, token, dependencies) do
+    if no_reply_result?(result) do
+      complete_without_reply(invocation, result, token, dependencies)
+    else
+      freeze_publishable(invocation, result, token, dependencies)
+    end
+  end
+
+  defp freeze_publishable(%Invocation{dry_run: true} = invocation, result, token, dependencies) do
     completed_at = dependencies.now.()
 
     attrs = %{
@@ -110,6 +118,7 @@ defmodule ContextBot.Workers.ResearchWorker do
       full_response: Map.get(result, :full_response),
       selected_reply: result.text,
       reply_validation: dry_run_validation(result),
+      no_reply: false,
       reply_repo: nil,
       reply_rkey: nil,
       reply_record: nil,
@@ -136,7 +145,7 @@ defmodule ContextBot.Workers.ResearchWorker do
     end
   end
 
-  defp freeze_handoff(invocation, result, token, dependencies) do
+  defp freeze_publishable(invocation, result, token, dependencies) do
     created_at = dependencies.now.()
     bot_did = dependencies.settings.bot_did
 
@@ -223,6 +232,7 @@ defmodule ContextBot.Workers.ResearchWorker do
       full_response: Map.get(result, :full_response),
       selected_reply: result.text,
       reply_validation: result.validation,
+      no_reply: false,
       standard_site_document_uri: document_uri(document),
       standard_site_document_rkey: document_rkey(document),
       reply_repo: intent.reply_repo,
@@ -263,6 +273,51 @@ defmodule ContextBot.Workers.ResearchWorker do
         raise Ecto.InvalidChangesetError, action: :update, changeset: changeset
     end
   end
+
+  defp complete_without_reply(invocation, result, token, dependencies) do
+    completed_at = dependencies.now.()
+
+    attrs = %{
+      anthropic_messages: result.messages,
+      anthropic_usage: result.usage,
+      full_response: nil,
+      selected_reply: nil,
+      reply_validation: %{"result" => "no_reply", "repair_used" => false},
+      no_reply: true,
+      standard_site_document_uri: nil,
+      standard_site_document_rkey: nil,
+      reply_repo: nil,
+      reply_rkey: nil,
+      reply_record: nil,
+      reply_part2_rkey: nil,
+      reply_part2_record: nil,
+      reply_part3_rkey: nil,
+      reply_part3_record: nil,
+      publication_claim_token: nil,
+      publication_claimed_at: nil,
+      defer_until: nil,
+      failure_category: nil,
+      failure_detail: nil,
+      research_claim_token: nil,
+      research_claimed_at: nil,
+      completed_at: completed_at,
+      deferred_attempt_kind: nil
+    }
+
+    case Store.transition_research(invocation, token, :complete, attrs, nil, completed_at) do
+      {:ok, _complete} ->
+        :ok
+
+      {:error, :stale_claim} ->
+        :ok
+
+      {:error, changeset} ->
+        raise Ecto.InvalidChangesetError, action: :update, changeset: changeset
+    end
+  end
+
+  defp no_reply_result?(result) when is_map(result),
+    do: Map.get(result, :disposition) == :no_reply
 
   defp dry_run_validation(result) do
     case Map.get(result, :text_part2) do
