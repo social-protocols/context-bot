@@ -167,6 +167,89 @@ defmodule ContextBot.Workflow.Store do
   end
 
   @doc """
+  Claims the one-shot limit-notice slot without changing stage.
+
+  Used for budget notices that must remain `deferred_budget`. Actor-rate notices
+  claim the kind in the same `reply_ready` transition as the frozen intent.
+  """
+  @spec claim_limit_notice(Invocation.t(), :actor_rate | :budget) ::
+          {:ok, Invocation.t()}
+          | {:error, :already_claimed | :dry_run | :stale_stage | Changeset.t()}
+  def claim_limit_notice(%Invocation{id: id, stage: stage} = invocation, kind)
+      when kind in [:actor_rate, :budget] do
+    if invocation.dry_run do
+      {:error, :dry_run}
+    else
+      result =
+        Repo.transaction(
+          fn ->
+            current = Repo.get!(Invocation, id)
+
+            cond do
+              current.stage != stage ->
+                Repo.rollback(:stale_stage)
+
+              current.dry_run ->
+                Repo.rollback(:dry_run)
+
+              not is_nil(current.limit_notice_kind) ->
+                Repo.rollback(:already_claimed)
+
+              true ->
+                changeset = Invocation.transition_changeset(current, %{limit_notice_kind: kind})
+
+                case Repo.update(changeset) do
+                  {:ok, updated} -> updated
+                  {:error, error_changeset} -> Repo.rollback(error_changeset)
+                end
+            end
+          end,
+          mode: :immediate
+        )
+
+      case result do
+        {:ok, updated} -> {:ok, updated}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  @doc "Records the published limit-notice coordinates after a successful putRecord."
+  @spec record_limit_notice(Invocation.t(), String.t(), String.t(), DateTime.t()) ::
+          {:ok, Invocation.t()} | {:error, :stale_stage | Changeset.t()}
+  def record_limit_notice(%Invocation{id: id, stage: stage}, uri, cid, %DateTime{} = posted_at)
+      when is_binary(uri) and uri != "" and is_binary(cid) and cid != "" do
+    result =
+      Repo.transaction(
+        fn ->
+          current = Repo.get!(Invocation, id)
+
+          if current.stage != stage or is_nil(current.limit_notice_kind) do
+            Repo.rollback(:stale_stage)
+          else
+            changeset =
+              Invocation.transition_changeset(current, %{
+                limit_notice_uri: uri,
+                limit_notice_cid: cid,
+                limit_notice_posted_at: posted_at
+              })
+
+            case Repo.update(changeset) do
+              {:ok, updated} -> updated
+              {:error, error_changeset} -> Repo.rollback(error_changeset)
+            end
+          end
+        end,
+        mode: :immediate
+      )
+
+    case result do
+      {:ok, updated} -> {:ok, updated}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
   Fences a research checkpoint or terminal handoff by the currently persisted claim token.
   """
   @spec transition_research(

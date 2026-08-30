@@ -13,6 +13,13 @@ defmodule ContextBotWeb.PageControllerTest do
     assert response =~ "stored as atproto records"
     assert response =~ ~s(href="https://github.com/social-protocols/context-bot/")
     assert response =~ ~s(href="https://social-protocols.org")
+    refute response =~ "Invite Only"
+    assert response =~ "Limits"
+    assert response =~ "Anyone may mention"
+    assert response =~ "5 invocations per rolling day"
+    assert response =~ "1 invocation per rolling day"
+    assert response =~ "$20 per UTC day"
+    assert response =~ "enter their own funding keys"
   end
 
   test "GET / includes proper HTML structure", %{conn: conn} do

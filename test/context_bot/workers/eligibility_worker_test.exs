@@ -16,7 +16,8 @@ defmodule ContextBot.Workers.EligibilityWorkerTest do
 
   import ExUnit.CaptureLog
 
-  alias ContextBot.Settings
+  alias ContextBot.{LimitNotice, LimitNoticeNoop, LimitNoticeRecorder, Settings}
+  alias ContextBot.Reply.Intent
   alias ContextBot.Workers.EligibilityWorker
   alias ContextBot.Workers.EligibilityWorkerTest.GateStub
   alias ContextBot.Workflow.Invocation
@@ -289,6 +290,89 @@ defmodule ContextBot.Workers.EligibilityWorkerTest do
     assert Repo.aggregate(Oban.Job, :count) == 0
   end
 
+  test "posts exactly one actor-rate notice and does not admit research" do
+    historical("rate-one", DateTime.add(@now, -30, :minute))
+    historical("rate-two", DateTime.add(@now, -10, :minute))
+    invocation = invocation("worker-rate-notice", :received)
+    rkey = "3mzzzznoticeel"
+
+    Process.put(
+      {GateStub, :result},
+      {:eligible, :bluesky_elder,
+       %{
+         "actor_did" => @actor_did,
+         "label" => "bluesky-elder",
+         "labeler_did" => "did:plc:e4elbtctnfqocyfcml6h2lf7"
+       }}
+    )
+
+    configure(
+      settings(bot_did: "did:plc:contextbot123"),
+      eligibility: GateStub,
+      limit_notice: LimitNotice,
+      intent_builder: &Intent.build/5,
+      tid_generator: fn _timestamp -> rkey end
+    )
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.status == :reply_ready
+    assert persisted.admitted_at == nil
+    assert persisted.limit_notice_kind == :actor_rate
+    assert persisted.selected_reply == LimitNotice.actor_rate_text(persisted.defer_until)
+    refute persisted.selected_reply =~ "@"
+
+    assert [%Oban.Job{worker: "ContextBot.Workers.ReplyWorker", queue: "reply"}] =
+             Repo.all(Oban.Job)
+  end
+
+  test "does not use the actor-limit notice for a global rate deferral" do
+    for index <- 1..10 do
+      invocation(
+        "global-hour-#{index}",
+        :complete,
+        %{admitted_at: DateTime.add(@now, -3_600 + index, :second), completed_at: @now},
+        "did:plc:globalhour#{index}"
+      )
+    end
+
+    invocation = invocation("worker-global-rate", :received)
+
+    Process.put(
+      {GateStub, :result},
+      {:eligible, :bluesky_elder,
+       %{
+         "actor_did" => @actor_did,
+         "label" => "bluesky-elder",
+         "labeler_did" => "did:plc:e4elbtctnfqocyfcml6h2lf7"
+       }}
+    )
+
+    configure(settings(), eligibility: GateStub, limit_notice: LimitNoticeRecorder)
+
+    assert :ok = perform(invocation)
+    assert Repo.reload!(invocation).status == :deferred_rate
+    refute_received {:limit_notice, :actor_rate, _}
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "does not use the actor-limit notice for a capacity deferral" do
+    pending = invocation("capacity-other-notice", :received, %{}, "did:plc:otherpending")
+    invocation = invocation("worker-capacity-notice", :received)
+
+    configure(
+      settings(operator_allowed_dids: [@actor_did], max_pending: 1),
+      limit_notice: LimitNoticeRecorder
+    )
+
+    assert :ok = perform(invocation)
+    assert Repo.reload!(invocation).status == :deferred_capacity
+    assert Repo.reload!(pending).status == :received
+    refute_received {:limit_notice, :actor_rate, _}
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
   test "stores eligible capacity deferral without enqueueing thread work" do
     pending = invocation("capacity-other", :received, %{}, "did:plc:otherpending")
     invocation = invocation("worker-capacity", :received)
@@ -323,7 +407,10 @@ defmodule ContextBot.Workers.EligibilityWorkerTest do
     Application.put_env(
       :context_bot,
       EligibilityWorker,
-      Keyword.merge([settings: settings, now: @now], overrides)
+      Keyword.merge(
+        [settings: settings, now: @now, limit_notice: ContextBot.LimitNoticeNoop],
+        overrides
+      )
     )
   end
 

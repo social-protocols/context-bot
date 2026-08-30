@@ -202,6 +202,7 @@ defmodule ContextBotWeb.InvocationsController do
     </head>
     <body>
       <h1>Context Bot Invocations</h1>
+      <p><a href="/">Rate and funding limits</a></p>
       #{render_summary(stats)}
       <table>
         <thead>

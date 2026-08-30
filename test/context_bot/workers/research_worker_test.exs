@@ -44,6 +44,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
   import ExUnit.CaptureLog
 
   alias ContextBot.ATProto.TID
+  alias ContextBot.LimitNoticeRecorder
   alias ContextBot.Research.Request
   alias ContextBot.Settings
   alias ContextBot.Workers.ResearchWorker
@@ -758,6 +759,38 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert Repo.aggregate(Oban.Job, :count) == 0
   end
 
+  test "posts the funding notice once when the daily budget is exhausted" do
+    invocation = invocation("budget-notice", :thread_ready)
+    rollover = ~U[2026-07-30 00:00:00.000000Z]
+    configure_runner({:deferred, rollover})
+    configure_worker(limit_notice: LimitNoticeRecorder)
+
+    assert :ok = perform(invocation)
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :deferred_budget
+    assert persisted.admitted_at == nil or persisted.reply_record == nil
+    assert_received {:limit_notice, :budget, id}
+    assert id == invocation.id
+    refute_received {:limit_notice, :budget, _}
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "does not post a limit notice on structured-output or other research failures" do
+    for {suffix, runner_error} <- [
+          {"structured", :invalid_structured_output},
+          {"auth-notice", :provider_auth},
+          {"code-exec-notice", :code_execution_failed}
+        ] do
+      invocation = invocation(suffix, :thread_ready)
+      configure_runner({:error, runner_error})
+      configure_worker(limit_notice: LimitNoticeRecorder)
+
+      assert :ok = perform(invocation)
+      assert Repo.reload!(invocation).stage == :failed
+      refute_received {:limit_notice, _, _}
+    end
+  end
+
   defp configure_runner(result) do
     Application.put_env(:context_bot, Runner, test_pid: self(), result: result)
   end
@@ -765,6 +798,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
   defp configure_worker(overrides \\ []) do
     defaults = [
       now: fn -> @now end,
+      limit_notice: ContextBot.LimitNoticeNoop,
       reply_job_builder: nil,
       runner: Runner,
       runner_options: [evidence: :runner_options_forwarded],

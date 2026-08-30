@@ -34,7 +34,8 @@ defmodule ContextBot.Admission do
   end
 
   @spec admit(Invocation.t(), DateTime.t(), Settings.t(), Changeset.t()) ::
-          {:ok, Invocation.t()} | {:deferred, :rate | :capacity, Invocation.t()}
+          {:ok, Invocation.t()}
+          | {:deferred, :actor_rate | :rate | :capacity, Invocation.t()}
   def admit(
         %Invocation{id: id} = invocation,
         %DateTime{} = now,
@@ -56,8 +57,11 @@ defmodule ContextBot.Admission do
             pending_count(invocation.id) >= settings.max_pending ->
               {:capacity, defer(invocation, :deferred_capacity, nil)}
 
-            defer_until = rate_defer_until(invocation, now, settings) ->
-              {:rate, defer(invocation, :deferred_rate, defer_until)}
+            actor_until = actor_rate_defer_until(invocation, now, settings) ->
+              {:actor_rate, defer(invocation, :deferred_rate, actor_until)}
+
+            global_until = global_rate_defer_until(now, settings) ->
+              {:rate, defer(invocation, :deferred_rate, global_until)}
 
             true ->
               admitted =
@@ -81,6 +85,9 @@ defmodule ContextBot.Admission do
       {:ok, {:admitted, invocation}} ->
         {:ok, invocation}
 
+      {:ok, {:actor_rate, invocation}} ->
+        {:deferred, :actor_rate, invocation}
+
       {:ok, {:rate, invocation}} ->
         {:deferred, :rate, invocation}
 
@@ -103,36 +110,50 @@ defmodule ContextBot.Admission do
     |> Repo.update!()
   end
 
-  defp rate_defer_until(%Invocation{} = invocation, now, settings, excluded_invocation_id \\ nil) do
-    actor_did = invocation.actor_did
+  defp rate_defer_until(%Invocation{} = invocation, now, settings, excluded_invocation_id) do
+    [
+      actor_rate_defer_until(invocation, now, settings, excluded_invocation_id),
+      global_rate_defer_until(now, settings, excluded_invocation_id)
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.max(DateTime, fn -> nil end)
+  end
 
-    actor_windows =
-      if skip_actor_rate_windows?(actor_did, settings) do
-        []
-      else
-        [
-          breached_window(
-            actor_did,
-            now,
-            :hour,
-            settings.actor_hourly_limit,
-            excluded_invocation_id
-          ),
-          breached_window(
-            actor_did,
-            now,
-            :day,
-            actor_daily_limit(invocation, settings),
-            excluded_invocation_id
-          )
-        ]
-      end
+  defp actor_rate_defer_until(
+         %Invocation{} = invocation,
+         now,
+         settings,
+         excluded_invocation_id \\ nil
+       ) do
+    if skip_actor_rate_windows?(invocation.actor_did, settings) do
+      nil
+    else
+      [
+        breached_window(
+          invocation.actor_did,
+          now,
+          :hour,
+          settings.actor_hourly_limit,
+          excluded_invocation_id
+        ),
+        breached_window(
+          invocation.actor_did,
+          now,
+          :day,
+          actor_daily_limit(invocation, settings),
+          excluded_invocation_id
+        )
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.max(DateTime, fn -> nil end)
+    end
+  end
 
-    (actor_windows ++
-       [
-         breached_window(nil, now, :hour, settings.global_hourly_limit, excluded_invocation_id),
-         breached_window(nil, now, :day, settings.global_daily_limit, excluded_invocation_id)
-       ])
+  defp global_rate_defer_until(now, settings, excluded_invocation_id \\ nil) do
+    [
+      breached_window(nil, now, :hour, settings.global_hourly_limit, excluded_invocation_id),
+      breached_window(nil, now, :day, settings.global_daily_limit, excluded_invocation_id)
+    ]
     |> Enum.reject(&is_nil/1)
     |> Enum.max(DateTime, fn -> nil end)
   end
