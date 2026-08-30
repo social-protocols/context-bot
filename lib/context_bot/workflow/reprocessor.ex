@@ -107,6 +107,8 @@ defmodule ContextBot.Workflow.Reprocessor do
         reply_record: nil,
         reply_part2_rkey: nil,
         reply_part2_record: nil,
+        reply_part3_rkey: nil,
+        reply_part3_record: nil,
         publication_claim_token: nil,
         publication_claimed_at: nil,
         failure_category: nil,

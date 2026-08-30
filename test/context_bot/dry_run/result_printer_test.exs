@@ -72,7 +72,7 @@ defmodule ContextBot.DryRun.ResultPrinterTest do
     assert List.last(lines) == "(full response) link: none"
   end
 
-  test "a split with a full response shows link-only post 2, not leftover compact body" do
+  test "a split with a full response shows remainder plus link on post 2" do
     part1 = String.duplicate("a", 208)
     remainder = String.duplicate("b", 120)
     full = "Writeup kept from the dual-format turn."
@@ -88,9 +88,11 @@ defmodule ContextBot.DryRun.ResultPrinterTest do
       )
 
     assert full in lines
-    assert Enum.at(lines, Enum.find_index(lines, &(&1 == "Post 2:")) + 1) == Post.link_label()
-    refute Enum.any?(lines, &String.contains?(&1, remainder))
-    assert List.last(lines) == "(full response) link: Post 2 (link alone)"
+
+    assert Enum.at(lines, Enum.find_index(lines, &(&1 == "Post 2:")) + 1) ==
+             remainder <> Post.link_suffix()
+
+    assert List.last(lines) == "(full response) link: Post 2 (remainder + link)"
   end
 
   test "strips ANSI from the writeup and posts while keeping newlines" do

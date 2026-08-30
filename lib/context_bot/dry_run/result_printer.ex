@@ -52,6 +52,8 @@ defmodule ContextBot.DryRun.ResultPrinter do
   defp link_line(:post_2_remainder_and_link),
     do: "(full response) link: Post 2 (remainder + link)"
 
+  defp link_line(:post_3_link_only), do: "(full response) link: Post 3 (link alone)"
+
   defp link_line(:none), do: "(full response) link: none"
 
   defp one_line(value) when is_binary(value) do

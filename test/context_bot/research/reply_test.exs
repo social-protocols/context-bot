@@ -1,6 +1,7 @@
 defmodule ContextBot.Research.ReplyTest do
   use ExUnit.Case, async: true
 
+  alias ContextBot.ATProto.Post
   alias ContextBot.Research.Reply
   alias ContextBot.Research.ReplyLimits
 
@@ -1000,6 +1001,19 @@ defmodule ContextBot.Research.ReplyTest do
       assert String.ends_with?(split1, closing)
       assert split2 == remainder
     end
+  end
+
+  test "prefers a later sentence split that leaves room on part 2 for the link suffix" do
+    early = String.duplicate("a", 249) <> "."
+    later = String.duplicate("b", 29) <> "."
+    rest = String.duplicate("c", 259)
+    text = early <> " " <> later <> " " <> rest
+
+    assert String.length(text) > 300
+    assert {:ok, split1, split2} = Reply.split_text(text)
+    refute String.ends_with?(split1, String.duplicate("a", 10) <> ".")
+    assert String.ends_with?(split1, later)
+    assert ReplyLimits.fits_one_post?(split2 <> Post.link_suffix())
   end
 
   test "falls back to whitespace when the only period-space is an abbreviation" do

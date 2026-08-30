@@ -230,6 +230,8 @@ defmodule ContextBot.Workers.ResearchWorker do
       reply_record: intent.reply_record,
       reply_part2_rkey: Map.get(intent, :reply_part2_rkey),
       reply_part2_record: Map.get(intent, :reply_part2_record),
+      reply_part3_rkey: Map.get(intent, :reply_part3_rkey),
+      reply_part3_record: Map.get(intent, :reply_part3_record),
       publication_claim_token: nil,
       publication_claimed_at: nil,
       defer_until: nil,

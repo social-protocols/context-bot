@@ -400,7 +400,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert log =~ "site.standard.document"
   end
 
-  test "publishes a Standard.site document and link-only part 2 when a split keeps a full response" do
+  test "publishes a Standard.site document and remainder-plus-link part 2 when a split keeps a full response" do
     invocation = invocation("split-full-response", :thread_ready)
     part1 = String.duplicate("a", 150)
     part2 = String.duplicate("b", 160)
@@ -433,7 +433,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert persisted.full_response == "Thorough markdown writeup."
     assert persisted.standard_site_document_uri =~ "site.standard.document"
     assert persisted.reply_record["text"] == part1
-    assert persisted.reply_part2_record["text"] == "full response"
+    assert persisted.reply_part2_record["text"] == part2
     assert persisted.reply_part2_record["readerUrl"] =~ "https://standard-reader.app/a/"
   end
 

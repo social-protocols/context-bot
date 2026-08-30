@@ -171,7 +171,7 @@ defmodule ContextBot.Reply.IntentTest do
     assert intent.reply_part2_record["readerUrl"] == reader_url
   end
 
-  test "rare body split with a reader URL uses a link-only part 2 instead of remainder plus link" do
+  test "a body split with a reader URL keeps the remainder and the link on part 2" do
     invocation = invocation()
     part1 = String.duplicate("a", 208)
     remainder = String.duplicate("b", 120)
@@ -191,9 +191,35 @@ defmodule ContextBot.Reply.IntentTest do
 
     assert intent.reply_record["text"] == part1
     refute Map.has_key?(intent.reply_record, "facets")
-    assert intent.reply_part2_record["text"] == "full response"
+    assert intent.reply_part2_record["text"] == remainder
     assert intent.reply_part2_record["readerUrl"] == reader_url
-    refute intent.reply_part2_record["text"] =~ remainder
+    refute Map.has_key?(intent, :reply_part3_record)
+  end
+
+  test "a body split whose remainder cannot fit the link freezes a third link-only post" do
+    invocation = invocation()
+    part1 = String.duplicate("a", 208)
+    remainder = String.duplicate("b", 290)
+    reader_url = "https://standard-reader.app/a/did:plc:test/3k123"
+    rkey_generator = sequence_generator(["3mpart1rkey111", "3mpart2rkey222", "3mpart3rkey333"])
+
+    assert {:ok, intent} =
+             Intent.build_with_part2(
+               invocation,
+               part1,
+               remainder,
+               "did:plc:contextbot",
+               @created_at,
+               rkey_generator,
+               reader_url: reader_url
+             )
+
+    assert intent.reply_record["text"] == part1
+    assert intent.reply_part2_record["text"] == remainder
+    refute Map.has_key?(intent.reply_part2_record, "readerUrl")
+    assert intent.reply_part3_rkey == "3mpart3rkey333"
+    assert intent.reply_part3_record["text"] == "full response"
+    assert intent.reply_part3_record["readerUrl"] == reader_url
   end
 
   defp sequence_generator(values) do
