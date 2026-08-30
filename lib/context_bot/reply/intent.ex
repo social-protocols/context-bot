@@ -14,7 +14,9 @@ defmodule ContextBot.Reply.Intent do
           required(:reply_rkey) => String.t(),
           required(:reply_record) => map(),
           optional(:reply_part2_rkey) => String.t(),
-          optional(:reply_part2_record) => map()
+          optional(:reply_part2_record) => map(),
+          optional(:reply_part3_rkey) => String.t(),
+          optional(:reply_part3_record) => map()
         }
 
   @spec build(Invocation.t(), term(), term(), term(), (integer() -> term()), keyword()) ::
@@ -42,10 +44,11 @@ defmodule ContextBot.Reply.Intent do
   @doc """
   Builds an intent with a second part for split replies.
 
-  When a Standard Reader URL is present, part 2 is the full-response link by itself rather
-  than leftover compact body mixed with the link. Part 2 replies to part 1. At freeze time,
-  part2's record is incomplete because part1 has not been published yet; ReplyWorker rebuilds
-  the full part2 record with part1's published URI and CID before publishing.
+  When a remainder exists, part 2 keeps that leftover compact body. If a Standard Reader URL
+  is present and remainder plus ` (full response)` still fits, part 2 carries both. If the
+  pair does not fit, part 2 is the remainder and part 3 is the link-only label. Part 2
+  replies to part 1. At freeze time, later parts are incomplete because earlier posts have
+  not been published yet; ReplyWorker rebuilds them with the published parent URI and CID.
   """
   @spec build_with_part2(
           Invocation.t(),
@@ -98,10 +101,35 @@ defmodule ContextBot.Reply.Intent do
             reply_repo
           )
 
+        {:post_2_remainder_and_link, compact, rest} ->
+          freeze_body_split(
+            compact,
+            rest,
+            reader_url,
+            parent,
+            root,
+            created_at,
+            tid_generator,
+            reply_repo
+          )
+
+        {:body_split_with_link_post3, compact, rest} ->
+          freeze_body_split_with_link_post3(
+            compact,
+            rest,
+            reader_url,
+            parent,
+            root,
+            created_at,
+            tid_generator,
+            reply_repo
+          )
+
         {:body_split, compact, rest} ->
           freeze_body_split(
             compact,
             rest,
+            nil,
             parent,
             root,
             created_at,
@@ -145,10 +173,20 @@ defmodule ContextBot.Reply.Intent do
     end
   end
 
-  defp freeze_body_split(text, remainder, parent, root, created_at, tid_generator, reply_repo) do
+  defp freeze_body_split(
+         text,
+         remainder,
+         reader_url,
+         parent,
+         root,
+         created_at,
+         tid_generator,
+         reply_repo
+       ) do
     with {:ok, record} <- Post.build(text, nil, parent, root, created_at),
          {:ok, rkey} <- generate_rkey(created_at, tid_generator),
-         {:ok, part2_data, rkey2} <- prepare_part2(remainder, parent, root, tid_generator) do
+         {:ok, part2_data, rkey2} <-
+           prepare_remainder_part2(remainder, reader_url, parent, root, tid_generator) do
       {:ok,
        %{
          reply_repo: reply_repo,
@@ -160,29 +198,73 @@ defmodule ContextBot.Reply.Intent do
     end
   end
 
-  defp prepare_link_part2(reader_url, parent, root, tid_generator) do
-    with {:ok, part2_data, rkey} <- prepare_part2(Post.link_label(), parent, root, tid_generator) do
+  defp freeze_body_split_with_link_post3(
+         text,
+         remainder,
+         reader_url,
+         parent,
+         root,
+         created_at,
+         tid_generator,
+         reply_repo
+       ) do
+    with {:ok, record} <- Post.build(text, nil, parent, root, created_at),
+         {:ok, rkey} <- generate_rkey(created_at, tid_generator),
+         {:ok, part2_data, rkey2} <- prepare_part2(remainder, parent, root, tid_generator, 9),
+         {:ok, part3_data, rkey3} <-
+           prepare_link_part(reader_url, parent, root, tid_generator, 10) do
+      {:ok,
+       %{
+         reply_repo: reply_repo,
+         reply_rkey: rkey,
+         reply_record: record,
+         reply_part2_rkey: rkey2,
+         reply_part2_record: part2_data,
+         reply_part3_rkey: rkey3,
+         reply_part3_record: part3_data
+       }}
+    end
+  end
+
+  defp prepare_remainder_part2(remainder, reader_url, parent, root, tid_generator)
+       when is_binary(reader_url) do
+    with {:ok, part2_data, rkey} <- prepare_part2(remainder, parent, root, tid_generator, 9) do
       {:ok, Map.put(part2_data, "readerUrl", reader_url), rkey}
     end
   end
 
-  defp prepare_part2(text_part2, parent, root, tid_generator) when is_binary(text_part2) do
+  defp prepare_remainder_part2(remainder, _reader_url, parent, root, tid_generator) do
+    prepare_part2(remainder, parent, root, tid_generator, 9)
+  end
+
+  defp prepare_link_part2(reader_url, parent, root, tid_generator) do
+    prepare_link_part(reader_url, parent, root, tid_generator, 9)
+  end
+
+  defp prepare_link_part(reader_url, parent, root, tid_generator, placeholder_timestamp_us) do
+    with {:ok, part_data, rkey} <-
+           prepare_part2(Post.link_label(), parent, root, tid_generator, placeholder_timestamp_us) do
+      {:ok, Map.put(part_data, "readerUrl", reader_url), rkey}
+    end
+  end
+
+  defp prepare_part2(text_part, parent, root, tid_generator, placeholder_timestamp_us)
+       when is_binary(text_part) do
     # Generate a placeholder TID at freeze time. This will be replaced at publish time.
     # Use a sentinel timestamp to mark this as needing regeneration.
-    placeholder_timestamp_us = 9
     placeholder_created_at = DateTime.from_unix!(placeholder_timestamp_us, :microsecond)
 
-    # Part2's root should be the same as part1's root. When root is nil, part1 uses parent as root.
-    part2_root = root || parent
+    # Later parts share part1's root. When root is nil, part1 uses parent as root.
+    part_root = root || parent
 
-    with {:ok, part2_rkey} <- generate_rkey(placeholder_created_at, tid_generator) do
-      part2_data = %{
-        "text" => text_part2,
+    with {:ok, part_rkey} <- generate_rkey(placeholder_created_at, tid_generator) do
+      part_data = %{
+        "text" => text_part,
         "createdAt" => DateTime.to_iso8601(placeholder_created_at),
-        "reply" => %{"root" => part2_root}
+        "reply" => %{"root" => part_root}
       }
 
-      {:ok, part2_data, part2_rkey}
+      {:ok, part_data, part_rkey}
     end
   end
 

@@ -32,6 +32,7 @@ defmodule ContextBotWeb.InvocationsController do
         invocation_uri: i.invocation_uri,
         reply_uri: i.reply_uri,
         reply_part2_uri: i.reply_part2_uri,
+        reply_part3_uri: i.reply_part3_uri,
         standard_site_document_uri: i.standard_site_document_uri,
         anthropic_attempt_sequence: i.anthropic_attempt_sequence,
         failure_category: i.failure_category,
@@ -248,6 +249,7 @@ defmodule ContextBotWeb.InvocationsController do
             <td>
               #{reply_link(inv.reply_uri, "1")}
               #{reply_link(inv.reply_part2_uri, "2")}
+              #{reply_link(inv.reply_part3_uri, "3")}
             </td>
             <td>
               #{full_response_link(inv.standard_site_document_uri)}

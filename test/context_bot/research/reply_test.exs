@@ -1,8 +1,10 @@
 defmodule ContextBot.Research.ReplyTest do
   use ExUnit.Case, async: true
 
+  alias ContextBot.ATProto.Post
   alias ContextBot.Research.Reply
   alias ContextBot.Research.ReplyLimits
+  alias Unicode.String.Segment
 
   test "accepts ordered model text at exactly 300 graphemes and 3,000 bytes" do
     reply =
@@ -946,6 +948,73 @@ defmodule ContextBot.Research.ReplyTest do
     # Should split at whitespace closest to but ≤ 275 when no sentence fits
     split1_len = String.length(split1)
     assert split1_len <= 280 and split1_len >= 270
+  end
+
+  test "English CLDR sentence suppressions include U.S." do
+    suppressions = Segment.suppressions!("en", :sentence_break)
+    assert "U.S." in suppressions
+  end
+
+  test "does not split inv 15 compact at U.S. when a later real sentence exists" do
+    # Published Bluesky part 1 from inv 15. The research compact was over 300
+    # graphemes; raw ". " matching treated "U.S. " as a sentence break.
+    # English CLDR suppressions include U.S., so UAX #29 keeps "U.S. Board"
+    # in the same sentence. A real period+space after "says." still splits.
+    published_part1 =
+      "Google's stated rationale: it has a long-standing policy of mirroring whatever a country's official government geographic database says. Trump's order led the U.S."
+
+    assert String.length(published_part1) == 163
+
+    first_sentence =
+      "Google's stated rationale: it has a long-standing policy of mirroring whatever a country's official government geographic database says."
+
+    us_through_board = "Trump's order led the U.S. Board then adopted that spelling."
+    remainder = String.duplicate("z", 120)
+    compact_prefix = first_sentence <> " " <> us_through_board
+    text = compact_prefix <> " " <> remainder
+
+    assert String.length(text) > 300
+    assert String.contains?(text, "says. Trump's")
+    assert String.contains?(text, "U.S. Board")
+
+    assert Unicode.String.split(compact_prefix, break: :sentence, locale: "en", trim: true) == [
+             first_sentence <> " ",
+             us_through_board
+           ]
+
+    assert {:ok, split1, split2} = Reply.split_text(text)
+    refute split1 == published_part1
+    refute String.ends_with?(split1, "led the U.S.")
+    assert split1 == first_sentence
+    assert String.starts_with?(split2, "Trump's order led the U.S. Board")
+  end
+
+  test "prefers a later sentence split that leaves room on part 2 for the link suffix" do
+    early = String.duplicate("a", 249) <> "."
+    later = String.duplicate("b", 29) <> "."
+    rest = String.duplicate("c", 259)
+    text = early <> " " <> later <> " " <> rest
+
+    assert String.length(text) > 300
+    assert {:ok, split1, split2} = Reply.split_text(text)
+    refute String.ends_with?(split1, String.duplicate("a", 10) <> ".")
+    assert String.ends_with?(split1, later)
+    assert ReplyLimits.fits_one_post?(split2 <> Post.link_suffix())
+  end
+
+  test "falls back to whitespace when the only period-space is an abbreviation" do
+    prefix = "Trump's order led the U.S."
+    # A 27-grapheme whitespace after the abbreviation would leave part2 over cap.
+    # Place a later whitespace at 275 so the fallback can pack a valid part1.
+    a_count = 275 - String.length(prefix) - 2
+    text = prefix <> " " <> String.duplicate("a", a_count) <> " " <> String.duplicate("b", 80)
+
+    assert String.length(text) > 300
+    assert {:ok, split1, split2} = Reply.split_text(text)
+    refute String.ends_with?(split1, "led the U.S.")
+    assert String.contains?(split1, "U.S.")
+    assert String.length(split1) == 274
+    assert String.starts_with?(split2, "b")
   end
 
   defp text(value), do: %{"type" => "text", "text" => value}

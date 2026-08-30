@@ -150,6 +150,10 @@ defmodule ContextBot.Workers.ReplyWorker do
        when is_binary(url) and url != "",
        do: true
 
+  defp frozen_reader_url?(%Invocation{reply_part3_record: %{"readerUrl" => url}})
+       when is_binary(url) and url != "",
+       do: true
+
   defp frozen_reader_url?(_invocation), do: false
 
   defp reconcile_before_put(invocation, token, dependencies) do
@@ -325,6 +329,62 @@ defmodule ContextBot.Workers.ReplyWorker do
   defp publish_part2(invocation, token, part1_uri, part1_cid, part1_completed_at) do
     case reconcile_part2(invocation, token, part1_uri, part1_cid, part1_completed_at) do
       {:ok, part2_uri, part2_cid} ->
+        complete_after_part2(
+          invocation,
+          token,
+          part1_uri,
+          part1_cid,
+          part2_uri,
+          part2_cid,
+          part1_completed_at
+        )
+
+      :stale_claim ->
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp complete_after_part2(
+         invocation,
+         token,
+         part1_uri,
+         part1_cid,
+         part2_uri,
+         part2_cid,
+         completed_at
+       ) do
+    if has_part3?(invocation) do
+      publish_part3(invocation, token, part1_uri, part1_cid, part2_uri, part2_cid, completed_at)
+    else
+      transition_terminal(
+        invocation,
+        token,
+        :complete,
+        %{
+          reply_uri: part1_uri,
+          reply_cid: part1_cid,
+          reply_part2_uri: part2_uri,
+          reply_part2_cid: part2_cid
+        },
+        completed_at
+      )
+    end
+  end
+
+  defp publish_part3(
+         invocation,
+         token,
+         part1_uri,
+         part1_cid,
+         part2_uri,
+         part2_cid,
+         completed_at
+       ) do
+    case reconcile_later_part(invocation, token, :part3, part2_uri, part2_cid) do
+      {:ok, part3_uri, part3_cid} ->
         transition_terminal(
           invocation,
           token,
@@ -333,9 +393,11 @@ defmodule ContextBot.Workers.ReplyWorker do
             reply_uri: part1_uri,
             reply_cid: part1_cid,
             reply_part2_uri: part2_uri,
-            reply_part2_cid: part2_cid
+            reply_part2_cid: part2_cid,
+            reply_part3_uri: part3_uri,
+            reply_part3_cid: part3_cid
           },
-          part1_completed_at
+          completed_at
         )
 
       :stale_claim ->
@@ -479,27 +541,151 @@ defmodule ContextBot.Workers.ReplyWorker do
   defp has_part2?(%Invocation{reply_part2_record: record}) when is_map(record), do: true
   defp has_part2?(_invocation), do: false
 
+  defp has_part3?(%Invocation{reply_part3_record: record}) when is_map(record), do: true
+  defp has_part3?(_invocation), do: false
+
+  defp reconcile_later_part(invocation, token, :part3, parent_uri, parent_cid) do
+    dependencies = dependencies(%Oban.Job{attempt: 1, max_attempts: 10})
+
+    case Store.renew_publication_claim(invocation, token, dependencies.now.()) do
+      {:ok, current} ->
+        current
+        |> finalize_later_part_tid_and_timestamp(:part3, dependencies)
+        |> publish_later_part_record(:part3, dependencies, parent_uri, parent_cid)
+
+      {:error, :stale_claim} ->
+        :stale_claim
+    end
+  end
+
+  defp finalize_later_part_tid_and_timestamp(invocation, :part3, dependencies) do
+    with {:ok, frozen_created_at} <- extract_created_at(invocation.reply_part3_record),
+         true <- needs_final_timestamp?(frozen_created_at) do
+      alias ContextBot.ATProto.TID
+
+      final_created_at = dependencies.now.()
+      final_timestamp_us = DateTime.to_unix(final_created_at, :microsecond) + 1
+      final_rkey = TID.generate(final_timestamp_us)
+
+      updated_record =
+        Map.put(invocation.reply_part3_record, "createdAt", DateTime.to_iso8601(final_created_at))
+
+      invocation
+      |> Invocation.changeset(%{
+        reply_part3_rkey: final_rkey,
+        reply_part3_record: updated_record
+      })
+      |> Repo.update!()
+    else
+      _ ->
+        invocation
+    end
+  end
+
+  defp publish_later_part_record(invocation, :part3, dependencies, parent_uri, parent_cid) do
+    case rebuild_later_part_record(
+           invocation,
+           invocation.reply_part3_record,
+           parent_uri,
+           parent_cid
+         ) do
+      {:ok, corrected_record} ->
+        case get_named_part_record(
+               invocation,
+               dependencies.client,
+               invocation.reply_part3_rkey,
+               corrected_record
+             ) do
+          {:match, uri, cid} ->
+            {:ok, uri, cid}
+
+          :missing ->
+            put_named_part_record(
+              invocation,
+              dependencies,
+              invocation.reply_part3_rkey,
+              corrected_record
+            )
+
+          :conflict ->
+            {:error, :part3_conflict}
+        end
+
+      {:error, _reason} ->
+        {:error, :part3_record_invalid}
+    end
+  end
+
+  defp put_named_part_record(invocation, dependencies, rkey, corrected_record) do
+    case dependencies.client.put_record(
+           invocation.reply_repo,
+           @collection,
+           rkey,
+           corrected_record
+         ) do
+      {:ok, status, _headers, _body} when status in 200..299 ->
+        case get_named_part_record(invocation, dependencies.client, rkey, corrected_record) do
+          {:match, uri, cid} -> {:ok, uri, cid}
+          _other -> {:error, :part3_reconciliation_failed}
+        end
+
+      {:error, _reason} ->
+        {:error, :part3_put_failed}
+
+      _invalid ->
+        {:error, :part3_invalid_response}
+    end
+  end
+
+  defp get_named_part_record(invocation, client, rkey, corrected_record) do
+    case client.get_record(invocation.reply_repo, @collection, rkey) do
+      {:ok, status, _headers, body} when status in 200..299 ->
+        compare_part2_record(body, invocation.reply_repo, rkey, corrected_record)
+
+      {:error, :record_not_found} ->
+        :missing
+
+      {:error, _reason} ->
+        :conflict
+
+      _invalid ->
+        :conflict
+    end
+  end
+
+  defp rebuild_later_part_record(invocation, frozen_record, parent_uri, parent_cid)
+       when is_map(frozen_record) and is_binary(parent_uri) and is_binary(parent_cid) do
+    alias ContextBot.ATProto.Post
+
+    with {:ok, text} <- extract_text(frozen_record),
+         {:ok, created_at} <- extract_created_at(frozen_record),
+         {:ok, root} <- extract_root_or_infer(frozen_record, invocation) do
+      parent = %{"uri" => parent_uri, "cid" => parent_cid}
+      reader_url = Map.get(frozen_record, "readerUrl")
+
+      cond do
+        is_binary(reader_url) and reader_url != "" and text == Post.link_label() ->
+          Post.build_link_only(reader_url, parent, root, created_at)
+
+        is_binary(reader_url) and reader_url != "" ->
+          Post.build(text, reader_url, parent, root, created_at)
+
+        true ->
+          Post.build(text, nil, parent, root, created_at)
+      end
+    end
+  end
+
+  defp rebuild_later_part_record(_invocation, _frozen_record, _parent_uri, _parent_cid),
+    do: {:error, :invalid_part2_data}
+
   defp rebuild_part2_record(
          %Invocation{reply_part2_record: frozen_record} = invocation,
          part1_uri,
          part1_cid
        )
        when is_map(frozen_record) and is_binary(part1_uri) and is_binary(part1_cid) do
-    alias ContextBot.ATProto.Post
-
-    with {:ok, text} <- extract_text(frozen_record),
-         {:ok, created_at} <- extract_created_at(frozen_record),
-         {:ok, root} <- extract_root_or_infer(frozen_record, invocation) do
-      parent = %{"uri" => part1_uri, "cid" => part1_cid}
-
-      case frozen_record do
-        %{"readerUrl" => reader_url} when is_binary(reader_url) and reader_url != "" ->
-          Post.build_link_only(reader_url, parent, root, created_at)
-
-        _unlinked ->
-          Post.build(text, nil, parent, root, created_at)
-      end
-    end
+    rebuild_later_part_record(invocation, frozen_record, part1_uri, part1_cid)
   end
 
   defp rebuild_part2_record(_invocation, _part1_uri, _part1_cid),

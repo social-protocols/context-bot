@@ -4,17 +4,21 @@ defmodule ContextBot.Reply.PublicationPlan do
 
   Ranking:
 
-  1. Prefer the link in post 1 when compact plus ` (full response)` fits.
-  2. Next, put post 2 as the link alone.
-  3. Worst, remainder plus the link in post 2. Freeze avoids that whenever post 1
-     still fits by using a link-only part 2 instead of leftover compact body.
+  1. No remainder, and compact plus ` (full response)` fits → one post.
+  2. No remainder, compact fits but plus the link does not → post 1 compact,
+     post 2 link-only.
+  3. Remainder present → post 1 is part 1. Post 2 is part 2 plus the link when
+     that pair still fits (`:post_2_remainder_and_link`). If part 2 plus the
+     link does not fit, post 2 is part 2 and post 3 is the link-only label.
+     Never drop part 2.
   """
 
   alias ContextBot.ATProto.Post
   alias ContextBot.Research.ReplyLimits
   alias ContextBot.Workflow.Invocation
 
-  @type link_placement :: :post_1 | :post_2_link_only | :post_2_remainder_and_link | :none
+  @type link_placement ::
+          :post_1 | :post_2_link_only | :post_2_remainder_and_link | :post_3_link_only | :none
 
   @type t :: %{
           required(:posts) => [String.t()],
@@ -24,6 +28,8 @@ defmodule ContextBot.Reply.PublicationPlan do
   @type decision ::
           {:single_with_link, String.t()}
           | {:link_only_part2, String.t()}
+          | {:post_2_remainder_and_link, String.t(), String.t()}
+          | {:body_split_with_link_post3, String.t(), String.t()}
           | {:body_split, String.t(), String.t()}
           | {:single, String.t()}
 
@@ -36,16 +42,26 @@ defmodule ContextBot.Reply.PublicationPlan do
       single_post_with_link?(text, remainder, reader_url) ->
         {:single_with_link, text}
 
-      link_only_part2?(text, reader_url) ->
+      is_nil(remainder) and is_binary(reader_url) ->
         {:link_only_part2, text}
 
       is_binary(remainder) ->
-        {:body_split, text, remainder}
+        remainder_decision(text, remainder, reader_url)
 
       true ->
         {:single, text}
     end
   end
+
+  defp remainder_decision(text, remainder, reader_url) when is_binary(reader_url) do
+    if remainder_and_link_fits?(remainder) do
+      {:post_2_remainder_and_link, text, remainder}
+    else
+      {:body_split_with_link_post3, text, remainder}
+    end
+  end
+
+  defp remainder_decision(text, remainder, _reader_url), do: {:body_split, text, remainder}
 
   @doc """
   Returns the exact post texts a dry-run would publish and where the link would go.
@@ -67,15 +83,17 @@ defmodule ContextBot.Reply.PublicationPlan do
       {:link_only_part2, text} ->
         %{posts: [text, Post.link_label()], link_placement: :post_2_link_only}
 
+      {:post_2_remainder_and_link, text, rest} ->
+        %{
+          posts: [text, rest <> Post.link_suffix()],
+          link_placement: :post_2_remainder_and_link
+        }
+
+      {:body_split_with_link_post3, text, rest} ->
+        %{posts: [text, rest, Post.link_label()], link_placement: :post_3_link_only}
+
       {:body_split, text, rest} ->
-        if present?(full_response) do
-          %{
-            posts: [text, rest <> Post.link_suffix()],
-            link_placement: :post_2_remainder_and_link
-          }
-        else
-          %{posts: [text, rest], link_placement: :none}
-        end
+        %{posts: [text, rest], link_placement: :none}
 
       {:single, text} ->
         %{posts: [text], link_placement: :none}
@@ -100,10 +118,8 @@ defmodule ContextBot.Reply.PublicationPlan do
 
   defp single_post_with_link?(_text, _remainder, _reader_url), do: false
 
-  defp link_only_part2?(text, reader_url) when is_binary(reader_url),
-    do: ReplyLimits.fits_one_post?(text)
-
-  defp link_only_part2?(_text, _reader_url), do: false
+  defp remainder_and_link_fits?(remainder),
+    do: ReplyLimits.fits_one_post?(remainder <> Post.link_suffix())
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(_value), do: false
