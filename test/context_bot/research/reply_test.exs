@@ -911,8 +911,7 @@ defmodule ContextBot.Research.ReplyTest do
     assert Reply.split_text(text) == :error
   end
 
-  test "packs part1 to ~275 graphemes at sentence boundary" do
-    # Create text with sentence breaks at 200, 270, and 280 graphemes (before trim)
+  test "packs part1 to the hard cap at a later sentence, not the 275 prompt target" do
     part_200 = String.duplicate("a", 199) <> "."
     part_270 = String.duplicate("b", 69) <> "."
     part_280 = String.duplicate("c", 9) <> "."
@@ -922,14 +921,14 @@ defmodule ContextBot.Research.ReplyTest do
     assert String.length(text) == 313
     assert {:ok, split1, split2} = Reply.split_text(text)
 
-    # Should split at 271 graphemes (after second sentence, includes trailing space before trim)
-    # Split position is at byte after ". " following part_270, then trimmed
-    assert String.length(split1) == 271
-    assert String.length(split2) == 41
+    # Third sentence ends at 282, still under the 300 hard cap. The 275 prompt
+    # target is for the model, not for packing a split.
+    assert String.length(split1) == 282
+    assert String.length(split2) == 30
+    assert String.ends_with?(split1, part_280)
   end
 
-  test "packs part1 to maximum when multiple sentences fit under 275" do
-    # Create sentences that cumulatively fit: 100, 201, 276 (after trim)
+  test "packs a 276-grapheme sentence that the old 275 target would have skipped" do
     s1 = String.duplicate("a", 99) <> "."
     s2 = String.duplicate("b", 99) <> "."
     s3 = String.duplicate("c", 73) <> "."
@@ -939,25 +938,23 @@ defmodule ContextBot.Research.ReplyTest do
     assert String.length(text) == 302
     assert {:ok, split1, split2} = Reply.split_text(text)
 
-    # Should split after s2 (201 graphemes after trim, largest ≤ 275)
-    # s3 would give 276 which exceeds 275
-    assert String.length(split1) == 201
-    assert String.length(split2) == 100
+    # s1+s2 is 201; s3 brings part 1 to 276, which is valid under the hard cap.
+    assert String.length(split1) == 276
+    assert String.length(split2) == 25
+    assert String.ends_with?(split1, s3)
   end
 
-  test "splits at whitespace near 275 when no sentence boundary fits" do
-    # Create text with only one sentence break at 311 graphemes
+  test "splits at the last whitespace that still fits the hard cap" do
     part1 = String.duplicate("a", 280)
     part2 = String.duplicate("b", 30) <> "."
     remainder = String.duplicate("c", 20)
     text = part1 <> " " <> part2 <> " " <> remainder
 
     assert String.length(text) == 333
-    assert {:ok, split1, _split2} = Reply.split_text(text)
-
-    # Should split at whitespace closest to but ≤ 275 when no sentence fits
-    split1_len = String.length(split1)
-    assert split1_len <= 280 and split1_len >= 270
+    assert {:ok, split1, split2} = Reply.split_text(text)
+    assert String.length(split1) == 280
+    assert split1 == part1
+    assert String.starts_with?(split2, part2)
   end
 
   test "English CLDR sentence suppressions include U.S." do
@@ -965,11 +962,12 @@ defmodule ContextBot.Research.ReplyTest do
     assert "U.S." in suppressions
   end
 
-  test "does not split inv 15 compact at U.S. when a later real sentence exists" do
+  test "does not split inv 15 compact at U.S. when packing to the hard cap" do
     # Published Bluesky part 1 from inv 15. The research compact was over 300
     # graphemes; raw ". " matching treated "U.S. " as a sentence break.
     # English CLDR suppressions include U.S., so UAX #29 keeps "U.S. Board"
-    # in the same sentence. A real period+space after "says." still splits.
+    # in the same sentence. Packing may take that whole sentence; it must not
+    # cut after the abbreviation.
     published_part1 =
       "Google's stated rationale: it has a long-standing policy of mirroring whatever a country's official government geographic database says. Trump's order led the U.S."
 
@@ -995,8 +993,9 @@ defmodule ContextBot.Research.ReplyTest do
     assert {:ok, split1, split2} = Reply.split_text(text)
     refute split1 == published_part1
     refute String.ends_with?(split1, "led the U.S.")
-    assert split1 == first_sentence
-    assert String.starts_with?(split2, "Trump's order led the U.S. Board")
+    assert String.contains?(split1, "U.S. Board")
+    assert split1 == compact_prefix
+    assert split2 == remainder
   end
 
   test "prefers a later sentence split that leaves room on part 2 for the link suffix" do
@@ -1015,16 +1014,85 @@ defmodule ContextBot.Research.ReplyTest do
   test "falls back to whitespace when the only period-space is an abbreviation" do
     prefix = "Trump's order led the U.S."
     # A 27-grapheme whitespace after the abbreviation would leave part2 over cap.
-    # Place a later whitespace at 275 so the fallback can pack a valid part1.
-    a_count = 275 - String.length(prefix) - 2
+    # Place a later whitespace at the hard cap so packing fills part 1.
+    a_count = ReplyLimits.hard_max_graphemes() - String.length(prefix) - 2
     text = prefix <> " " <> String.duplicate("a", a_count) <> " " <> String.duplicate("b", 80)
 
     assert String.length(text) > 300
     assert {:ok, split1, split2} = Reply.split_text(text)
     refute String.ends_with?(split1, "led the U.S.")
     assert String.contains?(split1, "U.S.")
-    assert String.length(split1) == 274
+    assert String.length(split1) == 299
     assert String.starts_with?(split2, "b")
+  end
+
+  test "packs the East Potomac compact to the last whitespace before 300" do
+    compact =
+      "Disputed, not settled. Interior/NPS says it's \"routine maintenance\" removing hazard, invasive, and dying trees — unrelated to the golf redesign. But it won't confirm/deny cherry trees cut were healthy, timing lines up with Trump's Sept 1 construction target, a $349k contract runs into October, and a lawsuit's court-notification terms reportedly haven't been followed. No proof either way yet."
+
+    first_two =
+      "Disputed, not settled. Interior/NPS says it's \"routine maintenance\" removing hazard, invasive, and dying trees — unrelated to the golf redesign."
+
+    expected_part1 =
+      "Disputed, not settled. Interior/NPS says it's \"routine maintenance\" removing hazard, invasive, and dying trees — unrelated to the golf redesign. But it won't confirm/deny cherry trees cut were healthy, timing lines up with Trump's Sept 1 construction target, a $349k contract runs into October, and a"
+
+    expected_part2 =
+      "lawsuit's court-notification terms reportedly haven't been followed. No proof either way yet."
+
+    assert String.length(compact) == 394
+    assert String.length(first_two) == 144
+    assert {:ok, split1, split2} = Reply.split_text(compact)
+    refute split1 == first_two
+    assert split1 == expected_part1
+    assert split2 == expected_part2
+    assert String.length(split1) == 300
+    assert String.length(split2) == 93
+    assert ReplyLimits.fits_one_post?(split1)
+    assert ReplyLimits.fits_one_post?(split2)
+    assert ReplyLimits.fits_one_post?(split2 <> Post.link_suffix())
+  end
+
+  test "a word-boundary pack near 290 beats a sentence split near 160" do
+    s1 = String.duplicate("a", 79) <> "."
+    s2 = String.duplicate("b", 79) <> "."
+    words = Enum.map_join(1..14, " ", fn _ -> String.duplicate("c", 9) end)
+    overflow = String.duplicate("d", 40)
+    text = s1 <> " " <> s2 <> " " <> words <> " " <> overflow
+
+    assert String.length(s1 <> " " <> s2) == 161
+    assert String.length(text) > 300
+    assert {:ok, split1, split2} = Reply.split_text(text)
+    refute String.length(split1) == 161
+    assert String.length(split1) == 291
+    assert String.ends_with?(split1, String.duplicate("c", 9))
+    assert String.starts_with?(split2, String.duplicate("c", 9) <> " " <> overflow)
+  end
+
+  test "prefers a paragraph pack over an earlier sentence of the same leftover hole" do
+    opening = "Short sentence. "
+    rest_of_paragraph = String.duplicate("x", 270)
+    paragraph = opening <> rest_of_paragraph
+    text = paragraph <> "\n\n" <> String.duplicate("y", 40)
+
+    assert String.length(String.trim(opening)) == 15
+    assert String.length(paragraph) == 286
+    assert {:ok, split1, split2} = Reply.split_text(text)
+    refute split1 == String.trim(opening)
+    assert split1 == paragraph
+    assert String.length(split1) == 286
+    assert String.starts_with?(split2, "y")
+  end
+
+  test "at equal part-1 length prefers a sentence end over a mid-sentence word" do
+    s1 = String.duplicate("a", 139) <> "."
+    s2 = String.duplicate("b", 139) <> "."
+    overflow = String.duplicate("c", 50)
+    text = s1 <> " " <> s2 <> " " <> overflow
+
+    assert {:ok, split1, split2} = Reply.split_text(text)
+    assert String.length(split1) == 281
+    assert String.ends_with?(split1, ".")
+    assert split2 == overflow
   end
 
   defp structured_text(compact, opts \\ []) do
