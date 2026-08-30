@@ -10,7 +10,7 @@ A quick way to invoke an AI agent in a Bluesky thread. Use it for research, fact
 
 ## Why it works
 
-- **On demand.** It only joins a thread when mentioned.
+- **Invite Only.** It only joints a thread when invited.
 - **Research with Sources.** It uses Claude Sonnet with web search and citations enabled. 
 - **Transparent.** The full prompt and reply, including cited soures, are stored as atproto records.
 
