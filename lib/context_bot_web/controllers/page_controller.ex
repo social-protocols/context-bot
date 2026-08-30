@@ -3,6 +3,9 @@ defmodule ContextBotWeb.PageController do
 
   @homepage_md File.read!("priv/static/homepage.md")
   @external_resource "priv/static/homepage.md"
+  @public_url "https://getcontext.bot/"
+  @og_image_url "https://getcontext.bot/images/og.png"
+  @og_description "Mention @getcontext.bot on a Bluesky post and ask it a question. It does the research and produces a brief response."
 
   def home(conn, _params) do
     html_content = """
@@ -12,6 +15,18 @@ defmodule ContextBotWeb.PageController do
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <title>Context Bot</title>
+      <meta name="description" content="#{@og_description}">
+      <link rel="canonical" href="#{@public_url}">
+      <meta property="og:title" content="Context Bot">
+      <meta property="og:description" content="#{@og_description}">
+      <meta property="og:image" content="#{@og_image_url}">
+      <meta property="og:url" content="#{@public_url}">
+      <meta property="og:type" content="website">
+      <meta property="og:site_name" content="Context Bot">
+      <meta name="twitter:card" content="summary_large_image">
+      <meta name="twitter:title" content="Context Bot">
+      <meta name="twitter:description" content="#{@og_description}">
+      <meta name="twitter:image" content="#{@og_image_url}">
       <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -57,6 +72,15 @@ defmodule ContextBotWeb.PageController do
         a:hover {
           text-decoration: underline;
         }
+        blockquote {
+          border-left: 3px solid #d0d0d0;
+          padding: 0.25rem 0 0.25rem 1rem;
+          margin: 0.75rem 0 1.25rem;
+          color: #333333;
+        }
+        blockquote p {
+          margin-bottom: 0;
+        }
         hr {
           border: none;
           border-top: 1px solid #e0e0e0;
@@ -101,6 +125,11 @@ defmodule ContextBotWeb.PageController do
         item_html = process_inline_formatting(String.slice(line, 2..-1//1))
         html = if in_list, do: "<li>#{item_html}</li>", else: "<ul><li>#{item_html}</li>"
         {acc ++ [html], true}
+
+      String.starts_with?(line, ">") ->
+        quote_text = line |> String.replace_prefix(">", "") |> String.trim_leading()
+        html = "<blockquote><p>#{process_inline_formatting(quote_text)}</p></blockquote>"
+        {acc ++ [close_list_if_needed(in_list), html], false}
 
       String.starts_with?(line, "---") ->
         {acc ++ [close_list_if_needed(in_list), "<hr>"], false}
