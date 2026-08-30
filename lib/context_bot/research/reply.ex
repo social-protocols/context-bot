@@ -138,14 +138,16 @@ defmodule ContextBot.Research.Reply do
   @doc """
   Attempts to split text into two parts, each ≤300 graphemes and ≤3,000 bytes.
 
-  Prefers a split that leaves room on part 2 for `Post.link_suffix/0` so a
-  remainder-plus-link post still fits. Falls back to a hard-cap part 2 only when
-  no such split exists without dropping words.
+  Packs as much as possible into part 1 up to the Bluesky hard cap. The 275
+  grapheme prompt target is for the model, not for this split. Boundary kind is
+  only a tie-break when two valid packs have the same part-1 length: paragraph
+  (blank line), then UAX #29 / English CLDR sentence via `unicode_string`, then
+  whitespace. A word-boundary pack near the cap beats a much shorter sentence.
+  When part-1 lengths are equal, prefer a pack whose part 2 still has room for
+  `Post.link_suffix/0`. Never cut mid-word or mid-grapheme cluster.
 
-  Greedily packs as much as possible into part 1 (up to the 275 grapheme target),
-  breaking at paragraph boundaries (double newline), then sentence breaks (period + space/newline),
-  then any whitespace boundary. Returns `{:ok, part1, part2}` on success or `:error` if
-  no valid split exists (e.g., single unbreakable chunk over 300 graphemes).
+  Returns `{:ok, part1, part2}` on success or `:error` if no valid split exists
+  (e.g., a single unbreakable token over 300 graphemes).
   """
   @spec split_text(String.t()) :: {:ok, String.t(), String.t()} | :error
   def split_text(text) when is_binary(text) do
@@ -159,81 +161,54 @@ defmodule ContextBot.Research.Reply do
   end
 
   defp try_split(text) do
-    with :error <- try_split_at_paragraph(text),
-         :error <- try_split_at_sentence(text) do
-      try_split_at_whitespace(text)
-    end
+    candidates =
+      paragraph_candidates(text) ++ sentence_candidates(text) ++ whitespace_candidates(text)
+
+    pick_best_candidate(candidates)
   end
 
-  defp try_split_at_paragraph(text) do
+  defp paragraph_candidates(text) do
     case String.split(text, "\n\n") do
-      [_single] -> :error
-      parts -> find_best_joined_split(parts, "\n\n")
+      [_single] -> []
+      parts -> joined_candidates(parts, "\n\n", :paragraph)
     end
   end
 
   # UAX #29 sentence breaks with English CLDR suppressions (U.S., Mr., e.g., …).
   # Inv 15 chopped at "U.S. " because raw ". " / ".\n" matching treated that
-  # period as a break. Scoring prefers any ≤275 split over a later real
-  # sentence between 276 and 300.
-  defp try_split_at_sentence(text) do
+  # period as a break. Do not treat a short sentence that fits as a winner when
+  # a later whitespace pack fills more of the 300-grapheme cap.
+  defp sentence_candidates(text) do
     case Unicode.String.split(text, break: :sentence, locale: "en", trim: true) do
       parts when is_list(parts) and length(parts) >= 2 ->
-        find_best_joined_split(parts, "")
+        joined_candidates(parts, "", :sentence)
 
       _error_or_single ->
-        :error
+        []
     end
   end
 
-  defp find_best_joined_split(parts, joiner) do
-    case pick_joined_split(parts, joiner, ReplyLimits.prompt_target_graphemes()) do
-      {left, right} ->
-        validate_split_parts(left, right)
+  defp joined_candidates(parts, joiner, kind) do
+    max_count = length(parts) - 1
 
-      :none ->
-        case pick_joined_split(parts, joiner, @hard_max_graphemes) do
-          {left, right} -> validate_split_parts(left, right)
-          :none -> :error
-        end
-    end
+    Enum.flat_map(1..max_count, fn count ->
+      left = parts |> Enum.take(count) |> Enum.join(joiner)
+      right = parts |> Enum.drop(count) |> Enum.join(joiner)
+      List.wrap(build_candidate(left, right, kind))
+    end)
   end
 
-  defp pick_joined_split(parts, joiner, max_left) do
-    splits =
-      parts
-      |> Enum.with_index(1)
-      |> Enum.flat_map(fn {_part, count} ->
-        left = parts |> Enum.take(count) |> Enum.join(joiner)
-        right = parts |> Enum.drop(count) |> Enum.join(joiner)
-
-        if right != "" and String.length(left) <= max_left do
-          [{left, right}]
-        else
-          []
-        end
-      end)
-
-    pick_split_with_part2_room(splits)
-  end
-
-  defp try_split_at_whitespace(text) do
+  defp whitespace_candidates(text) do
     graphemes = String.graphemes(text)
-    prompt_target = ReplyLimits.prompt_target_graphemes()
 
     graphemes
     |> whitespace_split_indices()
-    |> case do
-      [] ->
-        :error
-
-      indices ->
-        split_index = pick_whitespace_index(graphemes, indices, prompt_target)
-        {left_graphemes, right_graphemes} = Enum.split(graphemes, split_index)
-        left = Enum.join(left_graphemes)
-        right = Enum.join(right_graphemes) |> String.trim_leading()
-        validate_split_parts(left, right)
-    end
+    |> Enum.flat_map(fn split_index ->
+      {left_graphemes, right_graphemes} = Enum.split(graphemes, split_index)
+      left = Enum.join(left_graphemes)
+      right = right_graphemes |> Enum.join() |> String.trim_leading()
+      List.wrap(build_candidate(left, right, :whitespace))
+    end)
   end
 
   defp whitespace_split_indices(graphemes) do
@@ -243,65 +218,50 @@ defmodule ContextBot.Research.Reply do
     |> Enum.map(fn {_char, idx} -> idx + 1 end)
   end
 
-  defp pick_whitespace_index(graphemes, indices, target) do
-    with_room =
-      Enum.filter(indices, fn split_index ->
-        right =
-          graphemes
-          |> Enum.drop(split_index)
-          |> Enum.join()
-          |> String.trim_leading()
+  defp build_candidate(left, right, kind) do
+    left = String.trim(left)
+    right = String.trim(right)
 
-        part2_has_link_room?(right)
-      end)
-
-    usable = if with_room == [], do: indices, else: with_room
-    Enum.max_by(usable, &score_split_candidate(&1, target))
-  end
-
-  defp pick_split_with_part2_room([]), do: :none
-
-  defp pick_split_with_part2_room(splits) do
-    with_room = Enum.filter(splits, fn {_left, right} -> part2_has_link_room?(right) end)
-
-    case with_room do
-      [] -> List.last(splits)
-      preferred -> List.last(preferred)
+    if valid_split_parts?(left, right) do
+      %{
+        part1: left,
+        part2: right,
+        part1_len: String.length(left),
+        kind: kind,
+        link_room: part2_has_link_room?(right)
+      }
     end
   end
+
+  defp pick_best_candidate([]), do: :error
+
+  defp pick_best_candidate(candidates) do
+    best = Enum.max_by(candidates, &score_candidate/1)
+    {:ok, best.part1, best.part2}
+  end
+
+  # Maximize part 1. Link-room and boundary kind are exact-length tie-breaks only.
+  defp score_candidate(candidate) do
+    link_room = if candidate.link_room, do: 1, else: 0
+    {candidate.part1_len, link_room, boundary_rank(candidate.kind)}
+  end
+
+  defp boundary_rank(:paragraph), do: 3
+  defp boundary_rank(:sentence), do: 2
+  defp boundary_rank(:whitespace), do: 1
 
   defp part2_has_link_room?(text) when is_binary(text) do
     ReplyLimits.fits_one_post?(text <> Post.link_suffix())
   end
 
-  # Score a split candidate: prefer maximizing part1 up to target, else find closest to target
-  defp score_split_candidate(value, target) when value <= target do
-    # Within target: prefer larger (closer to target)
-    {1, value}
-  end
-
-  defp score_split_candidate(value, target) do
-    # Over target: prefer closer (smaller distance)
-    {0, -abs(value - target)}
-  end
-
-  defp validate_split_parts(left, right) do
-    left = String.trim(left)
-    right = String.trim(right)
-
+  defp valid_split_parts?(left, right) do
     left_graphemes = String.length(left)
     right_graphemes = String.length(right)
-    left_bytes = byte_size(left)
-    right_bytes = byte_size(right)
 
-    if left_graphemes > 0 and left_graphemes <= @hard_max_graphemes and
-         left_bytes <= @max_bytes and
-         right_graphemes > 0 and right_graphemes <= @hard_max_graphemes and
-         right_bytes <= @max_bytes do
-      {:ok, left, right}
-    else
-      :error
-    end
+    left_graphemes > 0 and left_graphemes <= @hard_max_graphemes and
+      byte_size(left) <= @max_bytes and
+      right_graphemes > 0 and right_graphemes <= @hard_max_graphemes and
+      byte_size(right) <= @max_bytes
   end
 
   defp select_response(content_blocks, stop_reason, pending_server_tools, seen_tool_ids)
