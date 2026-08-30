@@ -160,20 +160,40 @@ defmodule ContextBot.StandardSite.PageCopyTest do
   end
 
   describe "asked_markdown/1" do
-    test "renders the raw invocation and a public Bluesky link" do
+    test "renders a root responding-to line with handle post URLs and no invocation text" do
+      markdown =
+        PageCopy.asked_markdown(%{
+          asked_text: @launch_invocation,
+          invocation_uri: @invocation_uri,
+          invoker_handle: "jonathanwarden.com"
+        })
+
+      assert markdown ==
+               "Responding to [@jonathanwarden.com](https://bsky.app/profile/jonathanwarden.com/post/3muajo3wxyz)'s post."
+
+      refute markdown =~ "## Asked"
+      refute markdown =~ @launch_invocation
+      refute markdown =~ "Invoking post"
+    end
+
+    test "renders a reply responding-to line with invoker and parent handle post URLs" do
       markdown =
         PageCopy.asked_markdown(%{
           asked_text: @bird_invocation,
-          invocation_uri: @invocation_uri
+          invocation_uri: @invocation_uri,
+          parent_uri: @parent_uri,
+          invoker_handle: "jonathanwarden.com",
+          parent_handle: "moultano.bsky.social"
         })
 
-      assert markdown =~ "## Asked"
-      assert markdown =~ @bird_invocation
-      assert markdown =~ "https://bsky.app/profile/did:plc:alice/post/3muajo3wxyz"
-      refute markdown =~ "Parent post"
+      assert markdown ==
+               "Responding to [@jonathanwarden.com](https://bsky.app/profile/jonathanwarden.com/post/3muajo3wxyz)'s reply to [@moultano.bsky.social](https://bsky.app/profile/moultano.bsky.social/post/3parentrkey12)'s post."
+
+      refute markdown =~ "## Asked"
+      refute markdown =~ @bird_invocation
     end
 
-    test "adds a parent link when the invoking post is a reply" do
+    test "falls back to the AT-URI repo when a handle is missing" do
       markdown =
         PageCopy.asked_markdown(%{
           asked_text: @bird_invocation,
@@ -181,20 +201,37 @@ defmodule ContextBot.StandardSite.PageCopyTest do
           parent_uri: @parent_uri
         })
 
-      assert markdown =~ "https://bsky.app/profile/did:plc:alice/post/3muajo3wxyz"
-      assert markdown =~ "https://bsky.app/profile/did:plc:bob/post/3parentrkey12"
+      assert markdown ==
+               "Responding to [@did:plc:alice](https://bsky.app/profile/did:plc:alice/post/3muajo3wxyz)'s reply to [@did:plc:bob](https://bsky.app/profile/did:plc:bob/post/3parentrkey12)'s post."
     end
 
-    test "omits the parent link when the parent URI is missing or unusable" do
+    test "uses the root sentence when the parent URI is missing or unusable" do
       markdown =
         PageCopy.asked_markdown(%{
           asked_text: @bird_invocation,
           invocation_uri: @invocation_uri,
-          parent_uri: "not-an-at-uri"
+          parent_uri: "not-an-at-uri",
+          invoker_handle: "alice.test"
         })
+
+      assert markdown ==
+               "Responding to [@alice.test](https://bsky.app/profile/alice.test/post/3muajo3wxyz)'s post."
 
       refute markdown =~ "Parent"
       refute markdown =~ "not-an-at-uri"
+      refute markdown =~ @bird_invocation
+    end
+
+    test "does not fail when the invocation URI is missing" do
+      markdown =
+        PageCopy.asked_markdown(%{
+          asked_text: @bird_invocation,
+          invoker_handle: "alice.test"
+        })
+
+      assert is_binary(markdown)
+      refute markdown =~ "## Asked"
+      refute markdown =~ @bird_invocation
     end
   end
 
@@ -209,10 +246,17 @@ defmodule ContextBot.StandardSite.PageCopyTest do
           "thread" => %{
             "post" => %{
               "uri" => @invocation_uri,
+              "author" => %{"did" => "did:plc:alice", "handle" => "alice.test"},
               "record" => %{
                 "text" => @bird_invocation,
                 "facets" => [mention_facet(0, 15, @bot_did)],
                 "reply" => %{"parent" => %{"uri" => @parent_uri}}
+              }
+            },
+            "parent" => %{
+              "post" => %{
+                "uri" => @parent_uri,
+                "author" => %{"did" => "did:plc:bob", "handle" => "bob.test"}
               }
             }
           }
@@ -224,6 +268,8 @@ defmodule ContextBot.StandardSite.PageCopyTest do
       assert subject.asked_text == @bird_invocation
       assert subject.parent_uri == @parent_uri
       assert subject.invocation_uri == @invocation_uri
+      assert subject.invoker_handle == "alice.test"
+      assert subject.parent_handle == "bob.test"
     end
 
     test "falls back to the notification record and omits a missing parent" do
@@ -233,6 +279,7 @@ defmodule ContextBot.StandardSite.PageCopyTest do
         canonical_thread: nil,
         raw_thread: nil,
         raw_notification: %{
+          "author" => %{"did" => "did:plc:alice", "handle" => "alice.test"},
           "record" => %{
             "text" => "@getcontext.bot Planned explosion?",
             "facets" => [mention_facet(0, 15, @bot_did)]
@@ -244,12 +291,15 @@ defmodule ContextBot.StandardSite.PageCopyTest do
 
       assert subject.asked_text == "@getcontext.bot Planned explosion?"
       assert subject.parent_uri == nil
+      assert subject.invoker_handle == "alice.test"
+      assert subject.parent_handle == nil
     end
 
     test "uses live-run invocation_text when no post record is present" do
       invocation = %{
         invocation_uri: @invocation_uri,
         invocation_text: "Is this fair?",
+        actor_handle: "operator.test",
         canonical_thread: nil,
         raw_thread: nil,
         raw_notification: %{"source" => "local_live_demo"}
@@ -259,6 +309,8 @@ defmodule ContextBot.StandardSite.PageCopyTest do
 
       assert subject.asked_text == "Is this fair?"
       assert subject.parent_uri == nil
+      assert subject.invoker_handle == "operator.test"
+      assert subject.parent_handle == nil
     end
 
     test "does not invent a parent when the record has no reply" do

@@ -48,6 +48,8 @@ defmodule ContextBot.StandardSite.DocumentTest do
     },
     asked_text: "What bird is that?",
     parent_uri: "at://did:plc:bob/app.bsky.feed.post/3parentrkey12",
+    invoker_handle: "alice.test",
+    parent_handle: "bob.test",
     document_reader_url: "https://standard-reader.app/a/#{@repo}/3kfullresp"
   }
 
@@ -243,26 +245,29 @@ defmodule ContextBot.StandardSite.DocumentTest do
       refute markdown =~ "authorization"
     end
 
-    test "places an Asked block with the invocation and parent links before the writeup" do
+    test "places a reply responding-to line before the writeup and does not repeat the question" do
       markdown = Document.format_markdown(@content)
-      asked_at = :binary.match(markdown, "## Asked") |> elem(0)
+      responding_at = :binary.match(markdown, "Responding to") |> elem(0)
       analysis_at = :binary.match(markdown, "# Research Analysis") |> elem(0)
+      block = responding_block(markdown)
 
-      assert asked_at < analysis_at
-      assert markdown =~ "What bird is that?"
-      assert markdown =~ "https://bsky.app/profile/did:plc:abc/post/3k123"
-      assert markdown =~ "https://bsky.app/profile/did:plc:bob/post/3parentrkey12"
+      assert responding_at < analysis_at
+      refute markdown =~ "## Asked"
+      refute block =~ "What bird is that?"
+
+      assert block ==
+               "Responding to [@alice.test](https://bsky.app/profile/alice.test/post/3k123)'s reply to [@bob.test](https://bsky.app/profile/bob.test/post/3parentrkey12)'s post."
     end
 
-    test "places a Claude continue link after Asked and before the writeup" do
+    test "places a Claude continue link after the responding-to line and before the writeup" do
       markdown = Document.format_markdown(@content)
-      asked_at = :binary.match(markdown, "## Asked") |> elem(0)
+      responding_at = :binary.match(markdown, "Responding to") |> elem(0)
       continue_at = :binary.match(markdown, "Continue this conversation in Claude") |> elem(0)
       analysis_at = :binary.match(markdown, "# Research Analysis") |> elem(0)
       href = continue_href(markdown)
       query = continue_query(href)
 
-      assert asked_at < continue_at
+      assert responding_at < continue_at
       assert continue_at < analysis_at
       assert href =~ "https://claude.ai/new?q="
       assert query =~ @content.document_reader_url
@@ -273,12 +278,16 @@ defmodule ContextBot.StandardSite.DocumentTest do
       refute href =~ "claude://"
     end
 
-    test "omits the parent link when the invoking post is not a reply" do
+    test "uses the root sentence when the invoking post is not a reply" do
       markdown = Document.format_markdown(Map.delete(@content, :parent_uri))
+      block = responding_block(markdown)
 
-      assert markdown =~ "## Asked"
-      assert markdown =~ "https://bsky.app/profile/did:plc:abc/post/3k123"
+      assert block ==
+               "Responding to [@alice.test](https://bsky.app/profile/alice.test/post/3k123)'s post."
+
+      refute markdown =~ "## Asked"
       refute markdown =~ "3parentrkey12"
+      refute block =~ "What bird is that?"
     end
   end
 
@@ -312,6 +321,12 @@ defmodule ContextBot.StandardSite.DocumentTest do
       assert {:error, :record_not_found} =
                Document.add_post_ref(FakeDocClientNotFound, @repo, "3k123", post_uri)
     end
+  end
+
+  defp responding_block(markdown) do
+    markdown
+    |> String.split("\n")
+    |> Enum.find("", &String.starts_with?(&1, "Responding to "))
   end
 
   defp continue_href(markdown) do
