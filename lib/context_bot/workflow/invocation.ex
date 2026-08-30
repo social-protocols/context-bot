@@ -77,6 +77,7 @@ defmodule ContextBot.Workflow.Invocation do
     :selected_reply,
     :reply_validation,
     :full_response,
+    :no_reply,
     :standard_site_document_uri,
     :standard_site_document_rkey,
     :reply_repo,
@@ -155,6 +156,7 @@ defmodule ContextBot.Workflow.Invocation do
     field :full_response, :string
     field :selected_reply, :string
     field :reply_validation, :map
+    field :no_reply, :boolean, default: false
     field :standard_site_document_uri, :string
     field :standard_site_document_rkey, :string
     field :reply_repo, :string

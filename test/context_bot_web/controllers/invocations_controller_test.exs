@@ -261,6 +261,36 @@ defmodule ContextBotWeb.InvocationsControllerTest do
       assert body =~ "https://bsky.app/profile/did:plc:bot/post/reply2"
     end
 
+    test "shows a completed no-reply without inventing reply or reader links", %{conn: conn} do
+      {:ok, inv} =
+        %Invocation{}
+        |> Invocation.changeset(%{
+          dry_run: false,
+          invocation_uri: "at://did:plc:test/app.bsky.feed.post/abc123",
+          notification_cid: "cid1",
+          current_cid: "cid1",
+          actor_did: "did:plc:test",
+          actor_handle: "test.bsky.social",
+          raw_notification: %{},
+          received_at: ~U[2026-08-26 10:00:00Z],
+          status: :complete,
+          stage: :complete,
+          no_reply: true,
+          reply_validation: %{"result" => "no_reply"}
+        })
+        |> Repo.insert()
+
+      conn = get(conn, ~p"/invocations")
+      body = html_response(conn, 200)
+
+      assert body =~ Integer.to_string(inv.id)
+      assert body =~ "complete"
+      assert body =~ "no reply"
+      refute body =~ "https://bsky.app/profile/did:plc:bot/"
+      refute body =~ "https://standard-reader.app/"
+      refute body =~ "couldn't reply"
+    end
+
     test "omits reply links when reply URIs are null", %{conn: conn} do
       {:ok, inv} =
         %Invocation{}

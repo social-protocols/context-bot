@@ -40,7 +40,8 @@ defmodule ContextBot.Research.Reply do
   @type selected :: %{
           text: String.t(),
           full_response: String.t(),
-          document_title: String.t()
+          document_title: String.t(),
+          disposition: :reply | :no_reply
         }
   @type result ::
           {:ok, selected()}
@@ -730,7 +731,11 @@ defmodule ContextBot.Research.Reply do
   defp structured_field_from_messages(_messages, _field), do: nil
 
   defp assistant_structured(%{"role" => "assistant", "content" => content}) do
-    parse_structured_response(assistant_plain_text(content))
+    case parse_structured_response(assistant_plain_text(content)) do
+      {:ok, %{disposition: :no_reply}} -> :invalid
+      {:ok, selected} -> {:ok, selected}
+      :invalid -> :invalid
+    end
   end
 
   defp assistant_structured(_message), do: :invalid
@@ -771,7 +776,25 @@ defmodule ContextBot.Research.Reply do
     end
   end
 
-  defp structured_fields(%{
+  defp structured_fields(%{"disposition" => "no_reply"}) do
+    {:ok,
+     %{
+       text: "",
+       full_response: "",
+       document_title: "",
+       disposition: :no_reply
+     }}
+  end
+
+  defp structured_fields(%{"disposition" => "reply"} = decoded), do: reply_fields(decoded)
+
+  defp structured_fields(%{"disposition" => _other}), do: :invalid
+
+  defp structured_fields(decoded) when is_map(decoded), do: reply_fields(decoded)
+
+  defp structured_fields(_decoded), do: :invalid
+
+  defp reply_fields(%{
          "title" => title,
          "compact_reply" => compact_reply,
          "full_response" => full_response
@@ -786,18 +809,21 @@ defmodule ContextBot.Research.Reply do
        %{
          text: compact_reply,
          full_response: full_response,
-         document_title: title
+         document_title: title,
+         disposition: :reply
        }}
     else
       :invalid
     end
   end
 
-  defp structured_fields(_decoded), do: :invalid
+  defp reply_fields(_decoded), do: :invalid
+
+  defp classify_structured(%{disposition: :no_reply} = selected), do: {:ok, selected}
 
   defp classify_structured(%{text: compact_reply} = selected) do
     case limit_reasons(compact_reply) do
-      [] -> {:ok, selected}
+      [] -> {:ok, Map.put_new(selected, :disposition, :reply)}
       reasons -> {:repairable, compact_reply, reasons}
     end
   end

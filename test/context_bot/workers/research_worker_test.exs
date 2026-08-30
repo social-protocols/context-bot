@@ -775,6 +775,79 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert Repo.aggregate(Oban.Job, :count) == 0
   end
 
+  test "completes a no-reply result without Bluesky, Standard.site, or a public failure" do
+    invocation = invocation("no-reply", :thread_ready)
+
+    configure_runner(
+      {:ok,
+       runner_result()
+       |> Map.put(:disposition, :no_reply)
+       |> Map.put(:text, "")
+       |> Map.delete(:full_response)
+       |> Map.put(:validation, %{"result" => "no_reply", "repair_used" => false})}
+    )
+
+    configure_worker(
+      atproto_client: FakeStandardSiteTrackingClient,
+      limit_notice: LimitNoticeRecorder,
+      reply_job_builder: fn _invocation -> flunk("no-reply constructed a reply job") end,
+      tid_generator: fn _timestamp -> flunk("no-reply constructed a publication key") end
+    )
+
+    assert :ok = perform(invocation)
+    persisted = Repo.reload!(invocation)
+    assert persisted.status == :complete
+    assert persisted.stage == :complete
+    assert persisted.completed_at == @now
+    assert persisted.no_reply == true
+    assert persisted.selected_reply == nil
+    assert persisted.full_response == nil
+    assert persisted.reply_validation == %{"result" => "no_reply", "repair_used" => false}
+    assert persisted.reply_repo == nil
+    assert persisted.reply_rkey == nil
+    assert persisted.reply_record == nil
+    assert persisted.standard_site_document_uri == nil
+    assert persisted.standard_site_document_rkey == nil
+    assert persisted.failure_category == nil
+    assert persisted.failure_detail == nil
+    refute_received {:standard_site_get, _, _}
+    refute_received {:standard_site_put, _, _, _}
+    refute_received {:limit_notice, _, _}
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "completes a dry-run no-reply without inventing a compact or document" do
+    invocation =
+      invocation("dry-no-reply", :thread_ready, %{
+        dry_run: true,
+        target_uri: "at://did:plc:target/app.bsky.feed.post/selected",
+        invocation_text: "getcontext.bot is great"
+      })
+
+    configure_runner(
+      {:ok,
+       runner_result()
+       |> Map.put(:disposition, :no_reply)
+       |> Map.put(:text, "")
+       |> Map.put(:validation, %{"result" => "no_reply", "repair_used" => false})}
+    )
+
+    configure_worker(
+      settings: Settings.load(anthropic_daily_budget_usd: "20.000000"),
+      reply_job_builder: fn _invocation -> flunk("dry no-reply constructed a reply job") end,
+      tid_generator: fn _timestamp -> flunk("dry no-reply constructed a publication key") end
+    )
+
+    assert :ok = perform(invocation)
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert persisted.no_reply == true
+    assert persisted.selected_reply == nil
+    assert persisted.full_response == nil
+    assert persisted.reply_record == nil
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
   test "does not post a limit notice on structured-output or other research failures" do
     for {suffix, runner_error} <- [
           {"structured", :invalid_structured_output},

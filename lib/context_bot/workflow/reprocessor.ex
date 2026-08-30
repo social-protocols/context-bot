@@ -102,6 +102,7 @@ defmodule ContextBot.Workflow.Reprocessor do
         research_claimed_at: nil,
         selected_reply: nil,
         reply_validation: nil,
+        no_reply: false,
         reply_repo: nil,
         reply_rkey: nil,
         reply_record: nil,

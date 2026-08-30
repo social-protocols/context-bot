@@ -1272,6 +1272,24 @@ defmodule ContextBot.Research.RunnerTest do
     refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
   end
 
+  test "a no_reply structured object completes research without a compact or writeup" do
+    invocation = invocation("no-reply-structured")
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(message_body(StructuredFixtures.no_reply_json())))}
+    ])
+
+    assert {:ok, result} = Runner.run(invocation, options())
+    assert result.disposition == :no_reply
+    assert result.text == ""
+    refute Map.get(result, :full_response)
+    refute Map.get(result, :document_title)
+    assert result.validation == %{"result" => "no_reply", "repair_used" => false}
+    refute Map.has_key?(result, :text_part2)
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
+  end
+
   test "a structured compact that fits in one post does not split" do
     invocation = invocation("dual-format-one-post")
     compact = String.duplicate("b", 250)

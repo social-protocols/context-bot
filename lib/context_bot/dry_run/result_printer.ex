@@ -7,6 +7,18 @@ defmodule ContextBot.DryRun.ResultPrinter do
   alias ContextBot.Workflow.Invocation
 
   @spec format_complete(Invocation.t(), non_neg_integer()) :: [String.t()]
+  def format_complete(%Invocation{no_reply: true} = invocation, cost_microdollars)
+      when is_integer(cost_microdollars) and cost_microdollars >= 0 do
+    totals = get_in(invocation.anthropic_usage || %{}, ["totals"]) || %{}
+
+    [
+      "status=complete",
+      "disposition=no_reply",
+      usage_line(totals, invocation, cost_microdollars),
+      link_line(:none)
+    ]
+  end
+
   def format_complete(%Invocation{} = invocation, cost_microdollars)
       when is_integer(cost_microdollars) and cost_microdollars >= 0 do
     totals = get_in(invocation.anthropic_usage || %{}, ["totals"]) || %{}

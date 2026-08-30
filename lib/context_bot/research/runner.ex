@@ -35,6 +35,7 @@ defmodule ContextBot.Research.Runner do
           required(:text) => String.t(),
           optional(:full_response) => String.t(),
           optional(:document_title) => String.t(),
+          optional(:disposition) => :reply | :no_reply,
           required(:usage) => map(),
           required(:validation) => map()
         }
@@ -348,12 +349,23 @@ defmodule ContextBot.Research.Runner do
     end
   end
 
+  defp finish_selected(invocation, %{disposition: :no_reply}, config) do
+    %{
+      messages: invocation.anthropic_messages,
+      text: "",
+      disposition: :no_reply,
+      usage: usage_evidence(invocation, config),
+      validation: %{"result" => "no_reply", "repair_used" => false}
+    }
+  end
+
   defp finish_selected(invocation, selected, config) do
     %{
       messages: invocation.anthropic_messages,
       text: selected.text,
       full_response: selected.full_response,
       document_title: selected.document_title,
+      disposition: Map.get(selected, :disposition, :reply),
       usage: usage_evidence(invocation, config),
       validation: %{"result" => "valid", "repair_used" => false}
     }
