@@ -216,16 +216,24 @@ defmodule ContextBot.AdmissionTest do
     assert Repo.aggregate(Oban.Job, :count) == 0
   end
 
-  test "operator allowlisting never bypasses rate limits" do
-    historical("allowlist-one", @actor_did, DateTime.add(@now, -30, :minute))
-    historical("allowlist-two", @actor_did, DateTime.add(@now, -10, :minute))
+  test "skips actor hourly and daily windows for an operator-allowlisted DID" do
+    historical("allowlist-hour-one", @actor_did, DateTime.add(@now, -30, :minute))
+    historical("allowlist-hour-two", @actor_did, DateTime.add(@now, -10, :minute))
+
+    for {hours_ago, index} <- Enum.with_index([2, 3, 4], 1) do
+      historical(
+        "allowlist-day-#{index}",
+        @actor_did,
+        DateTime.add(@now, -hours_ago, :hour)
+      )
+    end
 
     invocation =
       eligible_invocation("allowlist-current", @actor_did, "operator_allowlist")
 
     allowlisted_settings = settings(operator_allowed_dids: [@actor_did])
 
-    assert {:deferred, :rate, _deferred} =
+    assert {:ok, admitted} =
              Admission.admit(
                invocation,
                @now,
@@ -233,7 +241,78 @@ defmodule ContextBot.AdmissionTest do
                thread_job(invocation)
              )
 
+    assert admitted.status == :capturing_thread
+    assert admitted.defer_until == nil
+    assert Repo.aggregate(Oban.Job, :count) == 1
+  end
+
+  test "still defers a non-operator DID when another DID is operator-allowlisted" do
+    historical("non-operator-hour-one", @actor_did, DateTime.add(@now, -30, :minute))
+    historical("non-operator-hour-two", @actor_did, DateTime.add(@now, -10, :minute))
+    invocation = eligible_invocation("non-operator-current", @actor_did)
+
+    others_allowlisted =
+      settings(operator_allowed_dids: ["did:plc:operatoraaaaaaaaaaaaaaaaaa"])
+
+    assert {:deferred, :rate, deferred} =
+             Admission.admit(invocation, @now, others_allowlisted, thread_job(invocation))
+
+    assert deferred.status == :deferred_rate
     assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "still applies the global hourly limit to an operator-allowlisted DID" do
+    for index <- 1..10 do
+      historical(
+        "operator-global-hour-#{index}",
+        "did:plc:globalhour#{index}",
+        DateTime.add(@now, -3_600 + index, :second)
+      )
+    end
+
+    invocation =
+      eligible_invocation("operator-global-current", @actor_did, "operator_allowlist")
+
+    allowlisted_settings = settings(operator_allowed_dids: [@actor_did])
+
+    assert {:deferred, :rate, deferred} =
+             Admission.admit(
+               invocation,
+               @now,
+               allowlisted_settings,
+               thread_job(invocation)
+             )
+
+    assert deferred.status == :deferred_rate
+    assert DateTime.compare(deferred.defer_until, DateTime.add(@now, 1, :second)) == :eq
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "resume_available? skips actor windows for an operator-allowlisted DID" do
+    invocation =
+      insert_invocation("operator-resume", @actor_did, :deferred_budget, %{
+        admitted_at: DateTime.add(@now, -10, :minute)
+      })
+
+    operator_settings =
+      settings(
+        operator_allowed_dids: [@actor_did],
+        actor_hourly_limit: 1,
+        actor_daily_limit: 1,
+        global_hourly_limit: 2,
+        global_daily_limit: 50
+      )
+
+    historical("operator-resume-other", @actor_did, DateTime.add(@now, -5, :minute))
+    assert Admission.resume_available?(invocation, @now, operator_settings)
+
+    historical(
+      "operator-resume-global",
+      "did:plc:otheractoraaaaaaaaaaaaaaaa",
+      DateTime.add(@now, -5, :minute)
+    )
+
+    refute Admission.resume_available?(invocation, @now, operator_settings)
   end
 
   test "serializes concurrent claims so only the actor limit is admitted" do

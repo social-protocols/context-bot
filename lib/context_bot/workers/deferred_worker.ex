@@ -136,7 +136,8 @@ defmodule ContextBot.Workers.DeferredWorker do
               dependencies.batch_size,
               workflow,
               cursor,
-              boundary_id
+              boundary_id,
+              dependencies.settings.operator_allowed_dids
             )
 
           {deferred, remaining_budget} =
@@ -164,9 +165,9 @@ defmodule ContextBot.Workers.DeferredWorker do
   @spec recovery_query(pos_integer()) :: Ecto.Query.t()
   defdelegate recovery_query(batch_size), to: Recovery, as: :candidate_query
 
-  defp deferred_candidates(now, limit, workflow, cursor, boundary_id) do
+  defp deferred_candidates(now, limit, workflow, cursor, boundary_id, operator_allowed_dids) do
     Invocation
-    |> due_candidates(now, workflow)
+    |> due_candidates(now, workflow, operator_allowed_dids)
     |> after_cursor(cursor)
     |> before_boundary(boundary_id)
     |> order_by([invocation], asc: invocation.received_at, asc: invocation.id)
@@ -174,7 +175,7 @@ defmodule ContextBot.Workers.DeferredWorker do
     |> Repo.all()
   end
 
-  defp due_candidates(query, now, :dry_run) do
+  defp due_candidates(query, now, :dry_run, _operator_allowed_dids) do
     where(
       query,
       [invocation],
@@ -183,11 +184,25 @@ defmodule ContextBot.Workers.DeferredWorker do
     )
   end
 
-  defp due_candidates(query, now, :all) do
+  defp due_candidates(query, now, :all, []) do
     where(
       query,
       [invocation],
       invocation.stage == :deferred_capacity or
+        (invocation.stage in [:deferred_rate, :deferred_budget] and
+           not is_nil(invocation.defer_until) and invocation.defer_until <= ^now)
+    )
+  end
+
+  # Already-parked operator deferred_rate rows are due immediately so a deploy
+  # can resume them without waiting out a prior actor-window defer_until.
+  defp due_candidates(query, now, :all, operator_allowed_dids) do
+    where(
+      query,
+      [invocation],
+      invocation.stage == :deferred_capacity or
+        (invocation.stage == :deferred_rate and
+           invocation.actor_did in ^operator_allowed_dids) or
         (invocation.stage in [:deferred_rate, :deferred_budget] and
            not is_nil(invocation.defer_until) and invocation.defer_until <= ^now)
     )
@@ -211,7 +226,7 @@ defmodule ContextBot.Workers.DeferredWorker do
 
   defp dry_boundary_id(now) do
     Invocation
-    |> due_candidates(now, :dry_run)
+    |> due_candidates(now, :dry_run, [])
     |> select([invocation], max(invocation.id))
     |> Repo.one()
   end
