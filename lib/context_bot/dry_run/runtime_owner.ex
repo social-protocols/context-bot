@@ -145,10 +145,8 @@ defmodule ContextBot.DryRun.RuntimeOwner do
   end
 
   defp write_handshake(port, nonce) do
-    case Port.command(port, nonce) do
-      true -> :ok
-      false -> :ok
-    end
+    true = Port.command(port, nonce)
+    :ok
   rescue
     ArgumentError -> :closed
   end
