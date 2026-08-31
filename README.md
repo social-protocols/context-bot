@@ -228,7 +228,7 @@ Keep live inspection aggregate-only. Do not select raw notifications, threads, A
 
 ## Automatic deployment
 
-A GitHub Actions workflow automatically deploys the application to Fly whenever changes are pushed to the `main` branch. To enable automatic deployments, add the `FLY_API_TOKEN` as a GitHub Actions secret:
+Quality and tests run on pull requests targeting `main`. After squash+fast-forward onto `main`, a GitHub Actions workflow deploys to Fly; it does not re-run the test suite. To enable automatic deployments, add the `FLY_API_TOKEN` as a GitHub Actions secret:
 
 1. Generate a Fly API token with `fly auth token` or retrieve it from your Bitwarden item.
 2. In your GitHub repository, go to Settings → Secrets and variables → Actions.

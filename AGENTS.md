@@ -45,6 +45,10 @@ The repository uses local git hooks in `.githooks/` to catch issues before CI:
 
 Hooks are automatically installed via `git config core.hooksPath .githooks` during the `.cursor/environment.json` install step. Never bypass hooks with `git commit --no-verify` or `git push --no-verify` unless Jonathan explicitly authorizes it for a specific commit. CI is the backstop, not the only gate — hooks provide fast local feedback and reduce CI churn.
 
+### GitHub Actions
+
+`Test & Quality Check` and `Type Check` run on pull requests targeting `main` (and on manual `workflow_dispatch`), not on push to `main`. After squash+fast-forward onto `main`, only Deploy runs. Keep those two PR checks required in branch protection so untested code cannot merge. Do not re-add a post-merge test job because the squash SHA differs from the PR head.
+
 ## Cursor Cloud specific instructions
 
 Cursor cloud agents automatically install git hooks during environment setup. The hooks will run on every commit and push operation. Do not use `--no-verify` to bypass hooks unless explicitly authorized.
