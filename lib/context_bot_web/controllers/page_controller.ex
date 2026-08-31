@@ -101,15 +101,31 @@ defmodule ContextBotWeb.PageController do
           border-top: 1px solid #e0e0e0;
           margin: 2rem 0;
         }
+        .brand {
+          display: flex;
+          align-items: center;
+          gap: 1rem;
+          margin-bottom: 1rem;
+        }
+        .brand img {
+          width: 5.5rem;
+          height: 5.5rem;
+          border-radius: 50%;
+          flex-shrink: 0;
+        }
+        .brand h1 {
+          margin-bottom: 0;
+        }
         @media (max-width: 640px) {
           body { padding: 1rem 0.75rem; }
           h1 { font-size: 2rem; }
           h2 { font-size: 1.25rem; }
+          .brand img { width: 4.25rem; height: 4.25rem; }
         }
       </style>
     </head>
     <body>
-    #{insert_featured_embed(markdown_to_html(@homepage_md))}
+    #{insert_featured_embed(insert_brand_heading(markdown_to_html(@homepage_md)))}
     </body>
     </html>
     """
@@ -118,6 +134,20 @@ defmodule ContextBotWeb.PageController do
     |> put_resp_header("content-security-policy", @embed_csp)
     |> put_resp_content_type("text/html")
     |> send_resp(200, html_content)
+  end
+
+  defp insert_brand_heading(html) do
+    String.replace(
+      html,
+      "<h1>Context Bot</h1>",
+      """
+      <header class="brand">
+        <img src="/images/logo.png" alt="Context Bot" width="96" height="96">
+        <h1>Context Bot</h1>
+      </header>
+      """,
+      global: false
+    )
   end
 
   defp insert_featured_embed(html) do
