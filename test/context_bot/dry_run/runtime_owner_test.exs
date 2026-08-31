@@ -36,6 +36,9 @@ defmodule ContextBot.DryRun.RuntimeOwnerTest do
     assert RuntimeOwner.owned?(owner)
     assert {:error, :runtime_owned} = RuntimeOwner.acquire(database: database)
 
+    assert {:error, :runtime_owned} =
+             RuntimeOwner.acquire(database: database, pause_after_open_ms: 20)
+
     assert :ok = RuntimeOwner.release(owner)
     refute Process.alive?(owner)
 
@@ -68,6 +71,36 @@ defmodule ContextBot.DryRun.RuntimeOwnerTest do
     assert :ok = RuntimeOwner.release(second)
   end
 
+  test "a flock that exits 75 before the handshake Port.command is runtime_owned", %{
+    directory: dir
+  } do
+    flock = conflict_flock_stub(dir)
+    database = Path.join(dir, "closed-conflict.db")
+
+    assert {:error, :runtime_owned} =
+             RuntimeOwner.acquire(
+               database: database,
+               flock: flock,
+               handshake_timeout_ms: 500,
+               pause_after_open_ms: 20
+             )
+  end
+
+  test "a flock that exits a non-conflict status before handshake stays lock-failed", %{
+    directory: dir
+  } do
+    flock = failing_flock_stub(dir, status: 1)
+    database = Path.join(dir, "closed-failure.db")
+
+    assert {:error, :runtime_lock_failed} =
+             RuntimeOwner.acquire(
+               database: database,
+               flock: flock,
+               handshake_timeout_ms: 500,
+               pause_after_open_ms: 20
+             )
+  end
+
   defp acquire_eventually(database, attempts \\ 20)
 
   defp acquire_eventually(_database, 0), do: {:error, :runtime_lock_failed}
@@ -81,5 +114,26 @@ defmodule ContextBot.DryRun.RuntimeOwnerTest do
       result ->
         result
     end
+  end
+
+  defp conflict_flock_stub(directory) do
+    write_stub(directory, "flock-conflict", """
+    #!/bin/sh
+    exit 75
+    """)
+  end
+
+  defp failing_flock_stub(directory, opts) do
+    write_stub(directory, "flock-failed", """
+    #!/bin/sh
+    exit #{Keyword.fetch!(opts, :status)}
+    """)
+  end
+
+  defp write_stub(directory, name, script) do
+    path = Path.join(directory, name)
+    File.write!(path, script)
+    File.chmod!(path, 0o755)
+    path
   end
 end
