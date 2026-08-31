@@ -6,6 +6,7 @@ defmodule ContextBotWeb.PageControllerTest do
 
     assert response = html_response(conn, 200)
     assert response =~ "Context Bot"
+    assert response =~ ~s(<img src="/images/logo.png" alt="Context Bot" width="96" height="96">)
     assert response =~ "@getcontext.bot"
     refute response =~ "@getcontext-bot"
     assert response =~ "on a Bluesky post"
@@ -117,6 +118,14 @@ defmodule ContextBotWeb.PageControllerTest do
 
   test "GET /images/og.png serves the share image", %{conn: conn} do
     conn = get(conn, "/images/og.png")
+
+    assert conn.status == 200
+    assert get_resp_header(conn, "content-type") == ["image/png"]
+    assert byte_size(conn.resp_body) > 1_000
+  end
+
+  test "GET /images/logo.png serves the homepage logo", %{conn: conn} do
+    conn = get(conn, "/images/logo.png")
 
     assert conn.status == 200
     assert get_resp_header(conn, "content-type") == ["image/png"]
