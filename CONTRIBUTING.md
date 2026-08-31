@@ -172,6 +172,7 @@ Each worktree maintains independent `deps/`, `_build/`, and `data/` directories.
 - Ensure `just check` passes locally before pushing
 - Fill out the PR template completely
 - Reference any related issues
+- GitHub Actions `Test & Quality Check` and `Type Check` run on the PR, not after merge to `main`. Merge with squash+fast-forward; `main` only deploys. Keep those two checks required in branch protection so untested code cannot merge.
 
 ## Questions?
 

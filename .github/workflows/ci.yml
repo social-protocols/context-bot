@@ -1,8 +1,8 @@
 name: CI
 
+# Quality and tests run on PRs targeting main, not on push to main.
+# After squash+fast-forward, Deploy (deploy.yml) is the only post-merge job.
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
