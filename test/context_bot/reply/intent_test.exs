@@ -2,6 +2,7 @@ defmodule ContextBot.Reply.IntentTest do
   use ExUnit.Case, async: true
 
   alias ContextBot.Reply.Intent
+  alias ContextBot.Research.ReplyLimits
   alias ContextBot.Workflow.Invocation
 
   @created_at ~U[2026-08-24 12:34:56.123456Z]
@@ -94,7 +95,7 @@ defmodule ContextBot.Reply.IntentTest do
 
     assert intent.reply_record == %{
              "$type" => "app.bsky.feed.post",
-             "text" => "This is part 1.",
+             "text" => "This is part 1." <> ReplyLimits.continuation_ellipsis(),
              "createdAt" => "2026-08-24T12:34:56.123456Z",
              "reply" => %{
                "parent" => %{
@@ -109,9 +110,10 @@ defmodule ContextBot.Reply.IntentTest do
            }
 
     assert intent.reply_part2_rkey == "3mpart2rkey222"
+    expected_part2 = ReplyLimits.continuation_ellipsis() <> "This is part 2."
 
     assert %{
-             "text" => "This is part 2.",
+             "text" => ^expected_part2,
              "createdAt" => created_at,
              "reply" => %{"root" => root}
            } = intent.reply_part2_record
@@ -189,9 +191,9 @@ defmodule ContextBot.Reply.IntentTest do
                reader_url: reader_url
              )
 
-    assert intent.reply_record["text"] == part1
+    assert intent.reply_record["text"] == part1 <> ReplyLimits.continuation_ellipsis()
     refute Map.has_key?(intent.reply_record, "facets")
-    assert intent.reply_part2_record["text"] == remainder
+    assert intent.reply_part2_record["text"] == ReplyLimits.continuation_ellipsis() <> remainder
     assert intent.reply_part2_record["readerUrl"] == reader_url
     refute Map.has_key?(intent, :reply_part3_record)
   end
@@ -214,12 +216,54 @@ defmodule ContextBot.Reply.IntentTest do
                reader_url: reader_url
              )
 
-    assert intent.reply_record["text"] == part1
-    assert intent.reply_part2_record["text"] == remainder
+    assert intent.reply_record["text"] == part1 <> ReplyLimits.continuation_ellipsis()
+    assert intent.reply_part2_record["text"] == ReplyLimits.continuation_ellipsis() <> remainder
     refute Map.has_key?(intent.reply_part2_record, "readerUrl")
     assert intent.reply_part3_rkey == "3mpart3rkey333"
     assert intent.reply_part3_record["text"] == "full response"
     assert intent.reply_part3_record["readerUrl"] == reader_url
+  end
+
+  test "freezes continuation ellipses on split body posts but not a link-only third post" do
+    invocation = invocation()
+    ellipsis = ReplyLimits.continuation_ellipsis()
+    part1 = String.duplicate("a", 208)
+    remainder = String.duplicate("b", 290)
+    reader_url = "https://standard-reader.app/a/did:plc:test/3k123"
+    rkey_generator = sequence_generator(["3mpart1rkey111", "3mpart2rkey222", "3mpart3rkey333"])
+
+    assert {:ok, intent} =
+             Intent.build_with_part2(
+               invocation,
+               part1,
+               remainder,
+               "did:plc:contextbot",
+               @created_at,
+               rkey_generator,
+               reader_url: reader_url
+             )
+
+    assert intent.reply_record["text"] == part1 <> ellipsis
+    assert intent.reply_part2_record["text"] == ellipsis <> remainder
+    assert intent.reply_part3_record["text"] == "full response"
+    refute String.contains?(intent.reply_part3_record["text"], ellipsis)
+  end
+
+  test "a single-post compact keeps its text unchanged" do
+    invocation = invocation()
+    text = "A bounded reply."
+
+    assert {:ok, intent} =
+             Intent.build(
+               invocation,
+               text,
+               "did:plc:contextbot",
+               @created_at,
+               fn _timestamp -> @rkey end
+             )
+
+    assert intent.reply_record["text"] == text
+    refute String.contains?(intent.reply_record["text"], ReplyLimits.continuation_ellipsis())
   end
 
   defp sequence_generator(values) do

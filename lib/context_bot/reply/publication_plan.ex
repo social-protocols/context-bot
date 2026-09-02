@@ -7,13 +7,15 @@ defmodule ContextBot.Reply.PublicationPlan do
   1. No remainder, and compact plus ` (full response)` fits → one post.
   2. No remainder, compact fits but plus the link does not → post 1 compact,
      post 2 link-only.
-  3. Remainder present → post 1 is part 1. Post 2 is part 2 plus the link when
-     that pair still fits (`:post_2_remainder_and_link`). If part 2 plus the
-     link does not fit, post 2 is part 2 and post 3 is the link-only label.
-     Never drop part 2.
+  3. Remainder present → post 1 is part 1 with a trailing U+2026, and post 2
+     is part 2 with a leading U+2026. Post 2 also carries the link when that
+     marked remainder plus ` (full response)` still fits
+     (`:post_2_remainder_and_link`). If it does not fit, post 2 is the marked
+     remainder and post 3 is the unchanged link-only label. Never drop part 2.
   """
 
   alias ContextBot.ATProto.Post
+  alias ContextBot.Research.Reply
   alias ContextBot.Research.ReplyLimits
   alias ContextBot.Workflow.Invocation
 
@@ -54,14 +56,19 @@ defmodule ContextBot.Reply.PublicationPlan do
   end
 
   defp remainder_decision(text, remainder, reader_url) when is_binary(reader_url) do
-    if remainder_and_link_fits?(remainder) do
-      {:post_2_remainder_and_link, text, remainder}
+    {part1, part2} = Reply.with_continuation_ellipses(text, remainder)
+
+    if remainder_and_link_fits?(part2) do
+      {:post_2_remainder_and_link, part1, part2}
     else
-      {:body_split_with_link_post3, text, remainder}
+      {:body_split_with_link_post3, part1, part2}
     end
   end
 
-  defp remainder_decision(text, remainder, _reader_url), do: {:body_split, text, remainder}
+  defp remainder_decision(text, remainder, _reader_url) do
+    {part1, part2} = Reply.with_continuation_ellipses(text, remainder)
+    {:body_split, part1, part2}
+  end
 
   @doc """
   Returns the exact post texts a dry-run would publish and where the link would go.

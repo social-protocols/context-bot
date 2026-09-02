@@ -5,11 +5,17 @@ defmodule ContextBot.Research.ReplyLimits do
   Bluesky's hard limit is 300 Unicode grapheme clusters per post. To give the model margin for
   error, prompts target a smaller limit while validation accepts replies up to the full 300
   graphemes. A byte ceiling provides additional safety against unexpectedly large posts.
+
+  A two-body split reserves one grapheme and three UTF-8 bytes for U+2026 on each
+  published part. That reservation lives in the split/publish path, not in the
+  prompt target.
   """
 
   @prompt_target_graphemes 275
   @hard_max_graphemes 300
   @max_bytes 3_000
+  # U+2026 HORIZONTAL ELLIPSIS: 1 grapheme, 3 UTF-8 bytes.
+  @continuation_ellipsis "…"
 
   @doc "The grapheme target shown in system prompts and repair instructions."
   def prompt_target_graphemes, do: @prompt_target_graphemes
@@ -19,6 +25,10 @@ defmodule ContextBot.Research.ReplyLimits do
 
   @doc "Byte ceiling for additional safety."
   def max_bytes, do: @max_bytes
+
+  @doc "U+2026 HORIZONTAL ELLIPSIS used to mark a continued two-body Bluesky split."
+  @spec continuation_ellipsis() :: String.t()
+  def continuation_ellipsis, do: @continuation_ellipsis
 
   @doc "True when the text fits in a single Bluesky post."
   @spec fits_one_post?(String.t()) :: boolean()

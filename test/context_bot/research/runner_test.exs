@@ -1200,6 +1200,13 @@ defmodule ContextBot.Research.RunnerTest do
     assert {:ok, result} = Runner.run(invocation, options())
     assert result.text == part1
     assert result.text_part2 == part2
+    assert result.compact_source == over_text
+
+    refute String.contains?(
+             result.compact_source,
+             ContextBot.Research.ReplyLimits.continuation_ellipsis()
+           )
+
     assert result.full_response == "Writeup."
     assert result.document_title == "Context Request"
 
@@ -1233,6 +1240,7 @@ defmodule ContextBot.Research.RunnerTest do
     assert {:ok, result} = Runner.run(invocation, options())
     assert result.text == part1
     assert result.text_part2 == part2
+    assert result.compact_source == over_text
     assert result.full_response == full
     assert result.document_title == title
     assert result.validation["result"] == "split"
@@ -1520,11 +1528,12 @@ defmodule ContextBot.Research.RunnerTest do
   end
 
   defp over_limit_split_parts do
-    part1 = String.duplicate("a", 150)
-    part2 = String.duplicate("b", 160)
-    over_text = part1 <> "\n\n" <> part2
+    raw1 = String.duplicate("a", 150)
+    raw2 = String.duplicate("b", 160)
+    over_text = raw1 <> "\n\n" <> raw2
+    ellipsis = ContextBot.Research.ReplyLimits.continuation_ellipsis()
     assert String.length(over_text) == 312
-    {part1, part2, over_text}
+    {raw1 <> ellipsis, ellipsis <> raw2, over_text}
   end
 
   defp decoded_fixture(name), do: name |> fixture() |> Jason.decode!()

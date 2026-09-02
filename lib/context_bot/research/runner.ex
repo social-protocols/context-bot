@@ -381,6 +381,7 @@ defmodule ContextBot.Research.Runner do
            messages: invocation.anthropic_messages,
            text: part1,
            text_part2: part2,
+           compact_source: text,
            usage: usage_evidence(invocation, config),
            validation: %{
              "result" => "split",
