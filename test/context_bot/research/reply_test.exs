@@ -18,12 +18,7 @@ defmodule ContextBot.Research.ReplyTest do
     assert byte_size(reply) == 3_000
 
     encoded = StructuredFixtures.structured_json(reply)
-    {first, second} = String.split_at(encoded, div(String.length(encoded), 2))
-
-    content = [
-      %{"type" => "text", "text" => first},
-      %{"type" => "text", "text" => second}
-    ]
+    content = [%{"type" => "text", "text" => encoded}]
 
     assert Reply.select(content, "end_turn") == StructuredFixtures.selected(reply)
   end
