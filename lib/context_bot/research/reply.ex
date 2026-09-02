@@ -29,6 +29,9 @@ defmodule ContextBot.Research.Reply do
     bash_code_execution_tool_result
     text_editor_code_execution_tool_result
   )
+  # Structured outputs sometimes double-escape JSON (`\\u2014` in the source).
+  # After Jason.decode those leftover six characters are still `\uXXXX`.
+  @json_unicode_escape ~r/\\u([0-9a-fA-F]{4})/
 
   @type reason :: atom() | {atom(), term()}
   @type server_tool_name :: String.t()
@@ -800,9 +803,9 @@ defmodule ContextBot.Research.Reply do
          "full_response" => full_response
        })
        when is_binary(title) and is_binary(compact_reply) and is_binary(full_response) do
-    title = String.trim(title)
-    compact_reply = String.trim(compact_reply)
-    full_response = String.trim(full_response)
+    title = title |> String.trim() |> unescape_json_string_escapes()
+    compact_reply = compact_reply |> String.trim() |> unescape_json_string_escapes()
+    full_response = full_response |> String.trim() |> unescape_json_string_escapes()
 
     if title != "" and compact_reply != "" and full_response != "" do
       {:ok,
@@ -818,6 +821,24 @@ defmodule ContextBot.Research.Reply do
   end
 
   defp reply_fields(_decoded), do: :invalid
+
+  # Jason already decoded the structured object. Remaining `\uXXXX`, `\n`, `\t`,
+  # and `\"` are leftover string escapes from a double-escaped model value.
+  # Decode matching sequences only; do not fail closed or re-parse the object.
+  defp unescape_json_string_escapes(text) do
+    text
+    |> unescape_json_unicode_escapes()
+    |> String.replace("\\n", "\n")
+    |> String.replace("\\t", "\t")
+    |> String.replace("\\\"", "\"")
+    |> String.replace("\\\\", "\\")
+  end
+
+  defp unescape_json_unicode_escapes(text) do
+    Regex.replace(@json_unicode_escape, text, fn _match, hex ->
+      <<String.to_integer(hex, 16)::utf8>>
+    end)
+  end
 
   defp classify_structured(%{disposition: :no_reply} = selected), do: {:ok, selected}
 

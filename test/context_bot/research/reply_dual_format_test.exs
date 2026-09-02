@@ -121,6 +121,92 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       assert {:repairable, ^long_compact, [:too_many_graphemes]} =
                Reply.select(content, :end_turn)
     end
+
+    test "decodes leftover JSON unicode escapes in compact_reply and title" do
+      leftover = leftover_unicode_escape("2014")
+      compact = "not a layoff forecast" <> leftover <> "the county itself says"
+      title = "Jobs" <> leftover <> "risk"
+      full = "Writeup with a real em dash — already decoded."
+
+      assert leftover == <<?\\, ?u, ?2, ?0, ?1, ?4>>
+      refute String.contains?(compact, "—")
+
+      encoded = StructuredFixtures.structured_json(compact, title: title, full: full)
+      assert {:ok, decoded} = Jason.decode(encoded)
+      assert decoded["compact_reply"] == compact
+      assert decoded["title"] == title
+
+      assert {:ok, selected} = Reply.select([%{"type" => "text", "text" => encoded}], :end_turn)
+      assert selected.text == "not a layoff forecast—the county itself says"
+      assert selected.document_title == "Jobs—risk"
+      refute String.contains?(selected.text, leftover)
+      refute String.contains?(selected.document_title, leftover)
+      assert selected.full_response == full
+    end
+
+    test "leaves a real em dash in compact_reply unchanged" do
+      compact = "not a layoff forecast—the county itself says"
+
+      assert {:ok, selected} =
+               Reply.select(
+                 [
+                   %{
+                     "type" => "text",
+                     "text" => StructuredFixtures.structured_json(compact)
+                   }
+                 ],
+                 :end_turn
+               )
+
+      assert selected.text == compact
+      assert String.contains?(selected.text, "—")
+      refute String.contains?(selected.text, leftover_unicode_escape("2014"))
+    end
+
+    test "decodes leftover \\u2019 as a right single quote" do
+      leftover = leftover_unicode_escape("2019")
+      compact = "the county" <> leftover <> "s report"
+
+      assert leftover == <<?\\, ?u, ?2, ?0, ?1, ?9>>
+      refute String.contains?(compact, "\u2019")
+
+      assert {:ok, selected} =
+               Reply.select(
+                 [
+                   %{
+                     "type" => "text",
+                     "text" => StructuredFixtures.structured_json(compact)
+                   }
+                 ],
+                 :end_turn
+               )
+
+      assert selected.text == "the county\u2019s report"
+      refute String.contains?(selected.text, leftover)
+    end
+
+    test "decodes leftover \\u2014 beside a real em dash" do
+      leftover = leftover_unicode_escape("2014")
+      compact = "modeled estimate—not a layoff" <> leftover <> "the county"
+
+      assert String.contains?(compact, "—")
+      assert String.contains?(compact, leftover)
+
+      assert {:ok, selected} =
+               Reply.select(
+                 [
+                   %{
+                     "type" => "text",
+                     "text" => StructuredFixtures.structured_json(compact)
+                   }
+                 ],
+                 :end_turn
+               )
+
+      assert selected.text == "modeled estimate—not a layoff—the county"
+      refute String.contains?(selected.text, leftover)
+      assert selected.text |> String.graphemes() |> Enum.count(&(&1 == "—")) == 2
+    end
   end
 
   describe "full_response_from_messages/1 and document_title_from_messages/1" do
@@ -165,5 +251,10 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       assert Reply.full_response_from_messages(nil) == nil
       assert Reply.document_title_from_messages(nil) == nil
     end
+  end
+
+  # After Jason.decode, a model-written JSON `\\uXXXX` is the six characters `\uXXXX`.
+  defp leftover_unicode_escape(hex) when is_binary(hex) and byte_size(hex) == 4 do
+    "\\u#{hex}"
   end
 end
