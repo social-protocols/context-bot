@@ -4,6 +4,69 @@ Guidance for any coding agent (Claude Code, Codex, Cursor, etc.) working in this
 
 Always-on context: see `knowledge-base/learnings.md` for distilled facts and constraints from prior investigations.
 
+## Deliberati shipping
+
+Canonical copy: `/home/box/deliberati/ops/AGENTS.md`. Cursor cloud agents **only** read `AGENTS.md` in **this** repo. There is no account-wide master. Keep the in-repo file in sync with that ops file.
+
+This file is for humans and Cursor cloud agents working in this repository.
+
+### Merge
+
+Squash the PR to **one commit**, then **fast-forward** onto `main`. That squash commit **is** HEAD of `main`.
+
+- No merge commits
+- Rebase-merge is **not** the path (it keeps N commits)
+- GitHub’s “Squash and merge” is the button
+- **Do not merge** unless Jonathan explicitly says so for that PR (`gh pr merge --squash` is still a merge)
+- Never `gh pr merge --merge`. Do not `--rebase` unless he says so for that PR
+
+The squash SHA differs from the PR head. Treat the **code** as identical. Do not write SHA-dependent tests.
+
+### CI and deploy
+
+Test on the PR (the code that becomes `main`). After squash+FF, **deploy immediately**. Do **not** re-run format/compile/test on push to `main` (that is how a post-merge red happens after deploy already shipped). `main` workflows may deploy.
+
+Branch protection must **require** those PR checks so untested code cannot merge.
+
+When CI fails on a PR, notify or resume the Cursor cloud agent that owns that branch. Do not poll. Do not merge to “fix” CI.
+
+### GitHub settings (human, once per repo)
+
+Settings → General → Pull Requests:
+
+- Allow merge commits: **off**
+- Allow squash merging: **on**
+- Allow rebase merging: **off**
+
+Settings → Branches → rule on `main`:
+
+- Require linear history: **on**
+- Require the PR checks (e.g. Test & Quality Check, Type Check) before merge
+
+Bots do not flip admin settings from the Grok computer.
+
+### Cursor cloud agents
+
+Launch with model **Grok 4.6** (`grok-4.6`). Fallback **Claude Sonnet 4.6** (`claude-sonnet-4-6`) if Grok 4.6 is unavailable. Not Opus unless Jonathan says so for that run.
+
+Start new work from current `main` on a new VM. Rebase onto `origin/main` before opening or updating a PR. Reply to the existing cloud agent for the same PR; do not launch a second one on the same branch.
+
+### Git hooks
+
+If this repo has `.githooks`, env install must set `core.hooksPath=.githooks`. Do **not** `git commit` or `git push --no-verify` unless Jonathan says so. CI is the backstop, not the only gate.
+
+### Incomplete work
+
+The Bot that owns this repo owns open PRs, CI, merge conflicts, and drafts. Check at the weekday 8:56 America/Denver run and whenever a signal arrives. Act without waiting to be nudged. Stay silent if nothing is new.
+
+When `main` moves: rebase remaining **non-parked** `cursor/*` PRs. Skip PRs Jonathan has parked (do not nag, do not rebase).
+
+### Do not
+
+- Put tokens, keys, or secrets in this repo, in docs, or in chat
+- Merge, spend, publish, or send external mail unless Jonathan says so
+- Enable a live bot or production flag unless he says so
+
 ## Project scope
 
 Context Bot is an on-demand Bluesky / ATProto context bot. A user directly mentions it in a public thread and asks for context; the POC retrieves the invocation and ancestor chain, requests Claude analysis with server-side research, and publishes one concise Bluesky reply.
@@ -35,7 +98,7 @@ just setup
 
 ## Git workflow
 
-After completing each user prompt, commit the changes with a concise message explaining what changed. Do not create merge commits. Keep history linear with an explicit rebase, fast-forward, or selected cherry-picks, and integrate only the commits the user requests.
+After completing each user prompt, commit the changes with a concise message explaining what changed. Merge-to-`main` and rebase-before-PR rules are in **Deliberati shipping**.
 
 ### Git hooks
 
@@ -44,15 +107,13 @@ The repository uses local git hooks in `.githooks/` to catch issues before CI:
 - **pre-commit**: runs `mix format` on staged Elixir files and compiles with warnings-as-errors
 - **pre-push**: runs the full test suite (`mix test` plus shell script tests)
 
-Hooks are automatically installed via `git config core.hooksPath .githooks` during the `.cursor/environment.json` install step. Never bypass hooks with `git commit --no-verify` or `git push --no-verify` unless Jonathan explicitly authorizes it for a specific commit. CI is the backstop, not the only gate — hooks provide fast local feedback and reduce CI churn.
+Cursor cloud agents set `core.hooksPath=.githooks` during environment setup. The hooks run on every commit and push. Bypass policy is in **Deliberati shipping**.
 
 ### GitHub Actions
 
-`Test & Quality Check` and `Type Check` run on pull requests targeting `main` (and on manual `workflow_dispatch`), not on push to `main`. After squash+fast-forward onto `main`, only Deploy runs. Keep those two PR checks required in branch protection so untested code cannot merge. Do not re-add a post-merge test job because the squash SHA differs from the PR head.
+`Test & Quality Check` and `Type Check` run on pull requests targeting `main` (and on manual `workflow_dispatch`), not on push to `main`. After squash+fast-forward onto `main`, only Deploy runs.
 
 ## Cursor Cloud specific instructions
-
-Cursor cloud agents automatically install git hooks during environment setup. The hooks will run on every commit and push operation. Do not use `--no-verify` to bypass hooks unless explicitly authorized.
 
 Before starting any work, `git fetch origin` and update to current `origin/main` (rebase the task branch onto `origin/main` if already on a feature branch). Do not assume the VM checkout or Cursor Build snapshot is current. Fetch and rebase again before opening or updating a PR if `main` has moved.
 
