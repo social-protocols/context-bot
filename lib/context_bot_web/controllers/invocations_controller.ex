@@ -11,6 +11,20 @@ defmodule ContextBotWeb.InvocationsController do
   alias ContextBot.StandardSite.Document
   alias ContextBot.Workflow.Invocation
 
+  # Same charged amount as the 24h/7d/30d header: settled uses
+  # COALESCE(settled, reserved); every other state uses reserved.
+  defmacrop charged_microdollars_sum(entry) do
+    quote do
+      fragment(
+        "COALESCE(SUM(CASE WHEN ? = 'settled' THEN COALESCE(?, ?) ELSE ? END), 0)",
+        unquote(entry).state,
+        unquote(entry).settled_microdollars,
+        unquote(entry).reserved_microdollars,
+        unquote(entry).reserved_microdollars
+      )
+    end
+  end
+
   def index(conn, _params) do
     now = DateTime.utc_now()
 
@@ -23,7 +37,8 @@ defmodule ContextBotWeb.InvocationsController do
     invocations =
       Invocation
       |> order_by([i], desc: i.id)
-      |> select([i], %{
+      |> join(:left, [i], c in subquery(invocation_cost_query()), on: c.invocation_id == i.id)
+      |> select([i, c], %{
         id: i.id,
         status: i.status,
         stage: i.stage,
@@ -39,7 +54,8 @@ defmodule ContextBotWeb.InvocationsController do
         failure_detail: i.failure_detail,
         no_reply: i.no_reply,
         inserted_at: i.inserted_at,
-        completed_at: i.completed_at
+        completed_at: i.completed_at,
+        cost_microdollars: fragment("COALESCE(?, 0)", c.cost_microdollars)
       })
       |> Repo.all()
 
@@ -73,14 +89,7 @@ defmodule ContextBotWeb.InvocationsController do
       BudgetEntry
       |> where([e], e.inserted_at >= ^cutoff)
       |> select([e], %{
-        total_microdollars:
-          fragment(
-            "COALESCE(SUM(CASE WHEN ? = 'settled' THEN COALESCE(?, ?) ELSE ? END), 0)",
-            e.state,
-            e.settled_microdollars,
-            e.reserved_microdollars,
-            e.reserved_microdollars
-          ),
+        total_microdollars: charged_microdollars_sum(e),
         total_input_tokens:
           fragment(
             "COALESCE(SUM(CAST(json_extract(?, '$.input_tokens') AS INTEGER)), 0)",
@@ -215,6 +224,7 @@ defmodule ContextBotWeb.InvocationsController do
             <th>Actor</th>
             <th>Dry Run</th>
             <th>Attempts</th>
+            <th>Cost</th>
             <th>Error</th>
             <th>Invocation</th>
             <th>Reply</th>
@@ -243,6 +253,7 @@ defmodule ContextBotWeb.InvocationsController do
             <td>#{escape_html(inv.actor_handle || "")}</td>
             <td>#{if inv.dry_run, do: "yes", else: ""}</td>
             <td>#{inv.anthropic_attempt_sequence}</td>
+            <td>#{format_dollars(inv.cost_microdollars)}</td>
             <td class="error-cell" title="#{error}">
               #{error}
             </td>
@@ -389,9 +400,22 @@ defmodule ContextBotWeb.InvocationsController do
     """
   end
 
+  defp invocation_cost_query do
+    from e in BudgetEntry,
+      group_by: e.invocation_id,
+      select: %{
+        invocation_id: e.invocation_id,
+        cost_microdollars: charged_microdollars_sum(e)
+      }
+  end
+
   defp format_dollars(microdollars) when is_integer(microdollars) do
     dollars = microdollars / 1_000_000
     "$#{:erlang.float_to_binary(dollars, decimals: 2)}"
+  end
+
+  defp format_dollars(%Decimal{} = microdollars) do
+    format_dollars(Decimal.to_integer(microdollars))
   end
 
   defp format_number(num) when is_integer(num) and num >= 1_000_000 do

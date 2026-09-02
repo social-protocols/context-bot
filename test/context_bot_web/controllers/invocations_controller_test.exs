@@ -585,5 +585,187 @@ defmodule ContextBotWeb.InvocationsControllerTest do
       conn = post(conn, "/invocations", %{})
       assert conn.status == 404
     end
+
+    test "includes a Cost column with per-row spend formatted like the header", %{conn: conn} do
+      {:ok, inv} =
+        insert_invocation(%{
+          invocation_uri: "at://did:plc:cost/app.bsky.feed.post/row1",
+          notification_cid: "cost-cid-1",
+          actor_did: "did:plc:cost1",
+          actor_handle: "cost-row.bsky.social",
+          status: :complete,
+          stage: :complete
+        })
+
+      insert_budget_entry!(inv, %{
+        attempt_key: "cost-row-settled",
+        reserved_microdollars: 500_000,
+        settled_microdollars: 400_000,
+        state: :settled
+      })
+
+      conn = get(conn, ~p"/invocations")
+      body = html_response(conn, 200)
+
+      assert body =~ "<th>Cost</th>"
+      assert row_cost(body, inv.id) == "$0.40"
+      assert body =~ "API Cost"
+      assert body =~ "$0.40"
+    end
+
+    test "includes failed invocations that spent money with no reply", %{conn: conn} do
+      {:ok, inv} =
+        insert_invocation(%{
+          invocation_uri: "at://did:plc:failed-cost/app.bsky.feed.post/fail1",
+          notification_cid: "failed-cost-cid",
+          actor_did: "did:plc:failedcost",
+          actor_handle: "failed-cost.bsky.social",
+          status: :failed,
+          stage: :failed,
+          failure_category: :provider_response,
+          failure_detail: %{"reason" => "code_execution_failed"}
+        })
+
+      insert_budget_entry!(inv, %{
+        attempt_key: "failed-cost-settled",
+        reserved_microdollars: 5_000_000,
+        settled_microdollars: 123_700,
+        state: :settled
+      })
+
+      conn = get(conn, ~p"/invocations")
+      body = html_response(conn, 200)
+
+      assert body =~ Integer.to_string(inv.id)
+      assert body =~ "failed-cost.bsky.social"
+      assert body =~ "status-failed"
+      refute body =~ "https://bsky.app/profile/did:plc:bot/"
+      assert row_cost(body, inv.id) == "$0.12"
+    end
+
+    test "includes dry-run rows that have spend", %{conn: conn} do
+      {:ok, inv} =
+        insert_invocation(%{
+          dry_run: true,
+          target_uri: "at://did:plc:dry-cost/app.bsky.feed.post/dry1",
+          invocation_text: "SECRET_DRY_RUN_QUESTION",
+          invocation_uri: "at://did:plc:dry-cost/app.bsky.feed.post/dry1",
+          notification_cid: "dry-cost-cid",
+          actor_did: "did:plc:drycost",
+          actor_handle: "dry-cost.bsky.social",
+          status: :complete,
+          stage: :complete
+        })
+
+      insert_budget_entry!(inv, %{
+        attempt_key: "dry-cost-settled",
+        reserved_microdollars: 3_000_000,
+        settled_microdollars: 2_500_000,
+        state: :settled
+      })
+
+      conn = get(conn, ~p"/invocations")
+      body = html_response(conn, 200)
+
+      assert body =~ "dry-cost.bsky.social"
+      assert body =~ "yes"
+      assert row_cost(body, inv.id) == "$2.50"
+      refute body =~ "SECRET_DRY_RUN_QUESTION"
+    end
+
+    test "shows $0.00 when a listed row has zero budget", %{conn: conn} do
+      {:ok, inv} =
+        insert_invocation(%{
+          invocation_uri: "at://did:plc:zero-cost/app.bsky.feed.post/zero1",
+          notification_cid: "zero-cost-cid",
+          actor_did: "did:plc:zerocost",
+          actor_handle: "zero-cost.bsky.social",
+          status: :researching,
+          stage: :researching
+        })
+
+      conn = get(conn, ~p"/invocations")
+      body = html_response(conn, 200)
+
+      assert body =~ Integer.to_string(inv.id)
+      assert row_cost(body, inv.id) == "$0.00"
+    end
+
+    test "sums row cost with the same settled-or-reserved rule as the header", %{conn: conn} do
+      {:ok, inv} =
+        insert_invocation(%{
+          invocation_uri: "at://did:plc:sum-cost/app.bsky.feed.post/sum1",
+          notification_cid: "sum-cost-cid",
+          actor_did: "did:plc:sumcost",
+          actor_handle: "sum-cost.bsky.social",
+          status: :researching,
+          stage: :researching
+        })
+
+      insert_budget_entry!(inv, %{
+        attempt_key: "sum-cost-settled",
+        reserved_microdollars: 200_000,
+        settled_microdollars: 100_000,
+        state: :settled
+      })
+
+      insert_budget_entry!(inv, %{
+        attempt_key: "sum-cost-reserved",
+        reserved_microdollars: 200_000,
+        state: :reserved
+      })
+
+      conn = get(conn, ~p"/invocations")
+      body = html_response(conn, 200)
+
+      # settled 100_000 + reserved 200_000 = 300_000 microdollars
+      assert row_cost(body, inv.id) == "$0.30"
+      assert body =~ ~s(<span class="summary-stat-label">API Cost</span>)
+      assert body =~ ~s(<span class="summary-stat-value">$0.30</span>)
+    end
+  end
+
+  defp insert_invocation(attrs) do
+    defaults = %{
+      dry_run: false,
+      current_cid: Map.fetch!(attrs, :notification_cid),
+      raw_notification: %{},
+      received_at: DateTime.utc_now()
+    }
+
+    %Invocation{}
+    |> Invocation.changeset(Map.merge(defaults, attrs))
+    |> Repo.insert()
+  end
+
+  defp insert_budget_entry!(invocation, attrs) do
+    defaults = %{
+      invocation_id: invocation.id,
+      budget_date: Date.utc_today(),
+      kind: :research,
+      usage: %{"input_tokens" => 10, "output_tokens" => 4}
+    }
+
+    {:ok, entry} =
+      %BudgetEntry{}
+      |> BudgetEntry.changeset(Map.merge(defaults, attrs))
+      |> Repo.insert()
+
+    entry
+  end
+
+  defp row_cost(body, id) do
+    row_pattern = ~r/<tr>\s*<td>#{id}<\/td>.*?<\/tr>/s
+
+    case Regex.run(row_pattern, body) do
+      [row] ->
+        case Regex.run(~r/<td>(\$\d+\.\d{2})<\/td>/, row) do
+          [_cell, cost] -> cost
+          nil -> flunk("row #{id} has no $X.XX cost cell:\n#{row}")
+        end
+
+      nil ->
+        flunk("no table row for invocation #{id}")
+    end
   end
 end
