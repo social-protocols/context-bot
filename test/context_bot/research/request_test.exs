@@ -429,6 +429,10 @@ defmodule ContextBot.Research.RequestTest do
     assert schema["properties"]["disposition"]["description"] =~ "ambiguous"
     assert schema["properties"]["title"]["description"] =~ "What Is That Bird?"
     assert schema["properties"]["compact_reply"]["description"] =~ "275"
+
+    assert schema["properties"]["compact_reply"]["description"] =~
+             "Write Unicode characters directly"
+
     refute encoded =~ "maxLength"
     refute encoded =~ "minLength"
     refute encoded =~ "structured-outputs"
