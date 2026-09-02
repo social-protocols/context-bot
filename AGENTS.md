@@ -54,6 +54,8 @@ Hooks are automatically installed via `git config core.hooksPath .githooks` duri
 
 Cursor cloud agents automatically install git hooks during environment setup. The hooks will run on every commit and push operation. Do not use `--no-verify` to bypass hooks unless explicitly authorized.
 
+Before starting any work, `git fetch origin` and update to current `origin/main` (rebase the task branch onto `origin/main` if already on a feature branch). Do not assume the VM checkout or Cursor Build snapshot is current. Fetch and rebase again before opening or updating a PR if `main` has moved.
+
 ## Commands
 
 | Command | Purpose |
