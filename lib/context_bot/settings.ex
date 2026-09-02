@@ -30,7 +30,7 @@ defmodule ContextBot.Settings do
   @default_anthropic_web_search_tool_type "web_search_20260318"
   @default_anthropic_web_fetch_tool_type "web_fetch_20260318"
   @default_anthropic_effort :medium
-  @default_anthropic_research_max_tokens 4_096
+  @default_anthropic_research_max_tokens 8_192
   @default_anthropic_length_repair_max_tokens 1_024
   @default_anthropic_model_id "claude-sonnet-5"
   @default_max_web_search_uses 5

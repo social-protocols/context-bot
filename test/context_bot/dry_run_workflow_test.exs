@@ -52,7 +52,7 @@ defmodule ContextBot.DryRunWorkflowTest do
       assert conn.method == "POST"
       assert conn.request_path == "/v1/messages"
       assert Plug.Conn.get_req_header(conn, "x-api-key") == ["anthropic-test-key-never-expose"]
-      assert conn.body_params["max_tokens"] == 4_096
+      assert conn.body_params["max_tokens"] == 8_192
       assert conn.body_params["output_config"]["effort"] == "medium"
       assert conn.body_params["output_config"]["format"]["type"] == "json_schema"
 
