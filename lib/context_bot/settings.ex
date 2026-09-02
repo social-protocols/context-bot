@@ -34,7 +34,7 @@ defmodule ContextBot.Settings do
   @default_anthropic_length_repair_max_tokens 1_024
   @default_anthropic_model_id "claude-sonnet-5"
   @default_max_web_search_uses 5
-  @default_max_web_fetch_uses 2
+  @default_max_web_fetch_uses 8
   @default_max_web_fetch_content_tokens 10_000
   @default_max_tool_continuations 1
   @default_anthropic_max_http_retries 2
