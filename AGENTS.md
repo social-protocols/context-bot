@@ -113,6 +113,8 @@ Cursor cloud agents set `core.hooksPath=.githooks` during environment setup. The
 
 `Test & Quality Check` and `Type Check` run on pull requests targeting `main` (and on manual `workflow_dispatch`), not on push to `main`. After squash+fast-forward onto `main`, only Deploy runs.
 
+## Cursor Cloud specific instructions
+
 Before starting any work, `git fetch origin` and update to current `origin/main` (rebase the task branch onto `origin/main` if already on a feature branch). Do not assume the VM checkout or Cursor Build snapshot is current. Fetch and rebase again before opening or updating a PR if `main` has moved.
 
 ## Commands
