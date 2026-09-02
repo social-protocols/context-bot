@@ -159,7 +159,7 @@ Preserve these POC invariants:
 - keep `web_fetch` `citations.enabled=false` because structured JSON plus native citations 400s; require `full_response` to include markdown `[label](https://...)` URLs for every web source actually used, and do not invent URLs; `compact_reply` stays plain text;
 - treat in-band `max_uses_exceeded` web-tool errors as a completed search/fetch turn and still select compact/`full_response` from that envelope;
 - on SIGTERM, stop poller/admission work and let in-flight research and reply finish within Fly's 300s kill_timeout; a sent Anthropic attempt without an envelope waits out `ANTHROPIC_HTTP_TIMEOUT_MS` then starts a new budget attempt rather than remaining `interrupted_after_send` forever;
-- recover durable work oldest-first with bounded scans; automatic `recover_failed` reopens interruptions and locally retryable envelopes, not deterministic parser hard-fails (`code_execution_failed`, `unexpected_tool_use`, and other parser reasons that will not change on replay); operator reprocess of `code_execution_failed` starts a new paid attempt;
+- recover durable work oldest-first with bounded scans; automatic `recover_failed` reopens interruptions and locally retryable envelopes, not deterministic parser hard-fails (`code_execution_failed`, `invalid_structured_output`, `unexpected_tool_use`, and other parser reasons that will not change on replay); operator reprocess of `code_execution_failed` starts a new paid attempt;
 - keep failures finite and credential-free.
 
 ## Testing guidance
