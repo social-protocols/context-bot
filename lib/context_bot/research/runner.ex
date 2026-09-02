@@ -698,25 +698,33 @@ defmodule ContextBot.Research.Runner do
     invocation
     |> config.store.anthropic_responses()
     |> Enum.reverse()
-    |> Enum.find_value(:error, fn response ->
-      status = response_value(response, :status)
-
-      if status in 200..299 do
-        case decode(config, response_value(response, :raw_body)) do
-          {:ok, decoded} ->
-            case select_reply(decoded, invocation) do
-              {:error, _reason} -> nil
-              result -> result
-            end
-
-          _invalid ->
-            nil
-        end
-      else
-        nil
-      end
-    end)
+    |> Enum.find_value(:error, &research_selection_from(invocation, config, &1))
   end
+
+  defp research_selection_from(invocation, config, response) do
+    response
+    |> successful_body(config)
+    |> select_successful_research(invocation)
+  end
+
+  defp successful_body(response, config) do
+    status = response_value(response, :status)
+
+    if status in 200..299 do
+      decode(config, response_value(response, :raw_body))
+    else
+      :error
+    end
+  end
+
+  defp select_successful_research({:ok, decoded}, invocation) do
+    case select_reply(decoded, invocation) do
+      {:error, _reason} -> nil
+      result -> result
+    end
+  end
+
+  defp select_successful_research(_invalid, _invocation), do: nil
 
   defp retain_reservation(entry, config),
     do:
