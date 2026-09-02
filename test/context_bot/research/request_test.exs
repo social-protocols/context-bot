@@ -78,7 +78,7 @@ defmodule ContextBot.Research.RequestTest do
   test "sends one versioned prompt with the complete research and reply safety contract" do
     prompt = Request.initial(@canonical_thread, config())["system"]
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V7")
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V8")
     assert prompt =~ "ancestor"
     assert prompt =~ "unstable"
     assert prompt =~ "primary sources"
@@ -210,15 +210,15 @@ defmodule ContextBot.Research.RequestTest do
   test "exposes a stable hashed identity for the versioned system prompt" do
     prompt = Request.system_prompt()
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V7")
-    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V7"
-    assert Request.system_prompt_semantic_version() == "7.0.0"
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V8")
+    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V8"
+    assert Request.system_prompt_semantic_version() == "8.0.0"
 
     assert Request.system_prompt_sha256() ==
              :sha256 |> :crypto.hash(prompt) |> Base.encode16(case: :lower)
 
     assert Request.system_prompt_rkey() ==
-             "prompt-context-bot-system-v7-#{String.slice(Request.system_prompt_sha256(), 0, 16)}"
+             "prompt-context-bot-system-v8-#{String.slice(Request.system_prompt_sha256(), 0, 16)}"
   end
 
   test "projects allowlisted Messages parameters and the first user message" do
@@ -230,8 +230,8 @@ defmodule ContextBot.Research.RequestTest do
         research_max_tokens: 4_096
       })
 
-    assert projection.prompt.id == "CONTEXT_BOT_SYSTEM_V7"
-    assert projection.prompt.semantic_version == "7.0.0"
+    assert projection.prompt.id == "CONTEXT_BOT_SYSTEM_V8"
+    assert projection.prompt.semantic_version == "8.0.0"
     assert projection.prompt.sha256 == Request.system_prompt_sha256()
     assert projection.parameters["anthropic-version"] == "2023-06-01"
     assert projection.parameters["model"] == "claude-sonnet-5"
@@ -381,6 +381,38 @@ defmodule ContextBot.Research.RequestTest do
     refute inspect(projection) =~ "sk-ant-secret"
     refute inspect(projection) =~ "Bearer secret-token"
     refute inspect(projection) =~ "session=secret"
+  end
+
+  test "V8 prompt and schema require answering the invoker's questions first" do
+    prompt = Request.system_prompt()
+    normalized = String.replace(prompt, ~r/\s+/, " ")
+    schema = Request.output_schema()
+    compact = schema["properties"]["compact_reply"]["description"]
+    full = schema["properties"]["full_response"]["description"]
+
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V8")
+    assert normalized =~ "invoking mention"
+    assert normalized =~ "last post in the canonical thread"
+    assert normalized =~ "every distinct question"
+    assert normalized =~ "Open by directly answering each asked question"
+    assert normalized =~ "yes / no / unknown / contested"
+    assert normalized =~ "Do not lead with background"
+    assert normalized =~ "news lede"
+    assert normalized =~ "both-sides"
+    assert normalized =~ "value-laden label"
+    assert normalized =~ "voter suppression"
+    assert normalized =~ "Never silently drop a later question"
+    assert normalized =~ "bottom-line paragraph"
+    refute normalized =~ "Capture the core finding concisely"
+
+    assert compact =~ "Open by directly answering each asked question"
+    assert compact =~ "yes / no / unknown / contested"
+    assert compact =~ "Never silently drop a later question"
+    refute compact =~ "Capture the core finding concisely"
+
+    assert full =~ "bottom-line paragraph"
+    assert full =~ "same question"
+    refute full =~ "Capture the core finding concisely"
   end
 
   test "sends json_schema format beside effort and omits unsupported length keywords" do
