@@ -64,7 +64,7 @@ defmodule ContextBot.DryRunWorkflowTest do
       assert search["max_uses"] == 5
       assert search["response_inclusion"] == "excluded"
       assert search["allowed_callers"] == ["direct"]
-      assert fetch["max_uses"] == 2
+      assert fetch["max_uses"] == 8
       assert fetch["max_content_tokens"] == 10_000
       assert fetch["response_inclusion"] == "excluded"
       assert fetch["allowed_callers"] == ["direct"]

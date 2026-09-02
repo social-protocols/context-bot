@@ -39,7 +39,7 @@ defmodule ContextBot.SettingsTest do
     assert settings.anthropic_research_max_tokens == 8_192
     assert settings.max_web_search_uses == 5
     assert settings.anthropic_research_reservation_microdollars == 5_000_000
-    assert settings.max_web_fetch_uses == 2
+    assert settings.max_web_fetch_uses == 8
     assert settings.max_web_fetch_content_tokens == 10_000
     assert settings.max_tool_continuations == 1
     assert settings.anthropic_max_http_retries == 2
