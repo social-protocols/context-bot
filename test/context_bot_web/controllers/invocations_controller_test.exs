@@ -358,6 +358,32 @@ defmodule ContextBotWeb.InvocationsControllerTest do
       refute row =~ ">#{Calendar.strftime(inserted_at, "%Y-%m-%d %H:%M:%S")}<"
     end
 
+    test "pluralizes a one-minute relative time after the 90-second threshold", %{conn: conn} do
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      inserted_at = DateTime.add(now, -100, :second)
+
+      {:ok, inv} =
+        insert_invocation(%{
+          invocation_uri: "at://did:plc:rel2/app.bsky.feed.post/rel2",
+          notification_cid: "cid-rel2",
+          current_cid: "cid-rel2",
+          actor_did: "did:plc:rel2",
+          actor_handle: "relative2.bsky.social",
+          received_at: inserted_at,
+          status: :researching,
+          stage: :researching
+        })
+
+      from(i in Invocation, where: i.id == ^inv.id)
+      |> Repo.update_all(set: [inserted_at: inserted_at])
+
+      conn = get(conn, ~p"/invocations")
+      row = row_html(table_html(html_response(conn, 200)), inv.id)
+
+      assert row =~ "1 minute ago"
+      refute row =~ "1 minutes ago"
+    end
+
     test "shows an em dash for a missing completed time", %{conn: conn} do
       {:ok, inv} =
         insert_invocation(%{

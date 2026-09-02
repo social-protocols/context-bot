@@ -368,27 +368,27 @@ defmodule ContextBotWeb.InvocationsController do
   defp relative_from_seconds(seconds), do: relative_days(seconds)
 
   defp relative_hours(seconds) when seconds < 45, do: "just now"
-  defp relative_hours(seconds) when seconds < 90, do: "1 minute ago"
-  defp relative_hours(seconds) when seconds < 45 * 60, do: "#{div(seconds, 60)} minutes ago"
-  defp relative_hours(seconds) when seconds < 90 * 60, do: "1 hour ago"
-
-  defp relative_hours(seconds) when seconds < 22 * 60 * 60,
-    do: "#{div(seconds, 60 * 60)} hours ago"
-
+  defp relative_hours(seconds) when seconds < 90, do: ago(1, "minute")
+  defp relative_hours(seconds) when seconds < 45 * 60, do: ago(div(seconds, 60), "minute")
+  defp relative_hours(seconds) when seconds < 90 * 60, do: ago(1, "hour")
+  defp relative_hours(seconds) when seconds < 22 * 60 * 60, do: ago(div(seconds, 60 * 60), "hour")
   defp relative_hours(_seconds), do: "yesterday"
 
   defp relative_days(seconds) when seconds < 26 * 24 * 60 * 60 do
-    "#{div(seconds, 24 * 60 * 60)} days ago"
+    ago(div(seconds, 24 * 60 * 60), "day")
   end
 
-  defp relative_days(seconds) when seconds < 45 * 24 * 60 * 60, do: "1 month ago"
+  defp relative_days(seconds) when seconds < 45 * 24 * 60 * 60, do: ago(1, "month")
 
   defp relative_days(seconds) when seconds < 320 * 24 * 60 * 60 do
-    "#{div(seconds, 30 * 24 * 60 * 60)} months ago"
+    ago(div(seconds, 30 * 24 * 60 * 60), "month")
   end
 
-  defp relative_days(seconds) when seconds < 548 * 24 * 60 * 60, do: "1 year ago"
-  defp relative_days(seconds), do: "#{div(seconds, 365 * 24 * 60 * 60)} years ago"
+  defp relative_days(seconds) when seconds < 548 * 24 * 60 * 60, do: ago(1, "year")
+  defp relative_days(seconds), do: ago(div(seconds, 365 * 24 * 60 * 60), "year")
+
+  defp ago(1, unit), do: "1 #{unit} ago"
+  defp ago(count, unit), do: "#{count} #{unit}s ago"
 
   defp escape_html(text) when is_binary(text) do
     text
