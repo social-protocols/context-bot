@@ -23,16 +23,17 @@ defmodule ContextBot.DryRun.ResultPrinterTest do
         99
       )
 
-    assert lines == [
-             "status=complete",
-             "answer=#{compact}",
-             "usage input_tokens=8 output_tokens=3 tool_uses=1 cost_microdollars=99",
-             "Full response:",
-             full,
-             "Post 1:",
-             compact <> Post.link_suffix(),
-             "(full response) link: Post 1"
-           ]
+    assert "status=complete" in lines
+    assert "phase=research writeup_chars=#{String.length(full)} citations=0" in lines
+    assert "phase=structure title=" in lines
+    assert "title=" in lines
+    assert "answer=#{compact}" in lines
+    assert "usage input_tokens=8 output_tokens=3 tool_uses=1 cost_microdollars=99" in lines
+    assert "Full response:" in lines
+    assert full in lines
+    assert "Post 1:" in lines
+    assert (compact <> Post.link_suffix()) in lines
+    assert List.last(lines) == "(full response) link: Post 1"
   end
 
   test "prints a link-only post 2 when the compact reply cannot fit the suffix" do
@@ -119,6 +120,8 @@ defmodule ContextBot.DryRun.ResultPrinterTest do
     assert lines == [
              "status=complete",
              "disposition=no_reply",
+             "phase=research writeup_chars=0 citations=0",
+             "phase=structure title=",
              "usage input_tokens=4 output_tokens=1 tool_uses=0 cost_microdollars=12",
              "(full response) link: none"
            ]
@@ -138,7 +141,10 @@ defmodule ContextBot.DryRun.ResultPrinterTest do
     assert "A concise tested\nanswer. (full response)" in lines
     refute Enum.any?(lines, &String.contains?(&1, "\e"))
     assert hd(lines) == "status=complete"
-    assert Enum.at(lines, 1) == "answer=A concise tested answer."
+
+    assert "phase=research writeup_chars=#{String.length("Writeup\e[32m green\e[0m\nsecond line.")} citations=0" in lines
+
+    assert "answer=A concise tested answer." in lines
   end
 
   defp assert_before(lines, earlier, later) do

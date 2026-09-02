@@ -3,10 +3,10 @@ defmodule ContextBot.StandardSite.TitlePrompt do
   Reader title style used by the structured research JSON schema and the
   title-only rewrite call.
 
-  Title guidance lives in the research schema field description, the system
+  Title guidance lives in the structure-phase JSON schema, the structure
   prompt, and the cheap title-rewrite Messages request. This module is the
-  shared wording. A blank research `title` may trigger one title-only Haiku
-  call; it is not a compact-reply rewrite.
+  shared wording. A blank structure-phase `title` may trigger one title-only
+  Haiku call; it is not a compact-reply rewrite.
   """
 
   @id "READER_TITLE_V1"

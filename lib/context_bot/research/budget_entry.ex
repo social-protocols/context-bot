@@ -9,10 +9,10 @@ defmodule ContextBot.Research.BudgetEntry do
 
   alias ContextBot.Workflow.Invocation
 
-  @kinds [:research, :continuation, :repair, :retry]
+  @kinds [:research, :continuation, :repair, :structure, :retry]
   @states [:reserved, :sent, :settled, :indeterminate]
 
-  @type kind :: :research | :continuation | :repair | :retry
+  @type kind :: :research | :continuation | :repair | :structure | :retry
   @type state :: :reserved | :sent | :settled | :indeterminate
   @type t :: %__MODULE__{}
 

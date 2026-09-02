@@ -18,6 +18,7 @@ defmodule ContextBot.Research.Runner do
     AnthropicClient,
     Budget,
     BudgetEntry,
+    Citations,
     InterruptRecovery,
     Pricing,
     Reply,
@@ -344,7 +345,7 @@ defmodule ContextBot.Research.Runner do
          config
        )
        when stop_reason in ["pause_turn", :pause_turn] do
-    if repair_request?(invocation) do
+    if repair_request?(invocation) or structure_request?(invocation) do
       {:error, :pause_turn}
     else
       continue_pause(invocation, decoded, config)
@@ -352,6 +353,23 @@ defmodule ContextBot.Research.Runner do
   end
 
   defp classify_research_stop_reason(invocation, decoded, config) do
+    if structure_request?(invocation) do
+      classify_structure(invocation, decoded, config)
+    else
+      classify_research(invocation, decoded, config)
+    end
+  end
+
+  defp classify_research(invocation, decoded, config) do
+    with {:ok, extracted} <- extract_research_writeup(decoded, invocation),
+         writeup = Citations.publishable_writeup(extracted.text, extracted.citations),
+         {:ok, checkpoint} <-
+           persist_research_phase(invocation, writeup, extracted.citations, config) do
+      start_attempt(checkpoint, :structure, config)
+    end
+  end
+
+  defp classify_structure(invocation, decoded, config) do
     case select_reply(decoded, invocation) do
       {:ok, selected} ->
         {:ok, finish_selected(invocation, selected, config)}
@@ -370,7 +388,11 @@ defmodule ContextBot.Research.Runner do
   defp classify_title_rewrite(invocation, decoded, config) do
     with {:ok, title} <- Reply.select_title(decoded),
          {:title_rewrite, selected} <- latest_research_selection(invocation, config) do
-      titled = %{selected | document_title: title}
+      titled = %{
+        selected
+        | document_title: title,
+          full_response: writeup_from(invocation, selected)
+      }
 
       case Reply.classify_selected(titled) do
         {:ok, selected} ->
@@ -385,13 +407,63 @@ defmodule ContextBot.Research.Runner do
     end
   end
 
+  defp extract_research_writeup(%{"content" => content, "stop_reason" => stop_reason}, invocation) do
+    with {:ok, tool_context} <- Reply.server_tool_context(research_messages(invocation)) do
+      Reply.select_writeup(content, Map.put(tool_context, :stop_reason, stop_reason))
+    end
+  end
+
+  defp extract_research_writeup(_decoded, _invocation), do: {:error, :malformed_provider_response}
+
+  defp research_messages(%Invocation{anthropic_messages: request} = invocation) do
+    if structure_request?(invocation) do
+      %{"messages" => []}
+    else
+      request || %{"messages" => []}
+    end
+  end
+
+  defp persist_research_phase(invocation, writeup, citations, config) do
+    with {:ok, canonical} <- canonical_snapshot(invocation) do
+      request =
+        Request.structure(%{
+          model_id: structure_model_id(config.settings),
+          max_tokens: structure_max_tokens(config.settings),
+          writeup: writeup,
+          citations: citations,
+          canonical_thread: canonical_text(canonical)
+        })
+
+      persist_request_checkpoint(invocation, request, config, %{
+        full_response: writeup,
+        citation_sources: citations
+      })
+    end
+  end
+
+  defp canonical_text(%{"text" => text}) when is_binary(text), do: text
+
+  defp structure_request?(%Invocation{anthropic_messages: request}) when is_map(request),
+    do: Request.structure_request?(request)
+
+  defp structure_request?(_invocation), do: false
+
+  defp structure_model_id(settings) do
+    Map.get(settings, :anthropic_structure_model_id) || settings.anthropic_model_id
+  end
+
+  defp structure_max_tokens(settings) do
+    Map.get(settings, :anthropic_structure_max_tokens) ||
+      settings.anthropic_length_repair_max_tokens
+  end
+
   defp finish_selected(invocation, %{disposition: :no_reply}, config) do
     %{
       messages: invocation.anthropic_messages,
       text: "",
       disposition: :no_reply,
       usage: usage_evidence(invocation, config),
-      validation: %{"result" => "no_reply", "repair_used" => false}
+      validation: %{"result" => "no_reply", "repair_used" => false, "phase" => "structure"}
     }
   end
 
@@ -399,15 +471,25 @@ defmodule ContextBot.Research.Runner do
     %{
       messages: invocation.anthropic_messages,
       text: selected.text,
-      full_response: selected.full_response,
+      full_response: writeup_from(invocation, selected),
       document_title: selected.document_title,
       disposition: Map.get(selected, :disposition, :reply),
       usage: usage_evidence(invocation, config),
-      validation: %{"result" => "valid", "repair_used" => false}
+      validation: %{"result" => "valid", "repair_used" => false, "phase" => "structure"}
     }
     |> attach_full_response(invocation)
     |> attach_document_title(invocation)
   end
+
+  defp writeup_from(%Invocation{full_response: writeup}, _selected)
+       when is_binary(writeup) and writeup != "",
+       do: writeup
+
+  defp writeup_from(_invocation, %{full_response: writeup})
+       when is_binary(writeup) and writeup != "",
+       do: writeup
+
+  defp writeup_from(_invocation, _selected), do: ""
 
   defp split_over_limit(invocation, text, decoded, config, selected \\ nil) do
     case Reply.split_text(text) do
@@ -466,11 +548,15 @@ defmodule ContextBot.Research.Runner do
     end
   end
 
-  defp persist_request_checkpoint(invocation, request, config) do
-    attrs = %{
-      anthropic_messages: request,
-      anthropic_usage: usage_evidence(invocation, config)
-    }
+  defp persist_request_checkpoint(invocation, request, config, extra \\ %{}) do
+    attrs =
+      Map.merge(
+        %{
+          anthropic_messages: request,
+          anthropic_usage: usage_evidence(invocation, config)
+        },
+        extra
+      )
 
     case config.store.transition_research(
            invocation,
@@ -612,6 +698,11 @@ defmodule ContextBot.Research.Runner do
        when is_binary(full) and byte_size(full) > 0,
        do: result
 
+  defp attach_full_response(result, %Invocation{full_response: writeup}, _decoded)
+       when is_binary(writeup) and byte_size(writeup) > 0 do
+    Map.put(result, :full_response, writeup)
+  end
+
   defp attach_full_response(result, invocation, decoded) do
     case current_or_stored_field(invocation, decoded, &Reply.full_response_from_messages/1) do
       full when is_binary(full) and byte_size(full) > 0 ->
@@ -680,7 +771,7 @@ defmodule ContextBot.Research.Runner do
       max_tokens: config.settings.anthropic_length_repair_max_tokens,
       invocation_text: invocation_text(invocation),
       compact_reply: selected.text,
-      full_response: selected.full_response
+      full_response: writeup_from(invocation, selected)
     })
   end
 
@@ -917,6 +1008,11 @@ defmodule ContextBot.Research.Runner do
 
   defp reservation(settings, :repair),
     do: settings.anthropic_repair_reservation_microdollars
+
+  defp reservation(settings, :structure) do
+    Map.get(settings, :anthropic_structure_reservation_microdollars) ||
+      settings.anthropic_repair_reservation_microdollars
+  end
 
   defp reservation(settings, :retry), do: settings.anthropic_retry_reservation_microdollars
 

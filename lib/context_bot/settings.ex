@@ -32,6 +32,8 @@ defmodule ContextBot.Settings do
   @default_anthropic_effort :medium
   @default_anthropic_research_max_tokens 8_192
   @default_anthropic_length_repair_max_tokens 1_024
+  @default_anthropic_structure_max_tokens 1_024
+  @default_anthropic_structure_reservation_usd "0.500000"
   @default_anthropic_model_id "claude-sonnet-5"
   @default_anthropic_title_model_id "claude-haiku-4-5"
   @default_max_web_search_uses 5
@@ -91,6 +93,8 @@ defmodule ContextBot.Settings do
     :anthropic_web_fetch_tool_type,
     :anthropic_research_max_tokens,
     :anthropic_length_repair_max_tokens,
+    :anthropic_structure_model_id,
+    :anthropic_structure_max_tokens,
     :max_web_search_uses,
     :max_web_fetch_uses,
     :max_web_fetch_content_tokens,
@@ -101,6 +105,7 @@ defmodule ContextBot.Settings do
     :anthropic_research_reservation_microdollars,
     :anthropic_continuation_reservation_microdollars,
     :anthropic_repair_reservation_microdollars,
+    :anthropic_structure_reservation_microdollars,
     :anthropic_retry_reservation_microdollars,
     :anthropic_pricing_version,
     :operator_allowed_dids,
@@ -130,6 +135,8 @@ defmodule ContextBot.Settings do
     :anthropic_web_fetch_tool_type,
     :anthropic_research_max_tokens,
     :anthropic_length_repair_max_tokens,
+    :anthropic_structure_model_id,
+    :anthropic_structure_max_tokens,
     :max_web_search_uses,
     :max_web_fetch_uses,
     :max_web_fetch_content_tokens,
@@ -140,6 +147,7 @@ defmodule ContextBot.Settings do
     :anthropic_research_reservation_microdollars,
     :anthropic_continuation_reservation_microdollars,
     :anthropic_repair_reservation_microdollars,
+    :anthropic_structure_reservation_microdollars,
     :anthropic_retry_reservation_microdollars,
     :anthropic_pricing_version,
     :thread_parent_height,
@@ -178,6 +186,8 @@ defmodule ContextBot.Settings do
           anthropic_web_fetch_tool_type: String.t(),
           anthropic_research_max_tokens: pos_integer(),
           anthropic_length_repair_max_tokens: pos_integer(),
+          anthropic_structure_model_id: String.t(),
+          anthropic_structure_max_tokens: pos_integer(),
           max_web_search_uses: pos_integer(),
           max_web_fetch_uses: pos_integer(),
           max_web_fetch_content_tokens: pos_integer(),
@@ -188,6 +198,7 @@ defmodule ContextBot.Settings do
           anthropic_research_reservation_microdollars: pos_integer(),
           anthropic_continuation_reservation_microdollars: pos_integer(),
           anthropic_repair_reservation_microdollars: pos_integer(),
+          anthropic_structure_reservation_microdollars: pos_integer(),
           anthropic_retry_reservation_microdollars: pos_integer(),
           anthropic_pricing_version: String.t(),
           thread_parent_height: pos_integer(),
@@ -319,6 +330,25 @@ defmodule ContextBot.Settings do
           :anthropic_length_repair_max_tokens,
           @default_anthropic_length_repair_max_tokens
         ),
+      anthropic_structure_model_id:
+        string!(
+          environment,
+          "ANTHROPIC_STRUCTURE_MODEL_ID",
+          :anthropic_structure_model_id,
+          string!(
+            environment,
+            "ANTHROPIC_TITLE_MODEL_ID",
+            :anthropic_title_model_id,
+            @default_anthropic_title_model_id
+          )
+        ),
+      anthropic_structure_max_tokens:
+        positive_integer!(
+          environment,
+          "ANTHROPIC_STRUCTURE_MAX_TOKENS",
+          :anthropic_structure_max_tokens,
+          @default_anthropic_structure_max_tokens
+        ),
       max_web_search_uses:
         positive_integer!(
           environment,
@@ -388,6 +418,13 @@ defmodule ContextBot.Settings do
           "ANTHROPIC_REPAIR_RESERVATION_USD",
           :anthropic_repair_reservation_usd,
           @default_anthropic_reservation_usd
+        ),
+      anthropic_structure_reservation_microdollars:
+        microdollars!(
+          environment,
+          "ANTHROPIC_STRUCTURE_RESERVATION_USD",
+          :anthropic_structure_reservation_usd,
+          @default_anthropic_structure_reservation_usd
         ),
       anthropic_retry_reservation_microdollars:
         microdollars!(
@@ -585,6 +622,13 @@ defmodule ContextBot.Settings do
     )
 
     validate_range!(
+      settings.anthropic_structure_max_tokens,
+      "ANTHROPIC_STRUCTURE_MAX_TOKENS",
+      1,
+      @maximum_anthropic_repair_tokens
+    )
+
+    validate_range!(
       settings.max_web_search_uses,
       "MAX_WEB_SEARCH_USES",
       1,
@@ -679,7 +723,7 @@ defmodule ContextBot.Settings do
 
   @spec anthropic_reservation_microdollars(
           t(),
-          :research | :continuation | :repair | :retry
+          :research | :continuation | :repair | :structure | :retry
         ) :: pos_integer()
   def anthropic_reservation_microdollars(settings, :research),
     do: settings.anthropic_research_reservation_microdollars
@@ -689,6 +733,9 @@ defmodule ContextBot.Settings do
 
   def anthropic_reservation_microdollars(settings, :repair),
     do: settings.anthropic_repair_reservation_microdollars
+
+  def anthropic_reservation_microdollars(settings, :structure),
+    do: settings.anthropic_structure_reservation_microdollars
 
   def anthropic_reservation_microdollars(settings, :retry),
     do: settings.anthropic_retry_reservation_microdollars
@@ -948,6 +995,8 @@ defmodule ContextBot.Settings do
     repair_maximum =
       maximum_exposure!(settings.anthropic_length_repair_max_tokens, settings, pricing)
 
+    structure_maximum = structure_exposure!(settings, pricing)
+
     reservations = [
       {"ANTHROPIC_RESEARCH_RESERVATION_USD", settings.anthropic_research_reservation_microdollars,
        research_maximum},
@@ -955,8 +1004,10 @@ defmodule ContextBot.Settings do
        settings.anthropic_continuation_reservation_microdollars, research_maximum},
       {"ANTHROPIC_REPAIR_RESERVATION_USD", settings.anthropic_repair_reservation_microdollars,
        repair_maximum},
+      {"ANTHROPIC_STRUCTURE_RESERVATION_USD",
+       settings.anthropic_structure_reservation_microdollars, structure_maximum},
       {"ANTHROPIC_RETRY_RESERVATION_USD", settings.anthropic_retry_reservation_microdollars,
-       max(research_maximum, repair_maximum)}
+       max(research_maximum, max(repair_maximum, structure_maximum))}
     ]
 
     Enum.each(reservations, fn {name, reservation, maximum} ->
@@ -974,7 +1025,7 @@ defmodule ContextBot.Settings do
 
   defp validate_provider_storage_capacity!(settings) do
     maximum_recorded_responses =
-      1 + settings.max_tool_continuations + 1 + settings.anthropic_max_http_retries
+      1 + settings.max_tool_continuations + 1 + 1 + settings.anthropic_max_http_retries
 
     required_bytes =
       maximum_recorded_responses *
@@ -994,6 +1045,23 @@ defmodule ContextBot.Settings do
       {:error, :unknown_pricing_version} ->
         raise ArgumentError, "ANTHROPIC_PRICING_VERSION is not supported: #{inspect(version)}"
     end
+  end
+
+  defp structure_exposure!(settings, pricing) do
+    usage = %{
+      input_tokens: 0,
+      cache_creation_input_tokens: settings.anthropic_research_max_tokens,
+      cache_creation: %{
+        ephemeral_5m_input_tokens: 0,
+        ephemeral_1h_input_tokens: settings.anthropic_research_max_tokens
+      },
+      cache_read_input_tokens: 0,
+      output_tokens: settings.anthropic_structure_max_tokens,
+      server_tool_use: %{web_search_requests: 0}
+    }
+
+    {:ok, maximum} = Pricing.maximum_cost(usage, pricing)
+    maximum
   end
 
   defp maximum_exposure!(output_tokens, settings, pricing) do

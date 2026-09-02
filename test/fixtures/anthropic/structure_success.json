@@ -1,0 +1,27 @@
+{
+  "id": "msg_structure_success",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-5",
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"disposition\":\"reply\",\"title\":\"Primary Sources\",\"compact_reply\":\"Useful context from primary sources.\"}"
+    }
+  ],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 30,
+    "cache_creation_input_tokens": 0,
+    "cache_creation": {
+      "ephemeral_5m_input_tokens": 0,
+      "ephemeral_1h_input_tokens": 0
+    },
+    "cache_read_input_tokens": 0,
+    "output_tokens": 12,
+    "server_tool_use": {
+      "web_search_requests": 0
+    }
+  }
+}

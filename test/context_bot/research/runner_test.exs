@@ -22,7 +22,16 @@ end
 defmodule ContextBot.Research.RunnerTest do
   use ContextBot.DataCase, async: false
 
-  alias ContextBot.Research.{Budget, BudgetEntry, ReplyLimits, Request, ResponseEnvelope, Runner}
+  alias ContextBot.Research.{
+    Budget,
+    BudgetEntry,
+    Citations,
+    ReplyLimits,
+    Request,
+    ResponseEnvelope,
+    Runner
+  }
+
   alias ContextBot.Research.StructuredFixtures
   alias ContextBot.Workflow.{Invocation, Store}
   alias Ecto.Adapters.SQL
@@ -44,7 +53,7 @@ defmodule ContextBot.Research.RunnerTest do
 
   test "uses the configured server tool versions in the durable initial request" do
     invocation = invocation("configured-tools")
-    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+    Process.put(:runner_client_results, two_phase_results())
 
     custom_settings =
       settings()
@@ -53,7 +62,8 @@ defmodule ContextBot.Research.RunnerTest do
 
     assert {:ok, _result} = Runner.run(invocation, options(settings: custom_settings))
 
-    assert_received {:anthropic_call, request, _metadata, false}
+    assert_received {:anthropic_call, request, %{kind: :research}, false}
+    assert_received {:anthropic_call, structure, %{kind: :structure}, false}
 
     assert Enum.map(request["tools"], & &1["type"]) == [
              "web_search_20270809",
@@ -61,13 +71,19 @@ defmodule ContextBot.Research.RunnerTest do
            ]
 
     assert request["output_config"]["effort"] == "medium"
-    assert request["output_config"]["format"]["type"] == "json_schema"
+    refute Map.has_key?(request["output_config"], "format")
+    assert Enum.at(request["tools"], 1)["citations"] == %{"enabled" => true}
 
-    assert request["output_config"]["format"]["schema"] == Request.output_schema()
+    refute Map.has_key?(structure, "tools")
+    assert structure["output_config"]["format"]["type"] == "json_schema"
+    assert structure["output_config"]["format"]["schema"] == Request.structure_schema()
 
-    assert Enum.at(request["tools"], 1)["citations"] == %{"enabled" => false}
+    refute Map.has_key?(
+             structure["output_config"]["format"]["schema"]["properties"],
+             "full_response"
+           )
 
-    assert Repo.reload!(invocation).anthropic_messages == request
+    assert Repo.reload!(invocation).anthropic_messages == structure
   end
 
   test "checkpoints version 2 image blocks before the provider call" do
@@ -89,10 +105,10 @@ defmodule ContextBot.Research.RunnerTest do
         ]
       })
 
-    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+    Process.put(:runner_client_results, two_phase_results())
 
     assert {:ok, _result} = Runner.run(invocation, options())
-    assert_received {:anthropic_call, request, _metadata, false}
+    assert_received {:anthropic_call, request, %{kind: :research}, false}
 
     assert get_in(request, ["messages", Access.at(0), "content"]) == [
              %{
@@ -105,7 +121,7 @@ defmodule ContextBot.Research.RunnerTest do
              }
            ]
 
-    assert Repo.reload!(invocation).anthropic_messages == request
+    assert_received {:anthropic_call, _structure, %{kind: :structure}, false}
   end
 
   test "rejects malformed persisted canonical media before budget or provider work" do
@@ -162,10 +178,10 @@ defmodule ContextBot.Research.RunnerTest do
   test "commits a complete 200 envelope and sent marker before decoding" do
     invocation = invocation("persist-before-decode")
     raw_body = fixture("tool_success.json")
-    Process.put(:runner_client_results, [{:ok, envelope(200, raw_body)}])
+    Process.put(:runner_client_results, two_phase_results(raw_body))
 
     decoder = fn body ->
-      [stored] = responses(invocation)
+      stored = hd(responses(invocation))
       entry = Repo.get_by!(BudgetEntry, attempt_key: stored.attempt_key)
 
       send(self(), {
@@ -180,20 +196,27 @@ defmodule ContextBot.Research.RunnerTest do
 
     assert {:ok, result} = Runner.run(invocation, options(decoder: decoder))
     assert result.text == "Useful context from primary sources."
-    assert result.full_response == "Useful context from primary sources."
+
+    assert result.full_response ==
+             "Useful context from primary sources.\n\n## Sources\n\n- https://primary.example/report"
+
     assert result.document_title == "Primary Sources"
 
     assert_received {:attempt_at_send, :sent, %DateTime{}, nil}
     assert_received {:decode_observed, ^raw_body, 200, %DateTime{}}
 
-    [stored] = responses(invocation)
-    assert stored.raw_body == raw_body
-    assert stored.attempt_key =~ "-attempt-1-research"
-    assert stored.kind == :research
+    [research_stored, structure_stored] = responses(invocation)
+    assert research_stored.raw_body == raw_body
+    assert research_stored.attempt_key =~ "-attempt-1-research"
+    assert research_stored.kind == :research
+    assert structure_stored.kind == :structure
+    assert structure_stored.attempt_key =~ "-attempt-2-structure"
 
-    entry = Repo.get_by!(BudgetEntry, attempt_key: stored.attempt_key)
-    assert entry.state == :settled
-    assert entry.response_recorded_at != nil
+    for stored <- [research_stored, structure_stored] do
+      entry = Repo.get_by!(BudgetEntry, attempt_key: stored.attempt_key)
+      assert entry.state == :settled
+      assert entry.response_recorded_at != nil
+    end
   end
 
   test "a capacity change after preflight is caught before decode or another request" do
@@ -268,13 +291,18 @@ defmodule ContextBot.Research.RunnerTest do
     settings =
       settings()
       |> Map.put(:max_response_bytes, byte_size(body))
-      |> Map.put(:max_storage_bytes, used_bytes + required_bytes)
+      |> Map.put(:max_storage_bytes, used_bytes + 2 * required_bytes)
 
-    Process.put(:runner_client_results, [{:ok, envelope(200, body)}])
+    Process.put(:runner_client_results, two_phase_results(body))
 
     assert {:ok, _result} = Runner.run(invocation, options(settings: settings))
     assert_received {:anthropic_call, _request, %{kind: :research}, false}
-    assert [%BudgetEntry{state: :settled}] = Repo.all(BudgetEntry)
+    assert_received {:anthropic_call, _request, %{kind: :structure}, false}
+
+    assert Enum.map(Repo.all(from entry in BudgetEntry, order_by: entry.id), & &1.kind) == [
+             :research,
+             :structure
+           ]
   end
 
   test "persists 429 before honoring retry-after and sends the retry under a new reservation" do
@@ -284,7 +312,8 @@ defmodule ContextBot.Research.RunnerTest do
 
     Process.put(:runner_client_results, [
       {:ok, envelope(429, error_body, %{"retry-after" => ["7"]})},
-      {:ok, envelope(200, success_body)}
+      {:ok, envelope(200, success_body)},
+      {:ok, envelope(200, fixture("structure_success.json"))}
     ])
 
     sleep = fn milliseconds ->
@@ -297,18 +326,20 @@ defmodule ContextBot.Research.RunnerTest do
     assert_received {:retry_sleep, 7_000, ^error_body}
 
     entries = Repo.all(from entry in BudgetEntry, order_by: entry.id)
-    assert Enum.map(entries, & &1.kind) == [:research, :retry]
+    assert Enum.map(entries, & &1.kind) == [:research, :retry, :structure]
 
     assert Enum.map(entries, & &1.attempt_key) == [
              "invocation-#{invocation.id}-attempt-1-research",
-             "invocation-#{invocation.id}-attempt-2-retry"
+             "invocation-#{invocation.id}-attempt-2-retry",
+             "invocation-#{invocation.id}-attempt-3-structure"
            ]
 
     assert Enum.all?(entries, &(&1.response_recorded_at != nil))
 
     assert Enum.map(responses(invocation), & &1.raw_body) == [
              error_body,
-             success_body
+             success_body,
+             fixture("structure_success.json")
            ]
   end
 
@@ -319,7 +350,8 @@ defmodule ContextBot.Research.RunnerTest do
 
     Process.put(:runner_client_results, [
       {:ok, envelope(500, error_body, %{"retry-after" => ["Wed, 29 Jul 2026 12:00:07 GMT"]})},
-      {:ok, envelope(200, success_body)}
+      {:ok, envelope(200, success_body)},
+      {:ok, envelope(200, fixture("structure_success.json"))}
     ])
 
     sleep = fn milliseconds ->
@@ -374,7 +406,8 @@ defmodule ContextBot.Research.RunnerTest do
 
       Process.put(:runner_client_results, [
         {:ok, envelope(status, body, %{"retry-after" => ["7"]})},
-        {:ok, envelope(200, fixture("tool_success.json"))}
+        {:ok, envelope(200, fixture("tool_success.json"))},
+        {:ok, envelope(200, fixture("structure_success.json"))}
       ])
 
       sleep = fn milliseconds -> send(self(), {:malformed_retry_sleep, suffix, milliseconds}) end
@@ -386,7 +419,7 @@ defmodule ContextBot.Research.RunnerTest do
 
   test "reuses a reserved but unsent attempt after a crash" do
     invocation = invocation("crash-reserved")
-    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+    Process.put(:runner_client_results, two_phase_results())
 
     crash = crash_once(:after_reservation)
 
@@ -400,13 +433,19 @@ defmodule ContextBot.Research.RunnerTest do
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
 
     assert {:ok, _result} = Runner.run(invocation, options(crash: crash))
-    assert [%BudgetEntry{state: :settled, attempt_key: attempt_key}] = Repo.all(BudgetEntry)
+
+    assert [{:research, :settled, attempt_key}, {:structure, :settled, _structure_key}] =
+             Enum.map(
+               Repo.all(from entry in BudgetEntry, order_by: entry.id),
+               &{&1.kind, &1.state, &1.attempt_key}
+             )
+
     assert attempt_key == reserved.attempt_key
   end
 
   test "a crash after sent waits out the HTTP timeout without another provider call" do
     invocation = invocation("crash-sent")
-    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+    Process.put(:runner_client_results, two_phase_results())
 
     crash = crash_once(:after_sent)
 
@@ -429,7 +468,7 @@ defmodule ContextBot.Research.RunnerTest do
 
   test "a crash after sent starts a new attempt once the HTTP timeout has elapsed" do
     invocation = invocation("crash-sent-elapsed")
-    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+    Process.put(:runner_client_results, two_phase_results())
 
     crash = crash_once(:after_sent)
 
@@ -447,7 +486,8 @@ defmodule ContextBot.Research.RunnerTest do
 
     assert [
              {:research, :indeterminate, ^first_key},
-             {:retry, :settled, retry_key}
+             {:retry, :settled, retry_key},
+             {:structure, :settled, _structure_key}
            ] =
              Enum.map(
                Repo.all(from entry in BudgetEntry, order_by: entry.id),
@@ -474,11 +514,12 @@ defmodule ContextBot.Research.RunnerTest do
     invocation = invocation("legacy-ambiguous-elapsed")
     ambiguous = insert_budget_entry(invocation, 1, :research, :sent)
     reserved = insert_budget_entry(invocation, 2, :retry, :reserved)
-    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+    Process.put(:runner_client_results, two_phase_results())
     later = DateTime.add(@now, 300_001, :millisecond)
 
     assert {:ok, _result} = Runner.run(invocation, options(now: fn -> later end))
     assert_received {:anthropic_call, _request, %{kind: :retry}, false}
+    assert_received {:anthropic_call, _request, %{kind: :structure}, false}
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
     assert Repo.reload!(ambiguous).state == :indeterminate
     assert Repo.reload!(reserved).state == :settled
@@ -516,7 +557,7 @@ defmodule ContextBot.Research.RunnerTest do
   test "a crash after response persistence resumes decode and settlement without another POST" do
     invocation = invocation("crash-persisted")
     body = fixture("tool_success.json")
-    Process.put(:runner_client_results, [{:ok, envelope(200, body)}])
+    Process.put(:runner_client_results, two_phase_results(body))
 
     crash = crash_once(:after_persistence)
 
@@ -529,11 +570,17 @@ defmodule ContextBot.Research.RunnerTest do
 
     assert [stored] = responses(invocation)
     assert stored.raw_body == body
-    assert_received {:anthropic_call, _request, _metadata, false}
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
 
     assert {:ok, _result} = Runner.run(invocation, options(crash: crash))
+    assert_received {:anthropic_call, _request, %{kind: :structure}, false}
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
-    assert [%BudgetEntry{state: :settled}] = Repo.all(BudgetEntry)
+
+    assert Enum.map(Repo.all(from entry in BudgetEntry, order_by: entry.id), &{&1.kind, &1.state}) ==
+             [
+               {:research, :settled},
+               {:structure, :settled}
+             ]
   end
 
   test "a retained dynamic-filtering over-limit response resumes into a local split" do
@@ -564,12 +611,16 @@ defmodule ContextBot.Research.RunnerTest do
       put_in(
         fixture,
         ["primary", "content"],
-        tool_blocks ++ [structured_text(over_text)]
+        tool_blocks ++ [writeup_text("Thorough markdown writeup.")]
       )["primary"]
 
     primary_raw = Jason.encode!(primary)
+    structure_raw = Jason.encode!(message_body(structured_json(over_text)))
 
-    Process.put(:runner_client_results, [{:ok, envelope(200, primary_raw)}])
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, primary_raw)},
+      {:ok, envelope(200, structure_raw)}
+    ])
 
     crash = crash_once(:after_persistence)
 
@@ -588,10 +639,11 @@ defmodule ContextBot.Research.RunnerTest do
 
     refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
     refute_received {:anthropic_call, _request, %{kind: :research}, _in_transaction}
+    assert_received {:anthropic_call, _request, %{kind: :structure}, false}
 
-    assert Enum.map(responses(invocation), & &1.raw_body) == [primary_raw]
+    assert Enum.map(responses(invocation), & &1.raw_body) == [primary_raw, structure_raw]
 
-    assert [{:research, :settled}] ==
+    assert [{:research, :settled}, {:structure, :settled}] ==
              Repo.all(from entry in BudgetEntry, order_by: entry.id)
              |> Enum.map(&{&1.kind, &1.state})
   end
@@ -610,7 +662,7 @@ defmodule ContextBot.Research.RunnerTest do
              )
 
     assert {:ok, _new_owner} = take_over(invocation, "new-owner")
-    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+    Process.put(:runner_client_results, two_phase_results())
 
     assert {:error, :stale_claim} = Runner.run(invocation, options())
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
@@ -623,7 +675,7 @@ defmodule ContextBot.Research.RunnerTest do
 
   test "a new owner waits out an exposed attempt instead of replaying it" do
     invocation = invocation("stale-sent")
-    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+    Process.put(:runner_client_results, two_phase_results())
     crash = crash_once(:after_sent)
 
     assert_raise RuntimeError, "injected crash after_sent", fn ->
@@ -645,7 +697,7 @@ defmodule ContextBot.Research.RunnerTest do
 
   test "a takeover after the sent marker stops the stale owner before POST" do
     invocation = invocation("stale-between-sent-and-post")
-    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+    Process.put(:runner_client_results, two_phase_results())
 
     takeover_after_sent = fn
       :after_sent, _entry ->
@@ -665,7 +717,7 @@ defmodule ContextBot.Research.RunnerTest do
 
   test "a stale owner cannot append an envelope after takeover during its HTTP call" do
     invocation = invocation("stale-after-http")
-    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+    Process.put(:runner_client_results, two_phase_results())
 
     takeover_after_http = fn
       :after_http, _envelope ->
@@ -685,7 +737,7 @@ defmodule ContextBot.Research.RunnerTest do
 
   test "a stale owner cannot settle or checkpoint after persisted response takeover" do
     invocation = invocation("stale-after-persistence")
-    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+    Process.put(:runner_client_results, two_phase_results())
 
     takeover_after_persistence = fn
       :after_persistence, _entry ->
@@ -708,7 +760,7 @@ defmodule ContextBot.Research.RunnerTest do
 
   test "a takeover after settlement fences the usage checkpoint" do
     invocation = invocation("stale-usage-checkpoint")
-    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+    Process.put(:runner_client_results, two_phase_results())
 
     takeover_after_settlement = fn
       :after_settlement, _entry ->
@@ -732,7 +784,8 @@ defmodule ContextBot.Research.RunnerTest do
 
     Process.put(:runner_client_results, [
       {:ok, envelope(200, Jason.encode!(fixture["pause"]))},
-      {:ok, envelope(200, Jason.encode!(fixture["success"]))}
+      {:ok, envelope(200, Jason.encode!(fixture["success"]))},
+      {:ok, envelope(200, fixture("structure_success.json"))}
     ])
 
     takeover_before_checkpoint = fn
@@ -779,37 +832,57 @@ defmodule ContextBot.Research.RunnerTest do
     pause_raw = Jason.encode!(fixture["pause"])
     success_raw = Jason.encode!(fixture["success"])
 
+    structure_raw = fixture("structure_success.json")
+
     Process.put(:runner_client_results, [
       {:ok, envelope(200, pause_raw)},
-      {:ok, envelope(200, success_raw)}
+      {:ok, envelope(200, success_raw)},
+      {:ok, envelope(200, structure_raw)}
     ])
 
     assert {:ok, result} = Runner.run(invocation, options())
-    assert result.text == "The cited primary source resolves the disputed date."
+    assert result.text == "Useful context from primary sources."
+
+    assert result.full_response ==
+             Citations.publishable_writeup(
+               "The cited primary source resolves the disputed date.",
+               [
+                 %{
+                   "url" => "https://primary.example/report",
+                   "cited_text" => "The cited primary source resolves the disputed date."
+                 }
+               ]
+             )
+
     assert result.usage["continuations"] == 1
     assert result.usage["tool_uses"] == 1
     assert result.usage["tool_use_counts"] == %{"web_fetch" => 0, "web_search" => 1}
-    assert result.usage["totals"]["input_tokens"] == 320
-    assert result.usage["totals"]["output_tokens"] == 58
-    assert length(result.usage["attempts"]) == 2
+    assert result.usage["totals"]["input_tokens"] == 350
+    assert result.usage["totals"]["output_tokens"] == 70
+    assert length(result.usage["attempts"]) == 3
 
     assert_received {:anthropic_call, initial_request, %{kind: :research}, false}
     assert_received {:anthropic_call, continued_request, %{kind: :continuation}, false}
+    assert_received {:anthropic_call, structure_request, %{kind: :structure}, false}
 
     assert continued_request["messages"] ==
              initial_request["messages"] ++
                [%{"role" => "assistant", "content" => fixture["pause"]["content"]}]
 
+    refute Map.has_key?(structure_request, "tools")
+
     assert Enum.at(fixture["pause"]["content"], 1)["type"] == "future_encrypted_trace"
 
     assert Enum.map(responses(invocation), & &1.raw_body) == [
              pause_raw,
-             success_raw
+             success_raw,
+             structure_raw
            ]
 
     assert Enum.map(Repo.all(from entry in BudgetEntry, order_by: entry.id), & &1.kind) == [
              :research,
-             :continuation
+             :continuation,
+             :structure
            ]
   end
 
@@ -840,12 +913,13 @@ defmodule ContextBot.Research.RunnerTest do
             "content" => []
           }
         },
-        structured_text("Final context only.")
+        writeup_text("Final context only.")
       ])["success"]
 
     Process.put(:runner_client_results, [
       {:ok, envelope(200, Jason.encode!(pause))},
-      {:ok, envelope(200, Jason.encode!(success))}
+      {:ok, envelope(200, Jason.encode!(success))},
+      {:ok, envelope(200, Jason.encode!(message_body(structured_json("Final context only."))))}
     ])
 
     assert {:ok, result} = Runner.run(invocation, options())
@@ -878,10 +952,10 @@ defmodule ContextBot.Research.RunnerTest do
             "content" => []
           }
         },
-        structured_text("Useful context from primary sources.")
+        writeup_text("Useful context from primary sources.")
       ])
 
-    Process.put(:runner_client_results, [{:ok, envelope(200, Jason.encode!(body))}])
+    Process.put(:runner_client_results, two_phase_results(Jason.encode!(body)))
 
     assert {:ok, result} = Runner.run(invocation, options())
     assert result.text == "Useful context from primary sources."
@@ -1080,16 +1154,17 @@ defmodule ContextBot.Research.RunnerTest do
             "error_code" => "max_uses_exceeded"
           }
         },
-        structured_text("Useful context from primary sources.")
+        writeup_text("Useful context from primary sources.")
       ])
 
-    Process.put(:runner_client_results, [{:ok, envelope(200, Jason.encode!(body))}])
+    Process.put(:runner_client_results, two_phase_results(Jason.encode!(body)))
     settings = Map.put(settings(), :max_web_search_uses, 1)
 
     assert {:ok, result} = Runner.run(invocation, options(settings: settings))
     assert result.text == "Useful context from primary sources."
     assert result.usage["tool_use_counts"] == %{"web_fetch" => 0, "web_search" => 2}
     assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    assert_received {:anthropic_call, _request, %{kind: :structure}, false}
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
   end
 
@@ -1113,10 +1188,10 @@ defmodule ContextBot.Research.RunnerTest do
             "error_code" => "max_uses_exceeded"
           }
         },
-        structured_text("Useful context from primary sources.")
+        writeup_text("Useful context from primary sources.")
       ])
 
-    Process.put(:runner_client_results, [{:ok, envelope(200, Jason.encode!(body))}])
+    Process.put(:runner_client_results, two_phase_results(Jason.encode!(body)))
     settings = Map.put(settings(), :max_web_fetch_uses, 1)
 
     assert {:ok, result} = Runner.run(invocation, options(settings: settings))
@@ -1157,7 +1232,7 @@ defmodule ContextBot.Research.RunnerTest do
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
 
     success = decoded_fixture("tool_success.json")
-    Process.put(:runner_client_results, [{:ok, envelope(200, Jason.encode!(success))}])
+    Process.put(:runner_client_results, two_phase_results(Jason.encode!(success)))
 
     assert {:error, :code_execution_failed} =
              Runner.run(Repo.reload!(invocation), options())
@@ -1169,13 +1244,14 @@ defmodule ContextBot.Research.RunnerTest do
 
     assert result.text == "Useful context from primary sources."
     assert_received {:anthropic_call, _request, %{kind: :retry}, false}
+    assert_received {:anthropic_call, _request, %{kind: :structure}, false}
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
-    assert length(responses(invocation)) == 2
+    assert length(responses(invocation)) == 3
   end
 
   test "force_new_attempt still waits out an in-flight send without a second POST" do
     invocation = invocation("force-new-inflight")
-    Process.put(:runner_client_results, [{:ok, envelope(200, fixture("tool_success.json"))}])
+    Process.put(:runner_client_results, two_phase_results())
     crash = crash_once(:after_sent)
 
     assert_raise RuntimeError, "injected crash after_sent", fn ->
@@ -1199,12 +1275,11 @@ defmodule ContextBot.Research.RunnerTest do
     full = "Thorough markdown writeup with sources."
 
     Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(message_body(full)))},
       {:ok,
        envelope(
          200,
-         Jason.encode!(
-           message_body(structured_json(compact, title: "", full: full, disposition: "reply"))
-         )
+         Jason.encode!(message_body(structured_json(compact, title: "", disposition: "reply")))
        )},
       {:ok, envelope(200, Jason.encode!(message_body(title_json("Planned Explosion?"))))}
     ])
@@ -1214,10 +1289,14 @@ defmodule ContextBot.Research.RunnerTest do
     assert result.full_response == full
     assert result.document_title == "Planned Explosion?"
     refute Map.has_key?(result, :text_part2)
-    assert result.validation == %{"result" => "valid", "repair_used" => false}
+    assert result.validation["result"] == "valid"
+    assert result.validation["repair_used"] == false
 
     assert_received {:anthropic_call, research_request, %{kind: :research}, false}
     assert research_request["model"] == "claude-sonnet-5"
+    refute Map.has_key?(research_request["output_config"], "format")
+    assert_received {:anthropic_call, structure_request, %{kind: :structure}, false}
+    refute Map.has_key?(structure_request, "tools")
     assert_received {:anthropic_call, title_request, %{kind: :repair}, false}
     assert title_request["model"] == "claude-haiku-4-5"
     refute Map.has_key?(title_request, "tools")
@@ -1231,8 +1310,9 @@ defmodule ContextBot.Research.RunnerTest do
 
     kinds = Enum.map(Repo.all(BudgetEntry), & &1.kind)
     assert :research in kinds
+    assert :structure in kinds
     assert :repair in kinds
-    assert length(responses(invocation)) == 2
+    assert length(responses(invocation)) == 3
   end
 
   test "a blank title plus over-long compact rewrites the title then pack-first splits" do
@@ -1241,11 +1321,8 @@ defmodule ContextBot.Research.RunnerTest do
     full = "Thorough markdown writeup."
 
     Process.put(:runner_client_results, [
-      {:ok,
-       envelope(
-         200,
-         Jason.encode!(message_body(structured_json(over_text, title: "", full: full)))
-       )},
+      {:ok, envelope(200, Jason.encode!(message_body(full)))},
+      {:ok, envelope(200, Jason.encode!(message_body(structured_json(over_text, title: ""))))},
       {:ok, envelope(200, Jason.encode!(message_body(title_json("What Is That Bird?"))))}
     ])
 
@@ -1258,6 +1335,7 @@ defmodule ContextBot.Research.RunnerTest do
     assert result.validation["repair_used"] == false
 
     assert_received {:anthropic_call, _research, %{kind: :research}, false}
+    assert_received {:anthropic_call, _structure, %{kind: :structure}, false}
     assert_received {:anthropic_call, title_request, %{kind: :repair}, false}
     refute title_request["messages"] |> hd() |> Map.get("content") =~ "LENGTH_REPAIR"
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
@@ -1267,29 +1345,34 @@ defmodule ContextBot.Research.RunnerTest do
     invocation = invocation("blank-title-failed")
 
     Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(message_body("Writeup.")))},
       {:ok,
        envelope(
          200,
-         Jason.encode!(
-           message_body(structured_json("Short summary.", title: "", full: "Writeup."))
-         )
+         Jason.encode!(message_body(structured_json("Short summary.", title: "")))
        )},
       {:ok, envelope(200, Jason.encode!(message_body(title_json(""))))}
     ])
 
     assert {:error, :invalid_structured_output} = Runner.run(invocation, options())
     assert_received {:anthropic_call, _research, %{kind: :research}, false}
+    assert_received {:anthropic_call, _structure, %{kind: :structure}, false}
     assert_received {:anthropic_call, _title, %{kind: :repair}, false}
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
   end
 
-  test "an over-limit structured compact splits locally without a second Anthropic call" do
+  test "an over-limit structured compact splits locally without a length-repair rewrite" do
     invocation = invocation("over-limit-split")
     {part1, part2, over_text} = over_limit_split_parts()
+    writeup = "Thorough markdown writeup with sources."
 
-    Process.put(:runner_client_results, [
-      {:ok, envelope(200, Jason.encode!(message_body(structured_json(over_text))))}
-    ])
+    Process.put(
+      :runner_client_results,
+      two_phase_results(
+        Jason.encode!(message_body(writeup)),
+        Jason.encode!(message_body(structured_json(over_text, title: "Context Request")))
+      )
+    )
 
     assert {:ok, result} = Runner.run(invocation, options())
     assert result.text == part1
@@ -1298,7 +1381,7 @@ defmodule ContextBot.Research.RunnerTest do
 
     refute String.contains?(result.compact_source, ReplyLimits.continuation_ellipsis())
 
-    assert result.full_response == "Writeup."
+    assert result.full_response == writeup
     assert result.document_title == "Context Request"
 
     assert result.validation == %{
@@ -1309,24 +1392,30 @@ defmodule ContextBot.Research.RunnerTest do
            }
 
     assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    assert_received {:anthropic_call, structure, %{kind: :structure}, false}
+    refute Map.has_key?(structure, "tools")
     refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
-    assert length(responses(invocation)) == 1
-    assert Enum.map(Repo.all(BudgetEntry), & &1.kind) == [:research]
+    assert length(responses(invocation)) == 2
+
+    assert Enum.map(Repo.all(from entry in BudgetEntry, order_by: entry.id), & &1.kind) == [
+             :research,
+             :structure
+           ]
   end
 
-  test "a structured over-limit compact splits and keeps the original title and full response" do
+  test "a structured over-limit compact splits and keeps the research writeup and title" do
     invocation = invocation("structured-over-limit-split")
     full = "Thorough markdown writeup with sources."
     title = "What Is That Bird?"
     {part1, part2, over_text} = over_limit_split_parts()
 
-    Process.put(:runner_client_results, [
-      {:ok,
-       envelope(
-         200,
-         Jason.encode!(message_body(structured_json(over_text, title: title, full: full)))
-       )}
-    ])
+    Process.put(
+      :runner_client_results,
+      two_phase_results(
+        Jason.encode!(message_body(full)),
+        Jason.encode!(message_body(structured_json(over_text, title: title)))
+      )
+    )
 
     assert {:ok, result} = Runner.run(invocation, options())
     assert result.text == part1
@@ -1338,93 +1427,186 @@ defmodule ContextBot.Research.RunnerTest do
     assert result.validation["repair_used"] == false
 
     assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    assert_received {:anthropic_call, _request, %{kind: :structure}, false}
     refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
   end
 
   test "an under-limit structured reply stays one post without repair or split" do
     invocation = invocation("under-limit-one-post")
     text = String.duplicate("a", 300)
+    writeup = "Writeup."
 
-    Process.put(:runner_client_results, [
-      {:ok, envelope(200, Jason.encode!(message_body(structured_json(text))))}
-    ])
+    Process.put(
+      :runner_client_results,
+      two_phase_results(
+        Jason.encode!(message_body(writeup)),
+        Jason.encode!(message_body(structured_json(text)))
+      )
+    )
 
     assert {:ok, result} = Runner.run(invocation, options())
     assert result.text == text
-    assert result.full_response == "Writeup."
+    assert result.full_response == writeup
     assert result.document_title == "Context Request"
     refute Map.has_key?(result, :text_part2)
-    assert result.validation == %{"result" => "valid", "repair_used" => false}
+
+    assert result.validation == %{
+             "result" => "valid",
+             "repair_used" => false,
+             "phase" => "structure"
+           }
+
     assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    assert_received {:anthropic_call, _request, %{kind: :structure}, false}
     refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
   end
 
-  test "prose instead of structured JSON fails closed without publishing" do
+  test "prose on the structure call fails closed without publishing" do
     invocation = invocation("invalid-structured-output")
 
-    Process.put(:runner_client_results, [
-      {:ok, envelope(200, Jason.encode!(message_body("Just a regular reply without JSON")))}
-    ])
+    Process.put(
+      :runner_client_results,
+      two_phase_results(
+        Jason.encode!(message_body("Completed cited writeup.")),
+        Jason.encode!(message_body("Just a regular reply without JSON"))
+      )
+    )
 
     assert {:error, :invalid_structured_output} = Runner.run(invocation, options())
     assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    assert_received {:anthropic_call, _request, %{kind: :structure}, false}
     refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
   end
 
-  test "a no_reply structured object completes research without a compact or writeup" do
+  test "a no_reply structure object still uses the cheap second call" do
     invocation = invocation("no-reply-structured")
 
-    Process.put(:runner_client_results, [
-      {:ok, envelope(200, Jason.encode!(message_body(StructuredFixtures.no_reply_json())))}
-    ])
+    Process.put(
+      :runner_client_results,
+      two_phase_results(
+        Jason.encode!(message_body("No published reply is needed.")),
+        Jason.encode!(message_body(StructuredFixtures.no_reply_json()))
+      )
+    )
 
     assert {:ok, result} = Runner.run(invocation, options())
     assert result.disposition == :no_reply
     assert result.text == ""
     refute Map.get(result, :full_response)
     refute Map.get(result, :document_title)
-    assert result.validation == %{"result" => "no_reply", "repair_used" => false}
+
+    assert result.validation == %{
+             "result" => "no_reply",
+             "repair_used" => false,
+             "phase" => "structure"
+           }
+
     refute Map.has_key?(result, :text_part2)
-    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    assert_received {:anthropic_call, research, %{kind: :research}, false}
+    assert_received {:anthropic_call, structure, %{kind: :structure}, false}
+    refute Map.has_key?(structure, "tools")
+    assert is_list(research["tools"])
     refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
   end
 
-  test "a structured compact that fits in one post does not split" do
-    invocation = invocation("dual-format-one-post")
+  test "title and compact come from the structure call and full_response from research" do
+    invocation = invocation("two-phase-fields")
     compact = String.duplicate("b", 250)
-    full = "Thorough markdown writeup with sources and method."
+    full = "Thorough markdown writeup. See https://primary.example/report"
     title = "What Is That Bird?"
 
-    Process.put(:runner_client_results, [
-      {:ok,
-       envelope(
-         200,
-         Jason.encode!(message_body(structured_json(compact, title: title, full: full)))
-       )}
-    ])
+    Process.put(
+      :runner_client_results,
+      two_phase_results(
+        Jason.encode!(
+          message_body(full, [
+            %{
+              "type" => "web_search_result_location",
+              "url" => "https://primary.example/report",
+              "cited_text" => "source excerpt"
+            }
+          ])
+        ),
+        Jason.encode!(message_body(structured_json(compact, title: title)))
+      )
+    )
 
     assert {:ok, result} = Runner.run(invocation, options())
     assert result.text == compact
     assert result.full_response == full
     assert result.document_title == title
     refute Map.has_key?(result, :text_part2)
-    assert result.validation == %{"result" => "valid", "repair_used" => false}
-    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+
+    assert result.validation == %{
+             "result" => "valid",
+             "repair_used" => false,
+             "phase" => "structure"
+           }
+
+    assert Repo.reload!(invocation).citation_sources == [
+             %{"url" => "https://primary.example/report", "cited_text" => "source excerpt"}
+           ]
+
+    assert_received {:anthropic_call, research, %{kind: :research}, false}
+    assert_received {:anthropic_call, structure, %{kind: :structure}, false}
+    refute Map.has_key?(research["output_config"], "format")
+    refute Map.has_key?(structure, "tools")
+    assert structure["output_config"]["format"]["schema"] == Request.structure_schema()
     refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
+  end
+
+  test "a structure call with a blank title starts the cheap Haiku title rewrite" do
+    invocation = invocation("blank-structure-title")
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(message_body("Cited writeup.")))},
+      {:ok,
+       envelope(
+         200,
+         Jason.encode!(
+           message_body(
+             Jason.encode!(%{
+               "disposition" => "reply",
+               "title" => "   ",
+               "compact_reply" => "A compact answer."
+             })
+           )
+         )
+       )},
+      {:ok, envelope(200, Jason.encode!(message_body(title_json("Cited Writeup"))))}
+    ])
+
+    assert {:ok, result} = Runner.run(invocation, options())
+    assert result.text == "A compact answer."
+    assert result.document_title == "Cited Writeup"
+    assert result.full_response == "Cited writeup."
+    assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    assert_received {:anthropic_call, _request, %{kind: :structure}, false}
+    assert_received {:anthropic_call, title_request, %{kind: :repair}, false}
+    assert title_request["model"] == "claude-haiku-4-5"
   end
 
   test "an unsplittable over-limit compact fails closed without a repair attempt" do
     invocation = invocation("over-limit-unsplittable")
     unsplittable = String.duplicate("a", 301)
 
-    Process.put(:runner_client_results, [
-      {:ok, envelope(200, Jason.encode!(message_body(structured_json(unsplittable))))}
-    ])
+    Process.put(
+      :runner_client_results,
+      two_phase_results(
+        Jason.encode!(message_body("Writeup.")),
+        Jason.encode!(message_body(structured_json(unsplittable)))
+      )
+    )
 
     assert {:error, :invalid_repair} = Runner.run(invocation, options())
     assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    assert_received {:anthropic_call, _request, %{kind: :structure}, false}
     refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
-    assert Enum.map(Repo.all(BudgetEntry), & &1.kind) == [:research]
+
+    assert Enum.map(Repo.all(from entry in BudgetEntry, order_by: entry.id), & &1.kind) == [
+             :research,
+             :structure
+           ]
   end
 
   test "an unsplittable structured compact fails closed and does not rewrite" do
@@ -1432,19 +1614,25 @@ defmodule ContextBot.Research.RunnerTest do
     full = "Thorough markdown writeup."
     title = "What Is That Bird?"
 
-    Process.put(:runner_client_results, [
-      {:ok,
-       envelope(
-         200,
-         Jason.encode!(
-           message_body(structured_json(String.duplicate("c", 328), title: title, full: full))
-         )
-       )}
-    ])
+    Process.put(
+      :runner_client_results,
+      two_phase_results(
+        Jason.encode!(message_body(full)),
+        Jason.encode!(message_body(structured_json(String.duplicate("c", 328), title: title)))
+      )
+    )
 
     assert {:error, :invalid_repair} = Runner.run(invocation, options())
     assert_received {:anthropic_call, _request, %{kind: :research}, false}
+    assert_received {:anthropic_call, _request, %{kind: :structure}, false}
     refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
+  end
+
+  defp two_phase_results(writeup_raw \\ nil, structure_raw \\ nil) do
+    [
+      {:ok, envelope(200, writeup_raw || fixture("tool_success.json"))},
+      {:ok, envelope(200, structure_raw || fixture("structure_success.json"))}
+    ]
   end
 
   defp options(overrides \\ []) do
@@ -1466,13 +1654,16 @@ defmodule ContextBot.Research.RunnerTest do
       anthropic_research_reservation_microdollars: 1_000_000,
       anthropic_continuation_reservation_microdollars: 1_000_000,
       anthropic_repair_reservation_microdollars: 1_000_000,
+      anthropic_structure_reservation_microdollars: 100_000,
       anthropic_retry_reservation_microdollars: 1_000_000,
       anthropic_pricing_version: "sonnet-5-2026-07-28",
       anthropic_model_id: "claude-sonnet-5",
       anthropic_title_model_id: "claude-haiku-4-5",
+      anthropic_structure_model_id: "claude-haiku-4-5",
       anthropic_effort: :medium,
       anthropic_research_max_tokens: 1_024,
       anthropic_length_repair_max_tokens: 256,
+      anthropic_structure_max_tokens: 256,
       max_web_search_uses: 3,
       max_web_fetch_uses: 3,
       max_web_fetch_content_tokens: 10_000,
@@ -1634,16 +1825,21 @@ defmodule ContextBot.Research.RunnerTest do
 
   defp title_json(title), do: Jason.encode!(%{"title" => title})
 
-  defp structured_text(compact, opts \\ []) do
-    %{"type" => "text", "text" => structured_json(compact, opts)}
-  end
+  defp writeup_text(text) when is_binary(text), do: %{"type" => "text", "text" => text}
 
-  defp message_body(text) do
+  defp message_body(text, citations \\ nil) do
+    text_block =
+      if is_list(citations) do
+        %{"type" => "text", "text" => text, "citations" => citations}
+      else
+        %{"type" => "text", "text" => text}
+      end
+
     %{
       "id" => "msg_test",
       "type" => "message",
       "role" => "assistant",
-      "content" => [%{"type" => "text", "text" => text}],
+      "content" => [text_block],
       "stop_reason" => "end_turn",
       "usage" => usage()
     }

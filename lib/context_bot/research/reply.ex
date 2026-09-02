@@ -12,7 +12,7 @@ defmodule ContextBot.Research.Reply do
   """
 
   alias ContextBot.ATProto.Post
-  alias ContextBot.Research.ReplyLimits
+  alias ContextBot.Research.{Citations, ReplyLimits}
 
   @hard_max_graphemes ReplyLimits.hard_max_graphemes()
   @max_bytes ReplyLimits.max_bytes()
@@ -82,6 +82,34 @@ defmodule ContextBot.Research.Reply do
 
   def select(content_blocks, stop_reason),
     do: select_response(content_blocks, stop_reason, %{}, MapSet.new())
+
+  @type writeup :: %{text: String.t(), citations: [map()]}
+
+  @doc """
+  Extracts the unstructured research writeup and citation blocks after tool protocol checks.
+
+  Empty writeup text is allowed so a later cheap structure call can return `no_reply`.
+  """
+  @spec select_writeup([map()], term() | selection_context()) ::
+          {:ok, writeup()} | {:error, reason()}
+  def select_writeup(
+        content_blocks,
+        %{stop_reason: stop_reason, pending_server_tools: pending_server_tools} = context
+      )
+      when is_map(pending_server_tools) do
+    seen_tool_ids =
+      Map.get(context, :seen_server_tool_ids, MapSet.new(Map.keys(pending_server_tools)))
+
+    if valid_pending_server_tools?(pending_server_tools) and
+         valid_seen_tool_ids?(seen_tool_ids, pending_server_tools) do
+      select_writeup_response(content_blocks, stop_reason, pending_server_tools, seen_tool_ids)
+    else
+      {:error, :invalid_content}
+    end
+  end
+
+  def select_writeup(content_blocks, stop_reason),
+    do: select_writeup_response(content_blocks, stop_reason, %{}, MapSet.new())
 
   @doc "Validates server-tool protocol in saved assistant turns and returns pending/seen state."
   @spec server_tool_context(map(), [map()]) ::
@@ -358,6 +386,24 @@ defmodule ContextBot.Research.Reply do
     do:
       String.starts_with?(text, ReplyLimits.continuation_ellipsis()) or
         String.starts_with?(text, "...")
+
+  defp select_writeup_response(content_blocks, stop_reason, pending_server_tools, seen_tool_ids)
+       when is_list(content_blocks) and stop_reason in ["end_turn", :end_turn] do
+    case content_text(content_blocks, pending_server_tools, seen_tool_ids) do
+      {:ok, text} ->
+        {:ok,
+         %{
+           text: String.trim(text),
+           citations: Citations.from_content(content_blocks)
+         }}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp select_writeup_response(content_blocks, stop_reason, pending_server_tools, seen_tool_ids),
+    do: select_response(content_blocks, stop_reason, pending_server_tools, seen_tool_ids)
 
   defp select_response(content_blocks, stop_reason, pending_server_tools, seen_tool_ids)
        when is_list(content_blocks) and stop_reason in ["end_turn", :end_turn] do
@@ -892,18 +938,22 @@ defmodule ContextBot.Research.Reply do
 
   defp structured_fields(_decoded), do: :invalid
 
-  defp reply_fields(%{
-         "title" => title,
-         "compact_reply" => compact_reply,
-         "full_response" => full_response
-       })
-       when is_binary(title) and is_binary(compact_reply) and is_binary(full_response) do
+  defp reply_fields(%{"title" => title, "compact_reply" => compact_reply} = decoded)
+       when is_binary(title) and is_binary(compact_reply) do
     title = title |> String.trim() |> unescape_json_string_escapes()
     compact_reply = compact_reply |> String.trim() |> unescape_json_string_escapes()
-    full_response = full_response |> String.trim() |> unescape_json_string_escapes()
+
+    full_response =
+      case decoded do
+        %{"full_response" => full} when is_binary(full) ->
+          full |> String.trim() |> unescape_json_string_escapes()
+
+        _missing ->
+          ""
+      end
 
     cond do
-      compact_reply == "" or full_response == "" ->
+      compact_reply == "" ->
         :invalid
 
       title == "" ->

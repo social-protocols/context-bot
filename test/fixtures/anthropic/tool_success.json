@@ -6,7 +6,15 @@
   "content": [
     {
       "type": "text",
-      "text": "{\"title\":\"Primary Sources\",\"compact_reply\":\"Useful context from primary sources.\",\"full_response\":\"Useful context from primary sources.\"}"
+      "text": "Useful context from primary sources.",
+      "citations": [
+        {
+          "type": "web_search_result_location",
+          "url": "https://primary.example/report",
+          "title": "Primary report",
+          "cited_text": "primary source excerpt"
+        }
+      ]
     }
   ],
   "stop_reason": "end_turn",

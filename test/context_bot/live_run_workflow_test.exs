@@ -131,27 +131,63 @@ defmodule ContextBot.LiveRunWorkflowTest do
              Repo.all(Oban.Job)
 
     # Stub research response
-    POCFixture.set_research_response(fixture, %{
-      "stop_reason" => "end_turn",
-      "content" => [
-        %{
-          "type" => "text",
-          "text" =>
-            StructuredFixtures.structured_json(
-              "Public reports indicate this is a test.",
-              title: "Public Reports",
-              full: "Public reports indicate this is a test."
-            )
-        }
-      ]
-    })
+    POCFixture.put_anthropic_results(fixture, [
+      {:response, 200,
+       Jason.encode!(%{
+         "id" => "msg_writeup",
+         "type" => "message",
+         "role" => "assistant",
+         "stop_reason" => "end_turn",
+         "content" => [
+           %{"type" => "text", "text" => "Public reports indicate this is a test."}
+         ],
+         "usage" => %{
+           "input_tokens" => 10,
+           "output_tokens" => 5,
+           "cache_creation_input_tokens" => 0,
+           "cache_read_input_tokens" => 0,
+           "cache_creation" => %{
+             "ephemeral_5m_input_tokens" => 0,
+             "ephemeral_1h_input_tokens" => 0
+           },
+           "server_tool_use" => %{"web_search_requests" => 0}
+         }
+       }), %{}},
+      {:response, 200,
+       Jason.encode!(%{
+         "id" => "msg_structure",
+         "type" => "message",
+         "role" => "assistant",
+         "stop_reason" => "end_turn",
+         "content" => [
+           %{
+             "type" => "text",
+             "text" =>
+               StructuredFixtures.structured_json("Public reports indicate this is a test.",
+                 title: "Public Reports"
+               )
+           }
+         ],
+         "usage" => %{
+           "input_tokens" => 8,
+           "output_tokens" => 4,
+           "cache_creation_input_tokens" => 0,
+           "cache_read_input_tokens" => 0,
+           "cache_creation" => %{
+             "ephemeral_5m_input_tokens" => 0,
+             "ephemeral_1h_input_tokens" => 0
+           },
+           "server_tool_use" => %{"web_search_requests" => 0}
+         }
+       }), %{}}
+    ])
 
     perform_and_delete!(:research)
 
     reply_ready = Repo.reload!(invocation)
     assert reply_ready.stage == :reply_ready
     assert reply_ready.selected_reply =~ "test"
-    assert POCFixture.call_count(fixture, :anthropic_post) == 1
+    assert POCFixture.call_count(fixture, :anthropic_post) == 2
 
     assert [%Oban.Job{queue: "reply", worker: "ContextBot.Workers.ReplyWorker"}] =
              Repo.all(Oban.Job)

@@ -36,8 +36,11 @@ defmodule ContextBot.SettingsTest do
     assert settings.anthropic_pricing_version == "sonnet-5-2026-07-28"
     assert settings.anthropic_model_id == "claude-sonnet-5"
     assert settings.anthropic_title_model_id == "claude-haiku-4-5"
+    assert settings.anthropic_structure_model_id == "claude-haiku-4-5"
     assert settings.anthropic_effort == :medium
     assert settings.anthropic_research_max_tokens == 8_192
+    assert settings.anthropic_structure_max_tokens == 1_024
+    assert settings.anthropic_structure_reservation_microdollars == 500_000
     assert settings.max_web_search_uses == 5
     assert settings.anthropic_research_reservation_microdollars == 5_000_000
     assert settings.max_web_fetch_uses == 8
@@ -133,6 +136,7 @@ defmodule ContextBot.SettingsTest do
           {%{"ANTHROPIC_RESEARCH_MAX_TOKENS" => "64001"}, "ANTHROPIC_RESEARCH_MAX_TOKENS"},
           {%{"ANTHROPIC_LENGTH_REPAIR_MAX_TOKENS" => "8193"},
            "ANTHROPIC_LENGTH_REPAIR_MAX_TOKENS"},
+          {%{"ANTHROPIC_STRUCTURE_MAX_TOKENS" => "8193"}, "ANTHROPIC_STRUCTURE_MAX_TOKENS"},
           {%{"MAX_WEB_SEARCH_USES" => "11"}, "MAX_WEB_SEARCH_USES"},
           {%{"MAX_WEB_FETCH_USES" => "11"}, "MAX_WEB_FETCH_USES"},
           {%{"MAX_WEB_FETCH_CONTENT_TOKENS" => "100001"}, "MAX_WEB_FETCH_CONTENT_TOKENS"},
@@ -165,6 +169,7 @@ defmodule ContextBot.SettingsTest do
         anthropic_research_reservation_usd: "5.150001",
         anthropic_continuation_reservation_usd: "5.150002",
         anthropic_repair_reservation_usd: "5.150003",
+        anthropic_structure_reservation_usd: "0.500001",
         anthropic_retry_reservation_usd: "5.150004"
       )
 
@@ -172,6 +177,7 @@ defmodule ContextBot.SettingsTest do
     assert settings.anthropic_research_reservation_microdollars == 5_150_001
     assert settings.anthropic_continuation_reservation_microdollars == 5_150_002
     assert settings.anthropic_repair_reservation_microdollars == 5_150_003
+    assert settings.anthropic_structure_reservation_microdollars == 500_001
     assert settings.anthropic_retry_reservation_microdollars == 5_150_004
     refute Map.has_key?(settings, :anthropic_daily_budget_usd)
   end
@@ -255,7 +261,7 @@ defmodule ContextBot.SettingsTest do
         anthropic_max_http_retries: 3,
         anthropic_retry_base_ms: 250,
         anthropic_retry_max_ms: 5_000,
-        provider_response_storage_max_bytes: 80_000_000
+        provider_response_storage_max_bytes: 96_000_000
       )
 
     assert settings.anthropic_model_id == "claude-sonnet-5-20260715"

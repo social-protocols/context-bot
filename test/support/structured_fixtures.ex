@@ -2,7 +2,6 @@ defmodule ContextBot.Research.StructuredFixtures do
   @moduledoc false
 
   @default_title "Context Request"
-  @default_full "Writeup."
 
   @spec structured_json(String.t(), keyword()) :: String.t()
   def structured_json(compact, opts \\ []) when is_binary(compact) do
@@ -15,9 +14,9 @@ defmodule ContextBot.Research.StructuredFixtures do
       %{
         "disposition" => "no_reply",
         "title" => Keyword.get(opts, :title, ""),
-        "compact_reply" => Keyword.get(opts, :compact, ""),
-        "full_response" => Keyword.get(opts, :full, "")
+        "compact_reply" => Keyword.get(opts, :compact, "")
       }
+      |> maybe_put_full(Keyword.get(opts, :full, :omit))
       |> maybe_drop_empty_fields(Keyword.get(opts, :omit_fields, false))
     )
   end
@@ -34,7 +33,7 @@ defmodule ContextBot.Research.StructuredFixtures do
     {:ok,
      %{
        text: compact,
-       full_response: Keyword.get(opts, :full, @default_full),
+       full_response: Keyword.get(opts, :full, ""),
        document_title: Keyword.get(opts, :title, @default_title),
        disposition: :reply
      }}
@@ -44,11 +43,14 @@ defmodule ContextBot.Research.StructuredFixtures do
     %{
       "disposition" => Keyword.get(opts, :disposition, "reply"),
       "title" => Keyword.get(opts, :title, @default_title),
-      "compact_reply" => compact,
-      "full_response" => Keyword.get(opts, :full, @default_full)
+      "compact_reply" => compact
     }
+    |> maybe_put_full(Keyword.get(opts, :full, :omit))
     |> maybe_omit_disposition(Keyword.get(opts, :omit_disposition, false))
   end
+
+  defp maybe_put_full(map, :omit), do: map
+  defp maybe_put_full(map, full) when is_binary(full), do: Map.put(map, "full_response", full)
 
   defp maybe_omit_disposition(map, true), do: Map.delete(map, "disposition")
   defp maybe_omit_disposition(map, _false), do: map

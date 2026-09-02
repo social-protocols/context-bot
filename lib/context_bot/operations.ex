@@ -21,6 +21,7 @@ defmodule ContextBot.Operations do
     :research,
     :continuation,
     :repair,
+    :structure,
     :retry,
     :publication,
     :maintenance

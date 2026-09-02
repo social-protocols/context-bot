@@ -5,21 +5,20 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
   alias ContextBot.Research.StructuredFixtures
 
   describe "select/2 with structured JSON" do
-    test "selects title, compact reply, and full markdown from valid JSON" do
+    test "selects title and compact reply from valid JSON without requiring full_response" do
       content = [
         %{
           "type" => "text",
           "text" =>
             StructuredFixtures.structured_json("Short summary for Bluesky",
-              title: "What Is That Bird?",
-              full: "This is a detailed research writeup\nwith multiple lines."
+              title: "What Is That Bird?"
             )
         }
       ]
 
       assert {:ok, selected} = Reply.select(content, :end_turn)
       assert selected.text == "Short summary for Bluesky"
-      assert selected.full_response == "This is a detailed research writeup\nwith multiple lines."
+      assert selected.full_response == ""
       assert selected.document_title == "What Is That Bird?"
       assert selected.disposition == :reply
     end
@@ -57,13 +56,12 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
 
     test "fails closed when required JSON fields are missing or blank" do
       for text <- [
-            ~s({"title":"Bird","compact_reply":"Short"}),
-            ~s({"title":"Bird","compact_reply":"Short","full_response":""}),
+            ~s({"title":"Bird","compact_reply":""}),
             ~s({"title":"Bird","compact_reply":"","full_response":"Writeup."}),
-            ~s({"title":1,"compact_reply":"Short","full_response":"Writeup."}),
-            ~s({"disposition":"reply","title":"Bird","compact_reply":"Short","full_response":""}),
-            ~s({"disposition":"maybe","title":"Bird","compact_reply":"Short","full_response":"Writeup."}),
-            ~s({"disposition":true,"title":"Bird","compact_reply":"Short","full_response":"Writeup."}),
+            ~s({"title":1,"compact_reply":"Short"}),
+            ~s({"disposition":"reply","title":"Bird","compact_reply":""}),
+            ~s({"disposition":"maybe","title":"Bird","compact_reply":"Short"}),
+            ~s({"disposition":true,"title":"Bird","compact_reply":"Short"}),
             "---COMPACT_REPLY---\nlegacy delimiter"
           ] do
         assert Reply.select([%{"type" => "text", "text" => text}], :end_turn) ==

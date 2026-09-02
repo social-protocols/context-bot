@@ -14,7 +14,7 @@ defmodule ContextBot.Research.ResponseEnvelope do
   alias ContextBot.Workflow.Invocation
 
   @max_overhead_bytes 65_536
-  @kinds [:research, :continuation, :repair, :retry]
+  @kinds [:research, :continuation, :repair, :structure, :retry]
   @persisted_fields [
     :invocation_id,
     :budget_entry_id,
