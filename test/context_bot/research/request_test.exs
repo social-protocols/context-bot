@@ -64,6 +64,7 @@ defmodule ContextBot.Research.RequestTest do
                "response_inclusion" => "excluded",
                "max_uses" => 3,
                "max_content_tokens" => 24_000,
+               # Structured JSON + web_fetch citations.enabled=true 400s.
                "citations" => %{"enabled" => false}
              }
            ]
@@ -78,7 +79,7 @@ defmodule ContextBot.Research.RequestTest do
   test "sends one versioned prompt with the complete research and reply safety contract" do
     prompt = Request.initial(@canonical_thread, config())["system"]
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V8")
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V9")
     assert prompt =~ "ancestor"
     assert prompt =~ "unstable"
     assert prompt =~ "primary sources"
@@ -210,15 +211,15 @@ defmodule ContextBot.Research.RequestTest do
   test "exposes a stable hashed identity for the versioned system prompt" do
     prompt = Request.system_prompt()
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V8")
-    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V8"
-    assert Request.system_prompt_semantic_version() == "8.0.0"
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V9")
+    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V9"
+    assert Request.system_prompt_semantic_version() == "9.0.0"
 
     assert Request.system_prompt_sha256() ==
              :sha256 |> :crypto.hash(prompt) |> Base.encode16(case: :lower)
 
     assert Request.system_prompt_rkey() ==
-             "prompt-context-bot-system-v8-#{String.slice(Request.system_prompt_sha256(), 0, 16)}"
+             "prompt-context-bot-system-v9-#{String.slice(Request.system_prompt_sha256(), 0, 16)}"
   end
 
   test "projects allowlisted Messages parameters and the first user message" do
@@ -230,8 +231,8 @@ defmodule ContextBot.Research.RequestTest do
         research_max_tokens: 4_096
       })
 
-    assert projection.prompt.id == "CONTEXT_BOT_SYSTEM_V8"
-    assert projection.prompt.semantic_version == "8.0.0"
+    assert projection.prompt.id == "CONTEXT_BOT_SYSTEM_V9"
+    assert projection.prompt.semantic_version == "9.0.0"
     assert projection.prompt.sha256 == Request.system_prompt_sha256()
     assert projection.parameters["anthropic-version"] == "2023-06-01"
     assert projection.parameters["model"] == "claude-sonnet-5"
@@ -383,14 +384,14 @@ defmodule ContextBot.Research.RequestTest do
     refute inspect(projection) =~ "session=secret"
   end
 
-  test "V8 prompt and schema require answering the invoker's questions first" do
+  test "V9 prompt and schema require answering the invoker's questions first" do
     prompt = Request.system_prompt()
     normalized = String.replace(prompt, ~r/\s+/, " ")
     schema = Request.output_schema()
     compact = schema["properties"]["compact_reply"]["description"]
     full = schema["properties"]["full_response"]["description"]
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V8")
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V9")
     assert normalized =~ "invoking mention"
     assert normalized =~ "last post in the canonical thread"
     assert normalized =~ "every distinct question"
@@ -413,6 +414,39 @@ defmodule ContextBot.Research.RequestTest do
     assert full =~ "bottom-line paragraph"
     assert full =~ "same question"
     refute full =~ "Capture the core finding concisely"
+  end
+
+  test "V9 prompt and schema require markdown https source URLs in full_response" do
+    prompt = Request.system_prompt()
+    normalized = String.replace(prompt, ~r/\s+/, " ")
+    schema = Request.output_schema()
+    compact = schema["properties"]["compact_reply"]["description"]
+    full = schema["properties"]["full_response"]["description"]
+
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V9")
+    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V9"
+    assert Request.system_prompt_semantic_version() == "9.0.0"
+
+    assert normalized =~ "Sources"
+    assert normalized =~ "[label](https://"
+    assert normalized =~ "https://"
+    assert normalized =~ "outlet name alone"
+    assert normalized =~ "Do not invent URLs"
+    assert normalized =~ "not fetched"
+    assert normalized =~ "web_search"
+    assert normalized =~ "web_fetch"
+
+    assert full =~ "Sources"
+    assert full =~ "[label](https://"
+    assert full =~ "https://"
+    assert full =~ "outlet name alone"
+    assert full =~ "Do not invent URLs"
+    assert full =~ "not fetched"
+
+    assert compact =~ "plain text"
+    assert compact =~ "without markdown"
+    refute compact =~ "[label](https://"
+    refute compact =~ "Sources section"
   end
 
   test "sends json_schema format beside effort and omits unsupported length keywords" do
