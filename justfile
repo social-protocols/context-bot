@@ -29,19 +29,20 @@ test path="":
       bash test/dry_run_wrapper_test.sh
       bash test/live_run_wrapper_test.sh
       bash test/fly_wrapper_test.sh
+      bash test/cursor_dockerfile_devbox_align_test.sh
     fi
 
 format:
     mix format
-    shfmt -w dry-run.sh live-run.sh secrets.sh test/dry_run_wrapper_test.sh test/fly_wrapper_test.sh test/live_run_wrapper_test.sh test/secrets_test.sh
+    shfmt -w dry-run.sh live-run.sh secrets.sh test/cursor_dockerfile_devbox_align_test.sh test/dry_run_wrapper_test.sh test/fly_wrapper_test.sh test/live_run_wrapper_test.sh test/secrets_test.sh
 
 format-check:
     mix format --check-formatted
-    shfmt -d dry-run.sh live-run.sh secrets.sh test/dry_run_wrapper_test.sh test/fly_wrapper_test.sh test/live_run_wrapper_test.sh test/secrets_test.sh
+    shfmt -d dry-run.sh live-run.sh secrets.sh test/cursor_dockerfile_devbox_align_test.sh test/dry_run_wrapper_test.sh test/fly_wrapper_test.sh test/live_run_wrapper_test.sh test/secrets_test.sh
 
 lint:
     mix credo --strict
-    shellcheck dry-run.sh live-run.sh secrets.sh test/dry_run_wrapper_test.sh test/fly_wrapper_test.sh test/live_run_wrapper_test.sh test/secrets_test.sh
+    shellcheck dry-run.sh live-run.sh secrets.sh test/cursor_dockerfile_devbox_align_test.sh test/dry_run_wrapper_test.sh test/fly_wrapper_test.sh test/live_run_wrapper_test.sh test/secrets_test.sh
 
 typecheck:
     mix dialyzer

@@ -34,4 +34,9 @@ bash test/fly_wrapper_test.sh || {
   exit 1
 }
 
+bash test/cursor_dockerfile_devbox_align_test.sh || {
+  printf "ERROR: cursor_dockerfile_devbox_align_test.sh failed\n"
+  exit 1
+}
+
 printf "Pre-push hook passed\n"

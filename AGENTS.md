@@ -18,6 +18,7 @@ Devbox plus direnv is the mandatory development environment. Devbox supplies Eli
 - In automated or non-interactive shells, always run `direnv exec . <command>` so the Devbox environment is applied.
 - Do not assume globally installed Elixir, Erlang, SQLite, Fly, Bitwarden, Docker client, or quality tools.
 - A host Docker daemon is required only for local image builds.
+- Cursor cloud agents boot from `.cursor/Dockerfile` (hexpm Elixir/OTP, not Nix). Keep that image aligned with the non-Beam packages in `devbox.json`. Do not replace the Devbox+direnv human workflow.
 
 ## Isolated worktrees
 
