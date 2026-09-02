@@ -12,8 +12,8 @@ permissions:
   actions: read
 
 jobs:
-  test:
-    name: Test & Quality Check
+  ci:
+    name: CI
     runs-on: ubuntu-latest
     
     steps:
@@ -68,40 +68,6 @@ jobs:
 
       - name: Run tests
         run: just test
-
-  typecheck:
-    name: Type Check
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Set up Elixir
-        uses: erlef/setup-beam@v1
-        with:
-          elixir-version: '1.20.2'
-          otp-version: '28.5'
-
-      - name: Install just
-        run: |
-          curl -fsSL -o just.tar.gz https://github.com/casey/just/releases/download/1.58.0/just-1.58.0-x86_64-unknown-linux-musl.tar.gz
-          tar -xzf just.tar.gz just
-          sudo install -m 0755 just /usr/local/bin/just
-          just --version
-
-      - name: Cache Mix dependencies and build artifacts
-        uses: actions/cache@v6
-        with:
-          path: |
-            deps
-            _build
-          key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-mix-
-
-      - name: Install dependencies
-        run: just setup
 
       - name: Run type checker
         run: just typecheck
