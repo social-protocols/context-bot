@@ -51,6 +51,11 @@ defmodule ContextBot.Research.InterruptRecoveryTest do
              failure_detail: %{"reason" => "code_execution_failed"}
            })
 
+    assert InterruptRecovery.deterministic_parse_hard_fail?(%Invocation{
+             failure_category: :provider_response,
+             failure_detail: %{"reason" => "invalid_structured_output"}
+           })
+
     assert InterruptRecovery.code_execution_failed?(%Invocation{
              failure_category: :provider_response,
              failure_detail: %{"reason" => "code_execution_failed"}

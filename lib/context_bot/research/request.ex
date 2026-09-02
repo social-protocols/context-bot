@@ -142,8 +142,8 @@ defmodule ContextBot.Research.Request do
   Anthropic GA JSON schema for the research object.
 
   Length targets live in field descriptions. Structured outputs reject
-  `minLength` / `maxLength`; `Reply.select/2` and length repair remain the
-  publication gates.
+  `minLength` / `maxLength`; `Reply.select/2`, title rewrite, and pack-first
+  split remain the publication gates.
   """
   @spec output_schema() :: map()
   def output_schema do
@@ -272,6 +272,63 @@ defmodule ContextBot.Research.Request do
         }
       }
     end)
+  end
+
+  @doc "JSON schema for the title-only rewrite call. Compact reply is never rewritten."
+  @spec title_schema() :: map()
+  def title_schema do
+    %{
+      "type" => "object",
+      "properties" => %{
+        "title" => %{
+          "type" => "string",
+          "description" => TitlePrompt.schema_description()
+        }
+      },
+      "required" => ["title"],
+      "additionalProperties" => false
+    }
+  end
+
+  @doc """
+  Cheap title-only Messages request. No tools. Reuses the leftover repair
+  token cap. Research conversation is not appended.
+  """
+  @spec title_rewrite(%{
+          required(:model_id) => String.t(),
+          required(:max_tokens) => pos_integer(),
+          required(:invocation_text) => String.t(),
+          required(:compact_reply) => String.t(),
+          required(:full_response) => String.t()
+        }) :: map()
+  def title_rewrite(%{
+        model_id: model_id,
+        max_tokens: max_tokens,
+        invocation_text: invocation_text,
+        compact_reply: compact_reply,
+        full_response: full_response
+      })
+      when is_binary(model_id) and is_integer(max_tokens) and max_tokens > 0 and
+             is_binary(invocation_text) and is_binary(compact_reply) and
+             is_binary(full_response) do
+    %{
+      "model" => model_id,
+      "max_tokens" => max_tokens,
+      "stream" => false,
+      "system" => TitlePrompt.prompt(),
+      "output_config" => %{
+        "format" => %{
+          "type" => "json_schema",
+          "schema" => title_schema()
+        }
+      },
+      "messages" => [
+        %{
+          "role" => "user",
+          "content" => TitlePrompt.user_message(invocation_text, compact_reply, full_response)
+        }
+      ]
+    }
   end
 
   @doc """

@@ -33,6 +33,7 @@ defmodule ContextBot.Settings do
   @default_anthropic_research_max_tokens 8_192
   @default_anthropic_length_repair_max_tokens 1_024
   @default_anthropic_model_id "claude-sonnet-5"
+  @default_anthropic_title_model_id "claude-haiku-4-5"
   @default_max_web_search_uses 5
   @default_max_web_fetch_uses 8
   @default_max_web_fetch_content_tokens 10_000
@@ -82,6 +83,7 @@ defmodule ContextBot.Settings do
     :max_response_bytes,
     :max_storage_bytes,
     :anthropic_model_id,
+    :anthropic_title_model_id,
     :anthropic_effort,
     :anthropic_http_timeout_ms,
     :anthropic_api_version,
@@ -120,6 +122,7 @@ defmodule ContextBot.Settings do
     :thread_fetch_timeout_ms,
     :anthropic_daily_budget_microdollars,
     :anthropic_model_id,
+    :anthropic_title_model_id,
     :anthropic_effort,
     :anthropic_http_timeout_ms,
     :anthropic_api_version,
@@ -167,6 +170,7 @@ defmodule ContextBot.Settings do
           thread_fetch_timeout_ms: pos_integer(),
           anthropic_daily_budget_microdollars: pos_integer() | nil,
           anthropic_model_id: String.t(),
+          anthropic_title_model_id: String.t(),
           anthropic_effort: :low | :medium | :high,
           anthropic_http_timeout_ms: pos_integer(),
           anthropic_api_version: String.t(),
@@ -257,6 +261,13 @@ defmodule ContextBot.Settings do
           "ANTHROPIC_MODEL_ID",
           :anthropic_model_id,
           @default_anthropic_model_id
+        ),
+      anthropic_title_model_id:
+        string!(
+          environment,
+          "ANTHROPIC_TITLE_MODEL_ID",
+          :anthropic_title_model_id,
+          @default_anthropic_title_model_id
         ),
       anthropic_effort:
         effort!(environment, "ANTHROPIC_EFFORT", :anthropic_effort, @default_anthropic_effort),

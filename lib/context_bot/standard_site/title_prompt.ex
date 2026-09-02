@@ -1,9 +1,12 @@
 defmodule ContextBot.StandardSite.TitlePrompt do
   @moduledoc """
-  Reader title style used by the structured research JSON schema.
+  Reader title style used by the structured research JSON schema and the
+  title-only rewrite call.
 
-  Title guidance lives in the research schema field description and system
-  prompt. This module is the shared wording; it is not a second Messages call.
+  Title guidance lives in the research schema field description, the system
+  prompt, and the cheap title-rewrite Messages request. This module is the
+  shared wording. A blank research `title` may trigger one title-only Haiku
+  call; it is not a compact-reply rewrite.
   """
 
   @id "READER_TITLE_V1"
@@ -52,6 +55,25 @@ defmodule ContextBot.StandardSite.TitlePrompt do
     Invocation (as written):
 
     #{String.trim(invocation_text)}
+    """
+  end
+
+  @doc """
+  Title-rewrite user turn: invocation plus the page body so the headline is
+  about the research, not the mention greeting.
+  """
+  @spec user_message(String.t(), String.t(), String.t()) :: String.t()
+  def user_message(invocation_text, compact_reply, full_response)
+      when is_binary(invocation_text) and is_binary(compact_reply) and is_binary(full_response) do
+    """
+    #{user_message(invocation_text)}
+    Compact Bluesky reply:
+
+    #{String.trim(compact_reply)}
+
+    Full research writeup:
+
+    #{String.trim(full_response)}
     """
   end
 end

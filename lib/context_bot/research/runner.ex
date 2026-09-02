@@ -199,7 +199,7 @@ defmodule ContextBot.Research.Runner do
   end
 
   defp send_attempt(invocation, entry, config) do
-    request = invocation.anthropic_messages
+    request = request_for_entry(invocation, entry, config)
 
     with {:ok, sent} <- config.budget.mark_sent(entry, now(config), config.claim_token),
          :ok <- crash(config, :after_sent, sent),
@@ -322,9 +322,24 @@ defmodule ContextBot.Research.Runner do
     end
   end
 
-  defp classify_stop_reason(
+  defp classify_stop_reason(invocation, %BudgetEntry{kind: :repair}, decoded, config) do
+    classify_title_rewrite(invocation, decoded, config)
+  end
+
+  defp classify_stop_reason(invocation, %BudgetEntry{kind: :retry}, decoded, config) do
+    if title_rewrite_pending?(invocation, config) and Reply.title_only_response?(decoded) do
+      classify_title_rewrite(invocation, decoded, config)
+    else
+      classify_research_stop_reason(invocation, decoded, config)
+    end
+  end
+
+  defp classify_stop_reason(invocation, _entry, decoded, config) do
+    classify_research_stop_reason(invocation, decoded, config)
+  end
+
+  defp classify_research_stop_reason(
          %Invocation{} = invocation,
-         _entry,
          %{"stop_reason" => stop_reason} = decoded,
          config
        )
@@ -336,16 +351,37 @@ defmodule ContextBot.Research.Runner do
     end
   end
 
-  defp classify_stop_reason(invocation, _entry, decoded, config) do
+  defp classify_research_stop_reason(invocation, decoded, config) do
     case select_reply(decoded, invocation) do
       {:ok, selected} ->
         {:ok, finish_selected(invocation, selected, config)}
+
+      {:title_rewrite, _selected} ->
+        start_attempt(Repo.reload!(invocation), :repair, config)
 
       {:repairable, text, _reasons} ->
         split_over_limit(invocation, text, decoded, config)
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp classify_title_rewrite(invocation, decoded, config) do
+    with {:ok, title} <- Reply.select_title(decoded),
+         {:title_rewrite, selected} <- latest_research_selection(invocation, config) do
+      titled = %{selected | document_title: title}
+
+      case Reply.classify_selected(titled) do
+        {:ok, selected} ->
+          {:ok, finish_selected(invocation, selected, config)}
+
+        {:repairable, text, _reasons} ->
+          split_over_limit(invocation, text, decoded, config, titled)
+      end
+    else
+      _failed ->
+        {:error, :invalid_structured_output}
     end
   end
 
@@ -373,7 +409,7 @@ defmodule ContextBot.Research.Runner do
     |> attach_document_title(invocation)
   end
 
-  defp split_over_limit(invocation, text, decoded, config) do
+  defp split_over_limit(invocation, text, decoded, config, selected \\ nil) do
     case Reply.split_text(text) do
       {:ok, part1, part2} ->
         {:ok,
@@ -390,6 +426,7 @@ defmodule ContextBot.Research.Runner do
              "part2_graphemes" => String.length(part2)
            }
          }
+         |> put_selected_fields(selected)
          |> attach_full_response(invocation, decoded)
          |> attach_document_title(invocation, decoded)}
 
@@ -397,6 +434,15 @@ defmodule ContextBot.Research.Runner do
         {:error, :invalid_repair}
     end
   end
+
+  defp put_selected_fields(result, %{full_response: full, document_title: title})
+       when is_binary(full) and is_binary(title) do
+    result
+    |> Map.put(:full_response, full)
+    |> Map.put(:document_title, title)
+  end
+
+  defp put_selected_fields(result, _selected), do: result
 
   defp continue_pause(invocation, %{"content" => content}, config) when is_list(content) do
     if continuation_count(invocation, config) > config.settings.max_tool_continuations do
@@ -610,6 +656,76 @@ defmodule ContextBot.Research.Runner do
 
   defp select_reply(_response, _invocation), do: {:error, :malformed_provider_response}
 
+  defp request_for_entry(invocation, %BudgetEntry{kind: :repair}, config),
+    do: title_rewrite_request(invocation, config)
+
+  defp request_for_entry(invocation, %BudgetEntry{kind: :retry}, config) do
+    if title_rewrite_pending?(invocation, config) do
+      title_rewrite_request(invocation, config)
+    else
+      invocation.anthropic_messages
+    end
+  end
+
+  defp request_for_entry(invocation, _entry, _config), do: invocation.anthropic_messages
+
+  defp title_rewrite_pending?(invocation, config),
+    do: match?({:title_rewrite, _selected}, latest_research_selection(invocation, config))
+
+  defp title_rewrite_request(invocation, config) do
+    {:title_rewrite, selected} = latest_research_selection(invocation, config)
+
+    Request.title_rewrite(%{
+      model_id: config.settings.anthropic_title_model_id,
+      max_tokens: config.settings.anthropic_length_repair_max_tokens,
+      invocation_text: invocation_text(invocation),
+      compact_reply: selected.text,
+      full_response: selected.full_response
+    })
+  end
+
+  defp invocation_text(%Invocation{invocation_text: text})
+       when is_binary(text) and text != "",
+       do: text
+
+  defp invocation_text(%Invocation{canonical_thread: text})
+       when is_binary(text) and text != "",
+       do: text
+
+  defp invocation_text(_invocation), do: ""
+
+  defp latest_research_selection(invocation, config) do
+    invocation
+    |> config.store.anthropic_responses()
+    |> Enum.reverse()
+    |> Enum.find_value(:error, &research_selection_from(invocation, config, &1))
+  end
+
+  defp research_selection_from(invocation, config, response) do
+    response
+    |> successful_body(config)
+    |> select_successful_research(invocation)
+  end
+
+  defp successful_body(response, config) do
+    status = response_value(response, :status)
+
+    if status in 200..299 do
+      decode(config, response_value(response, :raw_body))
+    else
+      :error
+    end
+  end
+
+  defp select_successful_research({:ok, decoded}, invocation) do
+    case select_reply(decoded, invocation) do
+      {:error, _reason} -> nil
+      result -> result
+    end
+  end
+
+  defp select_successful_research(_invalid, _invocation), do: nil
+
   defp retain_reservation(entry, config),
     do:
       config.budget.settle(
@@ -798,6 +914,9 @@ defmodule ContextBot.Research.Runner do
 
   defp reservation(settings, :continuation),
     do: settings.anthropic_continuation_reservation_microdollars
+
+  defp reservation(settings, :repair),
+    do: settings.anthropic_repair_reservation_microdollars
 
   defp reservation(settings, :retry), do: settings.anthropic_retry_reservation_microdollars
 

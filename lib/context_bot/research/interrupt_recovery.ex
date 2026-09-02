@@ -29,6 +29,7 @@ defmodule ContextBot.Research.InterruptRecovery do
                              "empty_reply",
                              "invalid_content",
                              "invalid_repair",
+                             "invalid_structured_output",
                              "malformed_provider_response",
                              "max_tokens",
                              "model_context_window_exceeded",
