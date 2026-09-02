@@ -22,7 +22,7 @@ end
 defmodule ContextBot.Research.RunnerTest do
   use ContextBot.DataCase, async: false
 
-  alias ContextBot.Research.{Budget, BudgetEntry, Request, ResponseEnvelope, Runner}
+  alias ContextBot.Research.{Budget, BudgetEntry, ReplyLimits, Request, ResponseEnvelope, Runner}
   alias ContextBot.Research.StructuredFixtures
   alias ContextBot.Workflow.{Invocation, Store}
   alias Ecto.Adapters.SQL
@@ -1202,10 +1202,7 @@ defmodule ContextBot.Research.RunnerTest do
     assert result.text_part2 == part2
     assert result.compact_source == over_text
 
-    refute String.contains?(
-             result.compact_source,
-             ContextBot.Research.ReplyLimits.continuation_ellipsis()
-           )
+    refute String.contains?(result.compact_source, ReplyLimits.continuation_ellipsis())
 
     assert result.full_response == "Writeup."
     assert result.document_title == "Context Request"
@@ -1531,7 +1528,7 @@ defmodule ContextBot.Research.RunnerTest do
     raw1 = String.duplicate("a", 150)
     raw2 = String.duplicate("b", 160)
     over_text = raw1 <> "\n\n" <> raw2
-    ellipsis = ContextBot.Research.ReplyLimits.continuation_ellipsis()
+    ellipsis = ReplyLimits.continuation_ellipsis()
     assert String.length(over_text) == 312
     {raw1 <> ellipsis, ellipsis <> raw2, over_text}
   end

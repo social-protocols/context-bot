@@ -45,7 +45,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
 
   alias ContextBot.ATProto.TID
   alias ContextBot.LimitNoticeRecorder
-  alias ContextBot.Research.Request
+  alias ContextBot.Research.{ReplyLimits, Request}
   alias ContextBot.Settings
   alias ContextBot.Workers.ResearchWorker
   alias ContextBot.Workers.ResearchWorkerTest.{AnthropicClient, Runner}
@@ -206,7 +206,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
 
     assert :ok = perform(invocation)
     persisted = Repo.reload!(invocation)
-    ellipsis = ContextBot.Research.ReplyLimits.continuation_ellipsis()
+    ellipsis = ReplyLimits.continuation_ellipsis()
     assert persisted.selected_reply == part1
     assert persisted.reply_record["text"] == part1 <> ellipsis
     assert persisted.reply_part2_rkey == "3mpart2rkey222"
@@ -435,7 +435,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
 
     assert :ok = perform(invocation)
     persisted = Repo.reload!(invocation)
-    ellipsis = ContextBot.Research.ReplyLimits.continuation_ellipsis()
+    ellipsis = ReplyLimits.continuation_ellipsis()
     assert persisted.full_response == "Thorough markdown writeup."
     assert persisted.standard_site_document_uri =~ "site.standard.document"
     assert persisted.reply_record["text"] == part1 <> ellipsis
