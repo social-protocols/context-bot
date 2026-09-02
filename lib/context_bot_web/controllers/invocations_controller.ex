@@ -11,6 +11,18 @@ defmodule ContextBotWeb.InvocationsController do
   alias ContextBot.StandardSite.Document
   alias ContextBot.Workflow.Invocation
 
+  defmacrop billed_microdollars_sum(entry) do
+    quote do
+      fragment(
+        "COALESCE(SUM(CASE WHEN ? = 'settled' THEN COALESCE(?, ?) ELSE ? END), 0)",
+        unquote(entry).state,
+        unquote(entry).settled_microdollars,
+        unquote(entry).reserved_microdollars,
+        unquote(entry).reserved_microdollars
+      )
+    end
+  end
+
   def index(conn, _params) do
     now = DateTime.utc_now()
 
@@ -20,6 +32,8 @@ defmodule ContextBotWeb.InvocationsController do
       month: calculate_period_stats(now, days: -30)
     }
 
+    spend_by_invocation = invocation_spend_microdollars()
+
     invocations =
       Invocation
       |> order_by([i], desc: i.id)
@@ -28,7 +42,6 @@ defmodule ContextBotWeb.InvocationsController do
         status: i.status,
         stage: i.stage,
         actor_handle: i.actor_handle,
-        dry_run: i.dry_run,
         invocation_uri: i.invocation_uri,
         reply_uri: i.reply_uri,
         reply_part2_uri: i.reply_part2_uri,
@@ -42,8 +55,11 @@ defmodule ContextBotWeb.InvocationsController do
         completed_at: i.completed_at
       })
       |> Repo.all()
+      |> Enum.map(fn inv ->
+        Map.put(inv, :cost_microdollars, Map.get(spend_by_invocation, inv.id, 0))
+      end)
 
-    html_content = render_dashboard(stats, invocations)
+    html_content = render_dashboard(stats, invocations, now)
 
     conn
     |> put_resp_content_type("text/html")
@@ -73,14 +89,7 @@ defmodule ContextBotWeb.InvocationsController do
       BudgetEntry
       |> where([e], e.inserted_at >= ^cutoff)
       |> select([e], %{
-        total_microdollars:
-          fragment(
-            "COALESCE(SUM(CASE WHEN ? = 'settled' THEN COALESCE(?, ?) ELSE ? END), 0)",
-            e.state,
-            e.settled_microdollars,
-            e.reserved_microdollars,
-            e.reserved_microdollars
-          ),
+        total_microdollars: billed_microdollars_sum(e),
         total_input_tokens:
           fragment(
             "COALESCE(SUM(CAST(json_extract(?, '$.input_tokens') AS INTEGER)), 0)",
@@ -103,7 +112,15 @@ defmodule ContextBotWeb.InvocationsController do
     }
   end
 
-  defp render_dashboard(stats, invocations) do
+  defp invocation_spend_microdollars do
+    BudgetEntry
+    |> group_by([e], e.invocation_id)
+    |> select([e], {e.invocation_id, billed_microdollars_sum(e)})
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  defp render_dashboard(stats, invocations, now) do
     """
     <!DOCTYPE html>
     <html lang="en">
@@ -198,7 +215,6 @@ defmodule ContextBotWeb.InvocationsController do
           text-overflow: ellipsis;
           white-space: nowrap;
         }
-        .dry-run { color: #666; font-style: italic; }
         .no-reply { color: #666; }
       </style>
     </head>
@@ -213,7 +229,7 @@ defmodule ContextBotWeb.InvocationsController do
             <th>Status</th>
             <th>Stage</th>
             <th>Actor</th>
-            <th>Dry Run</th>
+            <th>Cost</th>
             <th>Attempts</th>
             <th>Error</th>
             <th>Invocation</th>
@@ -224,7 +240,7 @@ defmodule ContextBotWeb.InvocationsController do
           </tr>
         </thead>
         <tbody>
-    #{Enum.map_join(invocations, "\n", &render_row/1)}
+    #{Enum.map_join(invocations, "\n", &render_row(&1, now))}
         </tbody>
       </table>
     </body>
@@ -232,7 +248,7 @@ defmodule ContextBotWeb.InvocationsController do
     """
   end
 
-  defp render_row(inv) do
+  defp render_row(inv, now) do
     error = escape_html(error_summary(inv.failure_detail, inv.failure_category))
 
     """
@@ -241,7 +257,7 @@ defmodule ContextBotWeb.InvocationsController do
             <td class="status-#{inv.status}">#{inv.status}</td>
             <td>#{inv.stage}</td>
             <td>#{escape_html(inv.actor_handle || "")}</td>
-            <td>#{if inv.dry_run, do: "yes", else: ""}</td>
+            <td>#{format_dollars(inv.cost_microdollars)}</td>
             <td>#{inv.anthropic_attempt_sequence}</td>
             <td class="error-cell" title="#{error}">
               #{error}
@@ -255,8 +271,8 @@ defmodule ContextBotWeb.InvocationsController do
             <td>
               #{full_response_link(inv.standard_site_document_uri)}
             </td>
-            <td>#{format_datetime(inv.inserted_at)}</td>
-            <td>#{format_datetime(inv.completed_at)}</td>
+            <td>#{format_relative_datetime(inv.inserted_at, now)}</td>
+            <td>#{format_relative_datetime(inv.completed_at, now)}</td>
           </tr>
     """
   end
@@ -332,11 +348,47 @@ defmodule ContextBotWeb.InvocationsController do
     String.slice(text, 0, max_length) <> "..."
   end
 
-  defp format_datetime(nil), do: ""
+  defp format_relative_datetime(nil, _now), do: "&mdash;"
 
-  defp format_datetime(%DateTime{} = dt) do
-    Calendar.strftime(dt, "%Y-%m-%d %H:%M:%S")
+  defp format_relative_datetime(%DateTime{} = dt, now) do
+    absolute = Calendar.strftime(dt, "%Y-%m-%d %H:%M:%S UTC")
+    relative = relative_time(dt, now)
+    ~s(<span title="#{escape_html(absolute)}">#{escape_html(relative)}</span>)
   end
+
+  defp relative_time(%DateTime{} = dt, now) do
+    seconds = max(DateTime.diff(now, dt, :second), 0)
+    relative_from_seconds(seconds)
+  end
+
+  defp relative_from_seconds(seconds) when seconds < 36 * 60 * 60 do
+    relative_hours(seconds)
+  end
+
+  defp relative_from_seconds(seconds), do: relative_days(seconds)
+
+  defp relative_hours(seconds) when seconds < 45, do: "just now"
+  defp relative_hours(seconds) when seconds < 90, do: ago(1, "minute")
+  defp relative_hours(seconds) when seconds < 45 * 60, do: ago(div(seconds, 60), "minute")
+  defp relative_hours(seconds) when seconds < 90 * 60, do: ago(1, "hour")
+  defp relative_hours(seconds) when seconds < 22 * 60 * 60, do: ago(div(seconds, 60 * 60), "hour")
+  defp relative_hours(_seconds), do: "yesterday"
+
+  defp relative_days(seconds) when seconds < 26 * 24 * 60 * 60 do
+    ago(div(seconds, 24 * 60 * 60), "day")
+  end
+
+  defp relative_days(seconds) when seconds < 45 * 24 * 60 * 60, do: ago(1, "month")
+
+  defp relative_days(seconds) when seconds < 320 * 24 * 60 * 60 do
+    ago(div(seconds, 30 * 24 * 60 * 60), "month")
+  end
+
+  defp relative_days(seconds) when seconds < 548 * 24 * 60 * 60, do: ago(1, "year")
+  defp relative_days(seconds), do: ago(div(seconds, 365 * 24 * 60 * 60), "year")
+
+  defp ago(1, unit), do: "1 #{unit} ago"
+  defp ago(count, unit), do: "#{count} #{unit}s ago"
 
   defp escape_html(text) when is_binary(text) do
     text
