@@ -48,6 +48,7 @@ defmodule ContextBot.Research.Reply do
         }
   @type result ::
           {:ok, selected()}
+          | {:title_rewrite, selected()}
           | {:repairable, String.t(), [reason()]}
           | {:split, String.t(), String.t()}
           | {:error, reason()}
@@ -124,9 +125,8 @@ defmodule ContextBot.Research.Reply do
   @doc """
   Returns the full writeup from the first structured assistant turn in a Messages request.
 
-  Length repair keeps the same JSON schema but rewrites only `compact_reply`, so callers
-  that still need the Standard.site document recover `full_response` from the earlier
-  research turn.
+  Over-long compact replies split locally. Callers that still need the
+  Standard.site document recover `full_response` from the earlier research turn.
   """
   @spec full_response_from_messages(map() | nil) :: String.t() | nil
   def full_response_from_messages(messages),
@@ -138,6 +138,63 @@ defmodule ContextBot.Research.Reply do
   @spec document_title_from_messages(map() | nil) :: String.t() | nil
   def document_title_from_messages(messages),
     do: structured_field_from_messages(messages, :document_title)
+
+  @doc """
+  Classifies an already-selected reply for publication or pack-first split.
+
+  Used after a title rewrite fills a blank `document_title`. Never starts a
+  compact-reply Anthropic call.
+  """
+  @spec classify_selected(selected()) :: {:ok, selected()} | {:repairable, String.t(), [reason()]}
+  def classify_selected(%{text: text} = selected) when is_binary(text),
+    do: classify_structured(selected)
+
+  @doc """
+  Reads a nonempty title from a title-only JSON envelope.
+  """
+  @spec select_title(map()) :: {:ok, String.t()} | {:error, reason()}
+  def select_title(%{"content" => content, "stop_reason" => stop_reason})
+      when is_list(content) do
+    select_title(content, stop_reason)
+  end
+
+  def select_title(_decoded), do: {:error, :invalid_structured_output}
+
+  @spec select_title([map()], term()) :: {:ok, String.t()} | {:error, reason()}
+
+  def select_title(content, stop_reason)
+      when is_list(content) and stop_reason in ["end_turn", :end_turn] do
+    text = content |> assistant_plain_text() |> String.trim()
+
+    case Jason.decode(text) do
+      {:ok, %{"title" => title}} when is_binary(title) ->
+        case title |> unescape_json_string_escapes() |> String.trim() do
+          "" -> {:error, :invalid_structured_output}
+          nonempty -> {:ok, nonempty}
+        end
+
+      _invalid ->
+        {:error, :invalid_structured_output}
+    end
+  end
+
+  def select_title(_content, _stop_reason), do: {:error, :invalid_structured_output}
+
+  @doc false
+  @spec title_only_response?(map()) :: boolean()
+  def title_only_response?(%{"content" => content}) when is_list(content) do
+    text = content |> assistant_plain_text() |> String.trim()
+
+    case Jason.decode(text) do
+      {:ok, %{"title" => title} = body} when is_binary(title) ->
+        not Map.has_key?(body, "compact_reply") and not Map.has_key?(body, "full_response")
+
+      _invalid ->
+        false
+    end
+  end
+
+  def title_only_response?(_decoded), do: false
 
   @doc """
   Attempts to split text into two parts, each ≤300 graphemes and ≤3,000 bytes
@@ -771,6 +828,7 @@ defmodule ContextBot.Research.Reply do
     case parse_structured_response(assistant_plain_text(content)) do
       {:ok, %{disposition: :no_reply}} -> :invalid
       {:ok, selected} -> {:ok, selected}
+      {:title_rewrite, selected} -> {:ok, selected}
       :invalid -> :invalid
     end
   end
@@ -799,6 +857,9 @@ defmodule ContextBot.Research.Reply do
         case parse_structured_response(nonempty) do
           {:ok, selected} ->
             classify_structured(selected)
+
+          {:title_rewrite, selected} ->
+            {:title_rewrite, selected}
 
           :invalid ->
             {:error, :invalid_structured_output}
@@ -841,16 +902,27 @@ defmodule ContextBot.Research.Reply do
     compact_reply = compact_reply |> String.trim() |> unescape_json_string_escapes()
     full_response = full_response |> String.trim() |> unescape_json_string_escapes()
 
-    if title != "" and compact_reply != "" and full_response != "" do
-      {:ok,
-       %{
-         text: compact_reply,
-         full_response: full_response,
-         document_title: title,
-         disposition: :reply
-       }}
-    else
-      :invalid
+    cond do
+      compact_reply == "" or full_response == "" ->
+        :invalid
+
+      title == "" ->
+        {:title_rewrite,
+         %{
+           text: compact_reply,
+           full_response: full_response,
+           document_title: "",
+           disposition: :reply
+         }}
+
+      true ->
+        {:ok,
+         %{
+           text: compact_reply,
+           full_response: full_response,
+           document_title: title,
+           disposition: :reply
+         }}
     end
   end
 

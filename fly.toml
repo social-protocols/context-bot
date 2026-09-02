@@ -51,6 +51,7 @@ kill_timeout = 300
 
   # Anthropic request, tool, retry, retention, and budget bounds.
   ANTHROPIC_MODEL_ID = "claude-sonnet-5"
+  ANTHROPIC_TITLE_MODEL_ID = "claude-haiku-4-5"
   ANTHROPIC_EFFORT = "medium"
   ANTHROPIC_HTTP_TIMEOUT_MS = "300000"
   ANTHROPIC_API_VERSION = "2023-06-01"

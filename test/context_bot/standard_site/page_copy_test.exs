@@ -350,7 +350,7 @@ defmodule ContextBot.StandardSite.PageCopyTest do
   end
 
   describe "TitlePrompt" do
-    test "is Reader title wording for the research schema, not a second Messages call" do
+    test "is Reader title wording for the research schema and the title-only rewrite call" do
       prompt = TitlePrompt.prompt()
       description = TitlePrompt.schema_description()
 
@@ -373,6 +373,20 @@ defmodule ContextBot.StandardSite.PageCopyTest do
 
       assert message =~ @launch_invocation
       assert message =~ "@getcontext.bot"
+    end
+
+    test "title-rewrite user turn includes invocation, compact reply, and writeup" do
+      message =
+        TitlePrompt.user_message(
+          @launch_invocation,
+          "Short compact about the launch.",
+          "Full writeup with sources."
+        )
+
+      assert message =~ @launch_invocation
+      assert message =~ "Short compact about the launch."
+      assert message =~ "Full writeup with sources."
+      refute message =~ "LENGTH_REPAIR"
     end
   end
 

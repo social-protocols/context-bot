@@ -35,6 +35,7 @@ defmodule ContextBot.SettingsTest do
     assert is_integer(settings.anthropic_retry_reservation_microdollars)
     assert settings.anthropic_pricing_version == "sonnet-5-2026-07-28"
     assert settings.anthropic_model_id == "claude-sonnet-5"
+    assert settings.anthropic_title_model_id == "claude-haiku-4-5"
     assert settings.anthropic_effort == :medium
     assert settings.anthropic_research_max_tokens == 8_192
     assert settings.max_web_search_uses == 5
@@ -231,6 +232,16 @@ defmodule ContextBot.SettingsTest do
 
     assert_raise ArgumentError, ~r/ACTOR_DAILY_LIMIT_PUBLIC/, fn ->
       Settings.load(actor_daily_limit_public: 0)
+    end
+  end
+
+  test "loads the title rewrite model separately from research" do
+    settings = Settings.load(anthropic_title_model_id: "claude-haiku-4-5-20251001")
+    assert settings.anthropic_model_id == "claude-sonnet-5"
+    assert settings.anthropic_title_model_id == "claude-haiku-4-5-20251001"
+
+    assert_raise ArgumentError, ~r/ANTHROPIC_TITLE_MODEL_ID/, fn ->
+      Settings.load(anthropic_title_model_id: "")
     end
   end
 

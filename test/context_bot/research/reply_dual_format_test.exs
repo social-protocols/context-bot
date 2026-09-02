@@ -59,7 +59,6 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       for text <- [
             ~s({"title":"Bird","compact_reply":"Short"}),
             ~s({"title":"Bird","compact_reply":"Short","full_response":""}),
-            ~s({"title":"","compact_reply":"Short","full_response":"Writeup."}),
             ~s({"title":"Bird","compact_reply":"","full_response":"Writeup."}),
             ~s({"title":1,"compact_reply":"Short","full_response":"Writeup."}),
             ~s({"disposition":"reply","title":"Bird","compact_reply":"Short","full_response":""}),
@@ -70,6 +69,62 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
         assert Reply.select([%{"type" => "text", "text" => text}], :end_turn) ==
                  {:error, :invalid_structured_output}
       end
+    end
+
+    test "signals title rewrite when disposition is reply and title is blank" do
+      for text <- [
+            ~s({"disposition":"reply","title":"","compact_reply":"Short summary.","full_response":"Writeup."}),
+            ~s({"title":"   ","compact_reply":"Short summary.","full_response":"Writeup."})
+          ] do
+        assert {:title_rewrite, selected} =
+                 Reply.select([%{"type" => "text", "text" => text}], :end_turn)
+
+        assert selected.text == "Short summary."
+        assert selected.full_response == "Writeup."
+        assert selected.document_title == ""
+        assert selected.disposition == :reply
+      end
+    end
+
+    test "an over-long compact with a blank title still asks for title rewrite before split" do
+      long_compact = String.duplicate("a", 301)
+
+      content = [
+        %{
+          "type" => "text",
+          "text" =>
+            StructuredFixtures.structured_json(long_compact,
+              title: "",
+              full: "Full response here"
+            )
+        }
+      ]
+
+      assert {:title_rewrite, selected} = Reply.select(content, :end_turn)
+      assert selected.text == long_compact
+      assert selected.document_title == ""
+    end
+
+    test "select_title reads a nonempty title-only JSON envelope" do
+      assert Reply.select_title(%{
+               "content" => [%{"type" => "text", "text" => ~s({"title":"What Is That Bird?"})}],
+               "stop_reason" => "end_turn"
+             }) == {:ok, "What Is That Bird?"}
+
+      assert Reply.select_title(%{
+               "content" => [%{"type" => "text", "text" => ~s({"title":"   "})}],
+               "stop_reason" => "end_turn"
+             }) == {:error, :invalid_structured_output}
+
+      refute Reply.title_only_response?(%{
+               "content" => [
+                 %{"type" => "text", "text" => StructuredFixtures.structured_json("Short")}
+               ]
+             })
+
+      assert Reply.title_only_response?(%{
+               "content" => [%{"type" => "text", "text" => ~s({"title":"Bird"})}]
+             })
     end
 
     test "selects no_reply when the mention is clearly not a request" do

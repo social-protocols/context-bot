@@ -2,6 +2,7 @@ defmodule ContextBot.Research.RequestTest do
   use ExUnit.Case, async: true
 
   alias ContextBot.Research.Request
+  alias ContextBot.StandardSite.TitlePrompt
 
   @canonical_thread %{
     version: 1,
@@ -447,6 +448,39 @@ defmodule ContextBot.Research.RequestTest do
     assert compact =~ "without markdown"
     refute compact =~ "[label](https://"
     refute compact =~ "Sources section"
+  end
+
+  test "builds a title-only rewrite request with no tools and the leftover repair token cap" do
+    request =
+      Request.title_rewrite(%{
+        model_id: "claude-haiku-4-5",
+        max_tokens: 1_024,
+        invocation_text: "@getcontext.bot what bird is that?",
+        compact_reply: "A Himalayan Monal.",
+        full_response: "Thorough markdown writeup."
+      })
+
+    assert request["model"] == "claude-haiku-4-5"
+    assert request["max_tokens"] == 1_024
+    assert request["stream"] == false
+    refute Map.has_key?(request, "tools")
+    refute Map.has_key?(request, "tool_choice")
+    assert request["system"] == TitlePrompt.prompt()
+    assert request["output_config"]["format"]["type"] == "json_schema"
+    assert request["output_config"]["format"]["schema"] == Request.title_schema()
+    assert request["output_config"]["format"]["schema"]["required"] == ["title"]
+
+    refute Map.has_key?(
+             request["output_config"]["format"]["schema"]["properties"],
+             "compact_reply"
+           )
+
+    [user] = request["messages"]
+    assert user["role"] == "user"
+    assert user["content"] =~ "@getcontext.bot what bird is that?"
+    assert user["content"] =~ "A Himalayan Monal."
+    assert user["content"] =~ "Thorough markdown writeup."
+    refute user["content"] =~ "LENGTH_REPAIR"
   end
 
   test "sends json_schema format beside effort and omits unsupported length keywords" do

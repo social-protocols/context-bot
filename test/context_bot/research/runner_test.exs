@@ -1189,6 +1189,100 @@ defmodule ContextBot.Research.RunnerTest do
     assert Enum.map(Repo.all(BudgetEntry), & &1.state) == [:sent]
   end
 
+  test "a blank structured title is rewritten with the cheap title model then published" do
+    invocation =
+      invocation("blank-title-rewrite", %{
+        invocation_text: "@getcontext.bot what bird is that?"
+      })
+
+    compact = "Public reporting describes a planned demolition."
+    full = "Thorough markdown writeup with sources."
+
+    Process.put(:runner_client_results, [
+      {:ok,
+       envelope(
+         200,
+         Jason.encode!(
+           message_body(structured_json(compact, title: "", full: full, disposition: "reply"))
+         )
+       )},
+      {:ok, envelope(200, Jason.encode!(message_body(title_json("Planned Explosion?"))))}
+    ])
+
+    assert {:ok, result} = Runner.run(invocation, options())
+    assert result.text == compact
+    assert result.full_response == full
+    assert result.document_title == "Planned Explosion?"
+    refute Map.has_key?(result, :text_part2)
+    assert result.validation == %{"result" => "valid", "repair_used" => false}
+
+    assert_received {:anthropic_call, research_request, %{kind: :research}, false}
+    assert research_request["model"] == "claude-sonnet-5"
+    assert_received {:anthropic_call, title_request, %{kind: :repair}, false}
+    assert title_request["model"] == "claude-haiku-4-5"
+    refute Map.has_key?(title_request, "tools")
+    assert title_request["output_config"]["format"]["schema"]["required"] == ["title"]
+    assert title_request["system"] =~ "READER_TITLE_V1"
+    assert hd(title_request["messages"])["content"] =~ "@getcontext.bot what bird is that?"
+    assert hd(title_request["messages"])["content"] =~ compact
+    assert hd(title_request["messages"])["content"] =~ full
+    refute hd(title_request["messages"])["content"] =~ "LENGTH_REPAIR"
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+
+    kinds = Enum.map(Repo.all(BudgetEntry), & &1.kind)
+    assert :research in kinds
+    assert :repair in kinds
+    assert length(responses(invocation)) == 2
+  end
+
+  test "a blank title plus over-long compact rewrites the title then pack-first splits" do
+    invocation = invocation("blank-title-over-limit")
+    {part1, part2, over_text} = over_limit_split_parts()
+    full = "Thorough markdown writeup."
+
+    Process.put(:runner_client_results, [
+      {:ok,
+       envelope(
+         200,
+         Jason.encode!(message_body(structured_json(over_text, title: "", full: full)))
+       )},
+      {:ok, envelope(200, Jason.encode!(message_body(title_json("What Is That Bird?"))))}
+    ])
+
+    assert {:ok, result} = Runner.run(invocation, options())
+    assert result.text == part1
+    assert result.text_part2 == part2
+    assert result.full_response == full
+    assert result.document_title == "What Is That Bird?"
+    assert result.validation["result"] == "split"
+    assert result.validation["repair_used"] == false
+
+    assert_received {:anthropic_call, _research, %{kind: :research}, false}
+    assert_received {:anthropic_call, title_request, %{kind: :repair}, false}
+    refute title_request["messages"] |> hd() |> Map.get("content") =~ "LENGTH_REPAIR"
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+  end
+
+  test "a blank title rewrite that returns an empty title fails closed" do
+    invocation = invocation("blank-title-failed")
+
+    Process.put(:runner_client_results, [
+      {:ok,
+       envelope(
+         200,
+         Jason.encode!(
+           message_body(structured_json("Short summary.", title: "", full: "Writeup."))
+         )
+       )},
+      {:ok, envelope(200, Jason.encode!(message_body(title_json(""))))}
+    ])
+
+    assert {:error, :invalid_structured_output} = Runner.run(invocation, options())
+    assert_received {:anthropic_call, _research, %{kind: :research}, false}
+    assert_received {:anthropic_call, _title, %{kind: :repair}, false}
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+  end
+
   test "an over-limit structured compact splits locally without a second Anthropic call" do
     invocation = invocation("over-limit-split")
     {part1, part2, over_text} = over_limit_split_parts()
@@ -1375,6 +1469,7 @@ defmodule ContextBot.Research.RunnerTest do
       anthropic_retry_reservation_microdollars: 1_000_000,
       anthropic_pricing_version: "sonnet-5-2026-07-28",
       anthropic_model_id: "claude-sonnet-5",
+      anthropic_title_model_id: "claude-haiku-4-5",
       anthropic_effort: :medium,
       anthropic_research_max_tokens: 1_024,
       anthropic_length_repair_max_tokens: 256,
@@ -1536,6 +1631,8 @@ defmodule ContextBot.Research.RunnerTest do
   defp decoded_fixture(name), do: name |> fixture() |> Jason.decode!()
 
   defp structured_json(compact, opts \\ []), do: StructuredFixtures.structured_json(compact, opts)
+
+  defp title_json(title), do: Jason.encode!(%{"title" => title})
 
   defp structured_text(compact, opts \\ []) do
     %{"type" => "text", "text" => structured_json(compact, opts)}
