@@ -33,12 +33,13 @@ defmodule ContextBot.Reply.PublicationPlanTest do
   end
 
   test "a body split with a full response keeps the remainder and the link on post 2" do
+    ellipsis = ReplyLimits.continuation_ellipsis()
     part1 = String.duplicate("a", 208)
     remainder = String.duplicate("b", 120)
     full = "Thorough markdown writeup."
 
     assert PublicationPlan.preview(part1, remainder, full) == %{
-             posts: [part1, remainder <> Post.link_suffix()],
+             posts: [part1 <> ellipsis, ellipsis <> remainder <> Post.link_suffix()],
              link_placement: :post_2_remainder_and_link
            }
 
@@ -52,18 +53,19 @@ defmodule ContextBot.Reply.PublicationPlanTest do
              remainder,
              "https://standard-reader.app/a/did:plc:test/3k"
            ) ==
-             {:post_2_remainder_and_link, part1, remainder}
+             {:post_2_remainder_and_link, part1 <> ellipsis, ellipsis <> remainder}
   end
 
   test "a body split whose remainder cannot fit the link uses a third link-only post" do
+    ellipsis = ReplyLimits.continuation_ellipsis()
     part1 = String.duplicate("a", 208)
     remainder = String.duplicate("b", 290)
     full = "Thorough markdown writeup."
 
-    refute ReplyLimits.fits_one_post?(remainder <> Post.link_suffix())
+    refute ReplyLimits.fits_one_post?(ellipsis <> remainder <> Post.link_suffix())
 
     assert PublicationPlan.preview(part1, remainder, full) == %{
-             posts: [part1, remainder, Post.link_label()],
+             posts: [part1 <> ellipsis, ellipsis <> remainder, Post.link_label()],
              link_placement: :post_3_link_only
            }
 
@@ -72,19 +74,21 @@ defmodule ContextBot.Reply.PublicationPlanTest do
              remainder,
              "https://standard-reader.app/a/did:plc:test/3k"
            ) ==
-             {:body_split_with_link_post3, part1, remainder}
+             {:body_split_with_link_post3, part1 <> ellipsis, ellipsis <> remainder}
   end
 
   test "a body split without a full response publishes the remainder as post 2" do
+    ellipsis = ReplyLimits.continuation_ellipsis()
     part1 = String.duplicate("a", 150)
     remainder = String.duplicate("b", 160)
 
     assert PublicationPlan.preview(part1, remainder, nil) == %{
-             posts: [part1, remainder],
+             posts: [part1 <> ellipsis, ellipsis <> remainder],
              link_placement: :none
            }
 
-    assert PublicationPlan.decide(part1, remainder, nil) == {:body_split, part1, remainder}
+    assert PublicationPlan.decide(part1, remainder, nil) ==
+             {:body_split, part1 <> ellipsis, ellipsis <> remainder}
   end
 
   test "a compact reply without a full response stays one post" do
@@ -99,6 +103,7 @@ defmodule ContextBot.Reply.PublicationPlanTest do
   end
 
   test "reads the split remainder from dry-run reply_validation" do
+    ellipsis = ReplyLimits.continuation_ellipsis()
     part1 = String.duplicate("a", 150)
     remainder = String.duplicate("b", 160)
 
@@ -109,12 +114,13 @@ defmodule ContextBot.Reply.PublicationPlanTest do
     }
 
     assert PublicationPlan.from_invocation(invocation) == %{
-             posts: [part1, remainder],
+             posts: [part1 <> ellipsis, ellipsis <> remainder],
              link_placement: :none
            }
   end
 
   test "dry-run split with a full response keeps remainder plus link" do
+    ellipsis = ReplyLimits.continuation_ellipsis()
     part1 = String.duplicate("a", 150)
     remainder = String.duplicate("b", 160)
 
@@ -125,8 +131,68 @@ defmodule ContextBot.Reply.PublicationPlanTest do
     }
 
     assert PublicationPlan.from_invocation(invocation) == %{
-             posts: [part1, remainder <> Post.link_suffix()],
+             posts: [part1 <> ellipsis, ellipsis <> remainder <> Post.link_suffix()],
              link_placement: :post_2_remainder_and_link
            }
+  end
+
+  test "a body split publishes continuation ellipses on both body posts" do
+    ellipsis = ReplyLimits.continuation_ellipsis()
+    part1 = String.duplicate("a", 150)
+    remainder = String.duplicate("b", 160)
+
+    assert PublicationPlan.preview(part1, remainder, nil) == %{
+             posts: [part1 <> ellipsis, ellipsis <> remainder],
+             link_placement: :none
+           }
+
+    assert PublicationPlan.decide(part1, remainder, nil) ==
+             {:body_split, part1 <> ellipsis, ellipsis <> remainder}
+  end
+
+  test "link-room math includes the leading ellipsis so 284 unmarked remainder needs post 3" do
+    ellipsis = ReplyLimits.continuation_ellipsis()
+    part1 = String.duplicate("a", 208)
+    remainder = String.duplicate("b", 284)
+    full = "Thorough markdown writeup."
+
+    assert ReplyLimits.fits_one_post?(remainder <> Post.link_suffix())
+    refute ReplyLimits.fits_one_post?(ellipsis <> remainder <> Post.link_suffix())
+
+    assert PublicationPlan.preview(part1, remainder, full) == %{
+             posts: [part1 <> ellipsis, ellipsis <> remainder, Post.link_label()],
+             link_placement: :post_3_link_only
+           }
+
+    assert List.last(PublicationPlan.preview(part1, remainder, full).posts) == Post.link_label()
+    refute String.contains?(Post.link_label(), ellipsis)
+  end
+
+  test "283 unmarked remainder plus leading ellipsis still keeps the link on post 2" do
+    ellipsis = ReplyLimits.continuation_ellipsis()
+    part1 = String.duplicate("a", 208)
+    remainder = String.duplicate("b", 283)
+    full = "Thorough markdown writeup."
+
+    assert ReplyLimits.fits_one_post?(ellipsis <> remainder <> Post.link_suffix())
+
+    assert PublicationPlan.preview(part1, remainder, full) == %{
+             posts: [part1 <> ellipsis, ellipsis <> remainder <> Post.link_suffix()],
+             link_placement: :post_2_remainder_and_link
+           }
+  end
+
+  test "a single-post compact and a link-only follow-up do not gain ellipses" do
+    ellipsis = ReplyLimits.continuation_ellipsis()
+    compact = String.duplicate("a", 250)
+    oversize = String.duplicate("a", 285)
+    full = "Thorough markdown writeup."
+
+    single = PublicationPlan.preview(compact, nil, full)
+    refute Enum.any?(single.posts, &String.contains?(&1, ellipsis))
+
+    link_only = PublicationPlan.preview(oversize, nil, full)
+    assert link_only.posts == [oversize, Post.link_label()]
+    refute Enum.any?(link_only.posts, &String.contains?(&1, ellipsis))
   end
 end

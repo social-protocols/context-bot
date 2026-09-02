@@ -44,11 +44,13 @@ defmodule ContextBot.Reply.Intent do
   @doc """
   Builds an intent with a second part for split replies.
 
-  When a remainder exists, part 2 keeps that leftover compact body. If a Standard Reader URL
-  is present and remainder plus ` (full response)` still fits, part 2 carries both. If the
-  pair does not fit, part 2 is the remainder and part 3 is the link-only label. Part 2
-  replies to part 1. At freeze time, later parts are incomplete because earlier posts have
-  not been published yet; ReplyWorker rebuilds them with the published parent URI and CID.
+  When a remainder exists, part 2 keeps that leftover compact body, and both body
+  posts receive customary U+2026 continuation ellipses. If a Standard Reader URL
+  is present and the marked remainder plus ` (full response)` still fits, part 2
+  carries both. If the pair does not fit, part 2 is the marked remainder and part 3
+  is the unchanged link-only label. Part 2 replies to part 1. At freeze time, later
+  parts are incomplete because earlier posts have not been published yet; ReplyWorker
+  rebuilds them with the published parent URI and CID.
   """
   @spec build_with_part2(
           Invocation.t(),

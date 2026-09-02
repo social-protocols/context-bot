@@ -3,6 +3,7 @@ defmodule ContextBot.DryRun.ResultPrinterTest do
 
   alias ContextBot.ATProto.Post
   alias ContextBot.DryRun.ResultPrinter
+  alias ContextBot.Research.ReplyLimits
   alias ContextBot.Workflow.Invocation
 
   test "prints the full writeup before labeled posts and link placement" do
@@ -66,9 +67,11 @@ defmodule ContextBot.DryRun.ResultPrinterTest do
         0
       )
 
+    ellipsis = ReplyLimits.continuation_ellipsis()
+
     refute Enum.any?(lines, &String.starts_with?(&1, "Full response"))
-    assert Enum.at(lines, Enum.find_index(lines, &(&1 == "Post 1:")) + 1) == part1
-    assert Enum.at(lines, Enum.find_index(lines, &(&1 == "Post 2:")) + 1) == part2
+    assert Enum.at(lines, Enum.find_index(lines, &(&1 == "Post 1:")) + 1) == part1 <> ellipsis
+    assert Enum.at(lines, Enum.find_index(lines, &(&1 == "Post 2:")) + 1) == ellipsis <> part2
     assert List.last(lines) == "(full response) link: none"
   end
 
@@ -89,8 +92,10 @@ defmodule ContextBot.DryRun.ResultPrinterTest do
 
     assert full in lines
 
+    ellipsis = ReplyLimits.continuation_ellipsis()
+
     assert Enum.at(lines, Enum.find_index(lines, &(&1 == "Post 2:")) + 1) ==
-             remainder <> Post.link_suffix()
+             ellipsis <> remainder <> Post.link_suffix()
 
     assert List.last(lines) == "(full response) link: Post 2 (remainder + link)"
   end

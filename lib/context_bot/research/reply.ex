@@ -140,18 +140,22 @@ defmodule ContextBot.Research.Reply do
     do: structured_field_from_messages(messages, :document_title)
 
   @doc """
-  Attempts to split text into two parts, each ≤300 graphemes and ≤3,000 bytes.
+  Attempts to split text into two parts, each ≤300 graphemes and ≤3,000 bytes
+  after customary U+2026 continuation ellipses are applied.
 
-  Packs as much as possible into part 1 up to the Bluesky hard cap. The 275
+  Packs as much as possible into part 1. The part-1 budget is 299 graphemes and
+  2,997 bytes unless that left side already ends with `…` or `...`. The 275
   grapheme prompt target is for the model, not for this split. Boundary kind is
   only a tie-break when two valid packs have the same part-1 length: paragraph
   (blank line), then UAX #29 / English CLDR sentence via `unicode_string`, then
   whitespace. A word-boundary pack near the cap beats a much shorter sentence.
   When part-1 lengths are equal, prefer a pack whose part 2 still has room for
-  `Post.link_suffix/0`. Never cut mid-word or mid-grapheme cluster.
+  a leading `…` plus `Post.link_suffix/0`. Never cut mid-word or mid-grapheme
+  cluster.
 
-  Returns `{:ok, part1, part2}` on success or `:error` if no valid split exists
-  (e.g., a single unbreakable token over 300 graphemes).
+  Returns `{:ok, part1, part2}` on success, with part 1 ending in `…` and part 2
+  starting with `…` unless that side already had `…` or `...`. Returns `:error`
+  if no valid split exists (e.g., a single unbreakable token over 300 graphemes).
   """
   @spec split_text(String.t()) :: {:ok, String.t(), String.t()} | :error
   def split_text(text) when is_binary(text) do
@@ -162,6 +166,18 @@ defmodule ContextBot.Research.Reply do
     else
       try_split(text)
     end
+  end
+
+  @doc """
+  Adds customary U+2026 continuation markers to a two-body Bluesky split.
+
+  Idempotent when a side already ends or starts with `…` or `...`. Does not
+  insert a space unless that side already begins with whitespace.
+  """
+  @spec with_continuation_ellipses(String.t(), String.t()) :: {String.t(), String.t()}
+  def with_continuation_ellipses(part1, part2)
+      when is_binary(part1) and is_binary(part2) do
+    {with_trailing_ellipsis(part1), with_leading_ellipsis(part2)}
   end
 
   defp try_split(text) do
@@ -241,7 +257,8 @@ defmodule ContextBot.Research.Reply do
 
   defp pick_best_candidate(candidates) do
     best = Enum.max_by(candidates, &score_candidate/1)
-    {:ok, best.part1, best.part2}
+    {part1, part2} = with_continuation_ellipses(best.part1, best.part2)
+    {:ok, part1, part2}
   end
 
   # Maximize part 1. Link-room and boundary kind are exact-length tie-breaks only.
@@ -255,18 +272,35 @@ defmodule ContextBot.Research.Reply do
   defp boundary_rank(:whitespace), do: 1
 
   defp part2_has_link_room?(text) when is_binary(text) do
-    ReplyLimits.fits_one_post?(text <> Post.link_suffix())
+    ReplyLimits.fits_one_post?(with_leading_ellipsis(text) <> Post.link_suffix())
   end
 
   defp valid_split_parts?(left, right) do
-    left_graphemes = String.length(left)
-    right_graphemes = String.length(right)
-
-    left_graphemes > 0 and left_graphemes <= @hard_max_graphemes and
-      byte_size(left) <= @max_bytes and
-      right_graphemes > 0 and right_graphemes <= @hard_max_graphemes and
-      byte_size(right) <= @max_bytes
+    if left == "" or right == "" do
+      false
+    else
+      {part1, part2} = with_continuation_ellipses(left, right)
+      ReplyLimits.fits_one_post?(part1) and ReplyLimits.fits_one_post?(part2)
+    end
   end
+
+  defp with_trailing_ellipsis(text) do
+    if ends_with_ellipsis?(text), do: text, else: text <> ReplyLimits.continuation_ellipsis()
+  end
+
+  defp with_leading_ellipsis(text) do
+    if starts_with_ellipsis?(text), do: text, else: ReplyLimits.continuation_ellipsis() <> text
+  end
+
+  defp ends_with_ellipsis?(text),
+    do:
+      String.ends_with?(text, ReplyLimits.continuation_ellipsis()) or
+        String.ends_with?(text, "...")
+
+  defp starts_with_ellipsis?(text),
+    do:
+      String.starts_with?(text, ReplyLimits.continuation_ellipsis()) or
+        String.starts_with?(text, "...")
 
   defp select_response(content_blocks, stop_reason, pending_server_tools, seen_tool_ids)
        when is_list(content_blocks) and stop_reason in ["end_turn", :end_turn] do

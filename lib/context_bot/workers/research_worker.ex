@@ -417,7 +417,7 @@ defmodule ContextBot.Workers.ResearchWorker do
 
     %{
       full_response: result.full_response,
-      selected_reply: result.text,
+      selected_reply: Map.get(result, :compact_source, result.text),
       invocation_uri: invocation.invocation_uri,
       asked_text: subject.asked_text,
       parent_uri: subject.parent_uri,

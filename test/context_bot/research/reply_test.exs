@@ -857,10 +857,10 @@ defmodule ContextBot.Research.ReplyTest do
 
     assert String.length(text) == 312
     assert {:ok, split1, split2} = Reply.split_text(text)
-    assert String.length(split1) == 150
-    assert String.length(split2) == 160
-    assert split1 == part1
-    assert split2 == part2
+    assert String.length(split1) == 151
+    assert String.length(split2) == 161
+    assert split1 == part1 <> ReplyLimits.continuation_ellipsis()
+    assert split2 == ReplyLimits.continuation_ellipsis() <> part2
   end
 
   test "splits over-300-grapheme text at sentence boundary when no paragraph break" do
@@ -870,10 +870,10 @@ defmodule ContextBot.Research.ReplyTest do
 
     assert String.length(text) == 302
     assert {:ok, split1, split2} = Reply.split_text(text)
-    assert String.length(split1) == 150
-    assert String.length(split2) == 151
-    assert split1 == part1
-    assert split2 == part2
+    assert String.length(split1) == 151
+    assert String.length(split2) == 152
+    assert split1 == part1 <> ReplyLimits.continuation_ellipsis()
+    assert split2 == ReplyLimits.continuation_ellipsis() <> part2
   end
 
   test "splits over-300-grapheme text at whitespace when no sentence break near middle" do
@@ -881,8 +881,8 @@ defmodule ContextBot.Research.ReplyTest do
 
     assert String.length(text) == 302
     assert {:ok, split1, split2} = Reply.split_text(text)
-    assert String.length(split1) == 150
-    assert String.length(split2) == 151
+    assert String.length(split1) == 151
+    assert String.length(split2) == 152
   end
 
   test "refuses to split text that cannot be split into two valid parts" do
@@ -921,11 +921,11 @@ defmodule ContextBot.Research.ReplyTest do
     assert String.length(text) == 313
     assert {:ok, split1, split2} = Reply.split_text(text)
 
-    # Third sentence ends at 282, still under the 300 hard cap. The 275 prompt
-    # target is for the model, not for packing a split.
-    assert String.length(split1) == 282
-    assert String.length(split2) == 30
-    assert String.ends_with?(split1, part_280)
+    # Third sentence ends at 282 raw; published part 1 adds U+2026. The 275
+    # prompt target is for the model, not for packing a split.
+    assert String.length(split1) == 283
+    assert String.length(split2) == 31
+    assert String.ends_with?(split1, part_280 <> ReplyLimits.continuation_ellipsis())
   end
 
   test "packs a 276-grapheme sentence that the old 275 target would have skipped" do
@@ -938,10 +938,10 @@ defmodule ContextBot.Research.ReplyTest do
     assert String.length(text) == 302
     assert {:ok, split1, split2} = Reply.split_text(text)
 
-    # s1+s2 is 201; s3 brings part 1 to 276, which is valid under the hard cap.
-    assert String.length(split1) == 276
-    assert String.length(split2) == 25
-    assert String.ends_with?(split1, s3)
+    # s1+s2 is 201; s3 brings part 1 to 276 raw, then U+2026.
+    assert String.length(split1) == 277
+    assert String.length(split2) == 26
+    assert String.ends_with?(split1, s3 <> ReplyLimits.continuation_ellipsis())
   end
 
   test "splits at the last whitespace that still fits the hard cap" do
@@ -952,9 +952,9 @@ defmodule ContextBot.Research.ReplyTest do
 
     assert String.length(text) == 333
     assert {:ok, split1, split2} = Reply.split_text(text)
-    assert String.length(split1) == 280
-    assert split1 == part1
-    assert String.starts_with?(split2, part2)
+    assert String.length(split1) == 281
+    assert split1 == part1 <> ReplyLimits.continuation_ellipsis()
+    assert String.starts_with?(split2, ReplyLimits.continuation_ellipsis() <> part2)
   end
 
   test "English CLDR sentence suppressions include U.S." do
@@ -994,8 +994,8 @@ defmodule ContextBot.Research.ReplyTest do
     refute split1 == published_part1
     refute String.ends_with?(split1, "led the U.S.")
     assert String.contains?(split1, "U.S. Board")
-    assert split1 == compact_prefix
-    assert split2 == remainder
+    assert split1 == compact_prefix <> ReplyLimits.continuation_ellipsis()
+    assert split2 == ReplyLimits.continuation_ellipsis() <> remainder
   end
 
   test "prefers a later sentence split that leaves room on part 2 for the link suffix" do
@@ -1007,7 +1007,7 @@ defmodule ContextBot.Research.ReplyTest do
     assert String.length(text) > 300
     assert {:ok, split1, split2} = Reply.split_text(text)
     refute String.ends_with?(split1, String.duplicate("a", 10) <> ".")
-    assert String.ends_with?(split1, later)
+    assert String.ends_with?(split1, later <> ReplyLimits.continuation_ellipsis())
     assert ReplyLimits.fits_one_post?(split2 <> Post.link_suffix())
   end
 
@@ -1022,8 +1022,8 @@ defmodule ContextBot.Research.ReplyTest do
     assert {:ok, split1, split2} = Reply.split_text(text)
     refute String.ends_with?(split1, "led the U.S.")
     assert String.contains?(split1, "U.S.")
-    assert String.length(split1) == 299
-    assert String.starts_with?(split2, "b")
+    assert String.length(split1) == 300
+    assert String.starts_with?(split2, ReplyLimits.continuation_ellipsis() <> "b")
   end
 
   test "packs the East Potomac compact to the last whitespace before 300" do
@@ -1034,10 +1034,12 @@ defmodule ContextBot.Research.ReplyTest do
       "Disputed, not settled. Interior/NPS says it's \"routine maintenance\" removing hazard, invasive, and dying trees — unrelated to the golf redesign."
 
     expected_part1 =
-      "Disputed, not settled. Interior/NPS says it's \"routine maintenance\" removing hazard, invasive, and dying trees — unrelated to the golf redesign. But it won't confirm/deny cherry trees cut were healthy, timing lines up with Trump's Sept 1 construction target, a $349k contract runs into October, and a"
+      "Disputed, not settled. Interior/NPS says it's \"routine maintenance\" removing hazard, invasive, and dying trees — unrelated to the golf redesign. But it won't confirm/deny cherry trees cut were healthy, timing lines up with Trump's Sept 1 construction target, a $349k contract runs into October, and" <>
+        ReplyLimits.continuation_ellipsis()
 
     expected_part2 =
-      "lawsuit's court-notification terms reportedly haven't been followed. No proof either way yet."
+      ReplyLimits.continuation_ellipsis() <>
+        "a lawsuit's court-notification terms reportedly haven't been followed. No proof either way yet."
 
     assert String.length(compact) == 394
     assert String.length(first_two) == 144
@@ -1045,8 +1047,8 @@ defmodule ContextBot.Research.ReplyTest do
     refute split1 == first_two
     assert split1 == expected_part1
     assert split2 == expected_part2
-    assert String.length(split1) == 300
-    assert String.length(split2) == 93
+    assert String.length(split1) == 299
+    assert String.length(split2) == 96
     assert ReplyLimits.fits_one_post?(split1)
     assert ReplyLimits.fits_one_post?(split2)
     assert ReplyLimits.fits_one_post?(split2 <> Post.link_suffix())
@@ -1063,9 +1065,17 @@ defmodule ContextBot.Research.ReplyTest do
     assert String.length(text) > 300
     assert {:ok, split1, split2} = Reply.split_text(text)
     refute String.length(split1) == 161
-    assert String.length(split1) == 291
-    assert String.ends_with?(split1, String.duplicate("c", 9))
-    assert String.starts_with?(split2, String.duplicate("c", 9) <> " " <> overflow)
+    assert String.length(split1) == 292
+
+    assert String.ends_with?(
+             split1,
+             String.duplicate("c", 9) <> ReplyLimits.continuation_ellipsis()
+           )
+
+    assert String.starts_with?(
+             split2,
+             ReplyLimits.continuation_ellipsis() <> String.duplicate("c", 9) <> " " <> overflow
+           )
   end
 
   test "prefers a paragraph pack over an earlier sentence of the same leftover hole" do
@@ -1078,9 +1088,9 @@ defmodule ContextBot.Research.ReplyTest do
     assert String.length(paragraph) == 286
     assert {:ok, split1, split2} = Reply.split_text(text)
     refute split1 == String.trim(opening)
-    assert split1 == paragraph
-    assert String.length(split1) == 286
-    assert String.starts_with?(split2, "y")
+    assert split1 == paragraph <> ReplyLimits.continuation_ellipsis()
+    assert String.length(split1) == 287
+    assert String.starts_with?(split2, ReplyLimits.continuation_ellipsis() <> "y")
   end
 
   test "at equal part-1 length prefers a sentence end over a mid-sentence word" do
@@ -1090,9 +1100,101 @@ defmodule ContextBot.Research.ReplyTest do
     text = s1 <> " " <> s2 <> " " <> overflow
 
     assert {:ok, split1, split2} = Reply.split_text(text)
-    assert String.length(split1) == 281
-    assert String.ends_with?(split1, ".")
-    assert split2 == overflow
+    assert String.length(split1) == 282
+    assert String.ends_with?(split1, "." <> ReplyLimits.continuation_ellipsis())
+    assert split2 == ReplyLimits.continuation_ellipsis() <> overflow
+  end
+
+  test "a two-body split adds U+2026 continuation ellipses and stays within post limits" do
+    part1 = String.duplicate("a", 150)
+    part2 = String.duplicate("b", 160)
+    text = part1 <> "\n\n" <> part2
+
+    assert {:ok, split1, split2} = Reply.split_text(text)
+    assert String.ends_with?(split1, ReplyLimits.continuation_ellipsis())
+    assert String.starts_with?(split2, ReplyLimits.continuation_ellipsis())
+    refute String.contains?(split1, "...")
+    refute String.contains?(split2, "...")
+    assert split1 == part1 <> ReplyLimits.continuation_ellipsis()
+    assert split2 == ReplyLimits.continuation_ellipsis() <> part2
+    assert ReplyLimits.fits_one_post?(split1)
+    assert ReplyLimits.fits_one_post?(split2)
+    assert String.length(split1) == 151
+    assert byte_size(ReplyLimits.continuation_ellipsis()) == 3
+    assert String.length(ReplyLimits.continuation_ellipsis()) == 1
+  end
+
+  test "rejects a 300-grapheme left pack that would overflow after the trailing ellipsis" do
+    left = String.duplicate("a", 300)
+    text = left <> " " <> String.duplicate("b", 50)
+
+    assert String.length(left) == ReplyLimits.hard_max_graphemes()
+    assert Reply.split_text(text) == :error
+  end
+
+  test "shortens a 300-grapheme left pack so the trailing ellipsis still fits" do
+    ellipsis = ReplyLimits.continuation_ellipsis()
+    head = String.duplicate("a", 280)
+    tail = String.duplicate("c", 19)
+    overflow = String.duplicate("b", 40)
+    text = head <> " " <> tail <> " " <> overflow
+
+    assert {:ok, split1, split2} = Reply.split_text(text)
+    assert String.length(head <> " " <> tail) == 300
+    assert split1 == head <> ellipsis
+    assert String.starts_with?(split2, ellipsis <> tail)
+    assert ReplyLimits.fits_one_post?(split1)
+    assert ReplyLimits.fits_one_post?(split2)
+    refute ReplyLimits.fits_one_post?(head <> " " <> tail <> ellipsis)
+  end
+
+  test "link-room accounting includes the leading continuation ellipsis" do
+    suffix = Post.link_suffix()
+    # 284 + suffix = 300 unmarked; leading … makes 301 and must not look like link room.
+    early = String.duplicate("a", 249) <> "."
+    later = String.duplicate("b", 14) <> "."
+    rest = String.duplicate("c", 284)
+    text = early <> " " <> later <> " " <> rest
+
+    assert {:ok, split1, split2} = Reply.split_text(text)
+    assert String.ends_with?(split1, later <> ReplyLimits.continuation_ellipsis())
+    assert split2 == ReplyLimits.continuation_ellipsis() <> rest
+    refute ReplyLimits.fits_one_post?(split2 <> suffix)
+    assert ReplyLimits.fits_one_post?(rest <> suffix)
+  end
+
+  test "does not add a second ellipsis when the compact already uses one" do
+    part1 = String.duplicate("a", 148) <> ReplyLimits.continuation_ellipsis()
+    part2 = ReplyLimits.continuation_ellipsis() <> String.duplicate("b", 158)
+    text = part1 <> "\n\n" <> part2
+
+    assert {:ok, split1, split2} = Reply.split_text(text)
+    assert split1 == part1
+    assert split2 == part2
+
+    refute String.ends_with?(
+             split1,
+             ReplyLimits.continuation_ellipsis() <> ReplyLimits.continuation_ellipsis()
+           )
+
+    refute String.starts_with?(
+             split2,
+             ReplyLimits.continuation_ellipsis() <> ReplyLimits.continuation_ellipsis()
+           )
+  end
+
+  test "does not add a second ellipsis when the compact already uses ASCII dots" do
+    part1 = String.duplicate("a", 147) <> "..."
+    part2 = "..." <> String.duplicate("b", 157)
+    text = part1 <> "\n\n" <> part2
+
+    assert {:ok, split1, split2} = Reply.split_text(text)
+    assert split1 == part1
+    assert split2 == part2
+    refute String.ends_with?(split1, "..." <> ReplyLimits.continuation_ellipsis())
+    refute String.starts_with?(split2, ReplyLimits.continuation_ellipsis() <> "...")
+    refute String.contains?(split1, ReplyLimits.continuation_ellipsis())
+    refute String.contains?(split2, ReplyLimits.continuation_ellipsis())
   end
 
   defp structured_text(compact, opts \\ []) do
