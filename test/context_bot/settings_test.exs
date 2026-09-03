@@ -36,7 +36,7 @@ defmodule ContextBot.SettingsTest do
     assert settings.anthropic_pricing_version == "sonnet-5-2026-07-28"
     assert settings.anthropic_model_id == "claude-sonnet-5"
     assert settings.anthropic_title_model_id == "claude-haiku-4-5"
-    assert settings.anthropic_structure_model_id == "claude-haiku-4-5"
+    assert settings.anthropic_structure_model_id == "claude-sonnet-5"
     assert settings.anthropic_effort == :medium
     assert settings.anthropic_research_max_tokens == 8_192
     assert settings.anthropic_structure_max_tokens == 1_024
@@ -245,9 +245,41 @@ defmodule ContextBot.SettingsTest do
     settings = Settings.load(anthropic_title_model_id: "claude-haiku-4-5-20251001")
     assert settings.anthropic_model_id == "claude-sonnet-5"
     assert settings.anthropic_title_model_id == "claude-haiku-4-5-20251001"
+    assert settings.anthropic_structure_model_id == "claude-sonnet-5"
 
     assert_raise ArgumentError, ~r/ANTHROPIC_TITLE_MODEL_ID/, fn ->
       Settings.load(anthropic_title_model_id: "")
+    end
+  end
+
+  test "defaults the structure-phase model to the research model" do
+    defaulted = Settings.load(%{"ANTHROPIC_TITLE_MODEL_ID" => "claude-haiku-4-5"})
+    assert defaulted.anthropic_model_id == "claude-sonnet-5"
+    assert defaulted.anthropic_title_model_id == "claude-haiku-4-5"
+    assert defaulted.anthropic_structure_model_id == "claude-sonnet-5"
+
+    follows_research =
+      Settings.load(%{
+        "ANTHROPIC_MODEL_ID" => "claude-sonnet-5-20260715",
+        "ANTHROPIC_TITLE_MODEL_ID" => "claude-haiku-4-5-20251001"
+      })
+
+    assert follows_research.anthropic_model_id == "claude-sonnet-5-20260715"
+    assert follows_research.anthropic_title_model_id == "claude-haiku-4-5-20251001"
+    assert follows_research.anthropic_structure_model_id == "claude-sonnet-5-20260715"
+
+    overridden =
+      Settings.load(%{
+        "ANTHROPIC_MODEL_ID" => "claude-sonnet-5",
+        "ANTHROPIC_TITLE_MODEL_ID" => "claude-haiku-4-5",
+        "ANTHROPIC_STRUCTURE_MODEL_ID" => "claude-haiku-4-5-20251001"
+      })
+
+    assert overridden.anthropic_structure_model_id == "claude-haiku-4-5-20251001"
+    assert overridden.anthropic_title_model_id == "claude-haiku-4-5"
+
+    assert_raise ArgumentError, ~r/ANTHROPIC_STRUCTURE_MODEL_ID/, fn ->
+      Settings.load(anthropic_structure_model_id: "")
     end
   end
 

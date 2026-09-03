@@ -337,9 +337,9 @@ defmodule ContextBot.Settings do
           :anthropic_structure_model_id,
           string!(
             environment,
-            "ANTHROPIC_TITLE_MODEL_ID",
-            :anthropic_title_model_id,
-            @default_anthropic_title_model_id
+            "ANTHROPIC_MODEL_ID",
+            :anthropic_model_id,
+            @default_anthropic_model_id
           )
         ),
       anthropic_structure_max_tokens:
