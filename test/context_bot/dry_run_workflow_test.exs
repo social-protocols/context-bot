@@ -91,7 +91,7 @@ defmodule ContextBot.DryRunWorkflowTest do
       refute Map.has_key?(conn.body_params, "tools")
       assert conn.body_params["output_config"]["format"]["type"] == "json_schema"
       assert conn.body_params["output_config"]["format"]["schema"] == Request.structure_schema()
-      assert conn.body_params["max_tokens"] == 1_024
+      assert conn.body_params["max_tokens"] == 4_096
       assert [message] = conn.body_params["messages"]
       assert message["content"] =~ "STRUCTURE_OUTPUT"
       assert message["content"] =~ "https://primary.example/report"

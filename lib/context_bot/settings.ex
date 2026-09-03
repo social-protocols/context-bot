@@ -32,7 +32,7 @@ defmodule ContextBot.Settings do
   @default_anthropic_effort :medium
   @default_anthropic_research_max_tokens 8_192
   @default_anthropic_length_repair_max_tokens 1_024
-  @default_anthropic_structure_max_tokens 1_024
+  @default_anthropic_structure_max_tokens 4_096
   @default_anthropic_structure_reservation_usd "0.500000"
   @default_anthropic_model_id "claude-sonnet-5"
   @default_anthropic_title_model_id "claude-haiku-4-5"
