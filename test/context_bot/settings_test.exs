@@ -39,7 +39,7 @@ defmodule ContextBot.SettingsTest do
     assert settings.anthropic_structure_model_id == "claude-sonnet-5"
     assert settings.anthropic_effort == :medium
     assert settings.anthropic_research_max_tokens == 8_192
-    assert settings.anthropic_structure_max_tokens == 1_024
+    assert settings.anthropic_structure_max_tokens == 4_096
     assert settings.anthropic_structure_reservation_microdollars == 500_000
     assert settings.max_web_search_uses == 5
     assert settings.anthropic_research_reservation_microdollars == 5_000_000
