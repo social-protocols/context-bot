@@ -904,7 +904,8 @@ defmodule ContextBotWeb.InvocationsControllerTest do
           publication_claim_token: "publication-token-show",
           selected_reply: "Selected compact",
           full_response: "Selected full",
-          anthropic_usage: %{"input_tokens" => 11, "output_tokens" => 7}
+          anthropic_usage: %{"input_tokens" => 11, "output_tokens" => 7},
+          citation_sources: [%{"url" => "https://example.com/source", "title" => "Example"}]
         })
 
       inv
@@ -942,6 +943,10 @@ defmodule ContextBotWeb.InvocationsControllerTest do
       assert body["selected_reply"] == "Selected compact"
       assert body["full_response"] == "Selected full"
       assert body["anthropic_usage"] == %{"input_tokens" => 11, "output_tokens" => 7}
+
+      assert body["citation_sources"] == [
+               %{"url" => "https://example.com/source", "title" => "Example"}
+             ]
 
       assert body["anthropic_responses"] == [
                %{"raw_body" => "SECRET_LEGACY_ENVELOPE", "status" => 503}
