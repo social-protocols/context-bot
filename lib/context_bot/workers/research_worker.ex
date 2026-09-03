@@ -375,41 +375,11 @@ defmodule ContextBot.Workers.ResearchWorker do
     with {:ok, prompt_doc} <-
            PromptDocument.ensure_exists(client, repo, publication_uri, created_at),
          {:ok, structure_doc} <-
-           PromptDocument.ensure_structure_exists(client, repo, publication_uri, created_at) do
-      create_full_response_document(
-        invocation,
-        result,
-        client,
-        repo,
-        publication_uri,
-        created_at,
-        prompt_doc,
-        structure_doc,
-        settings
-      )
+           PromptDocument.ensure_structure_exists(client, repo, publication_uri, created_at),
+         content = full_response_content(invocation, result, prompt_doc, structure_doc, settings),
+         {:ok, doc_result} <- Document.create(client, repo, publication_uri, content, created_at) do
+      {:ok, doc_result}
     else
-      {:error, reason} ->
-        fail_standard_site(invocation, "site.standard.document", reason)
-    end
-  end
-
-  defp create_full_response_document(
-         invocation,
-         result,
-         client,
-         repo,
-         publication_uri,
-         created_at,
-         prompt_doc,
-         structure_doc,
-         settings
-       ) do
-    content = full_response_content(invocation, result, prompt_doc, structure_doc, settings)
-
-    case Document.create(client, repo, publication_uri, content, created_at) do
-      {:ok, doc_result} ->
-        {:ok, doc_result}
-
       {:error, reason} ->
         fail_standard_site(invocation, "site.standard.document", reason)
     end
