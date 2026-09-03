@@ -3,5 +3,6 @@
     "dockerfile": ".cursor/Dockerfile",
     "context": ".."
   },
-  "install": "mix local.hex --force && mix local.rebar --force && mix deps.get && mix compile && git config core.hooksPath .githooks"
+  "install": "mix local.hex --force && mix local.rebar --force && mix deps.get && mix compile && git config core.hooksPath .githooks",
+  "start": ".cursor/session-start.sh"
 }
