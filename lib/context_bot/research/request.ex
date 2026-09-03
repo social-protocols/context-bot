@@ -127,8 +127,7 @@ defmodule ContextBot.Research.Request do
           required(:max_tokens) => pos_integer(),
           required(:writeup) => String.t(),
           required(:citations) => [map()],
-          required(:canonical_thread) => String.t(),
-          optional(:effort) => :low | :medium | :high
+          required(:canonical_thread) => String.t()
         }
 
   @type projection_opts :: %{
@@ -363,6 +362,7 @@ defmodule ContextBot.Research.Request do
   Builds the small structured-output request from a completed research writeup.
 
   No web tools. JSON schema is disposition/title/compact_reply only.
+  Haiku-safe: no `thinking` and no `output_config.effort`.
   """
   @spec structure(structure_config()) :: map()
   def structure(%{
@@ -374,15 +374,12 @@ defmodule ContextBot.Research.Request do
       })
       when is_binary(model_id) and is_integer(max_tokens) and max_tokens > 0 and
              is_binary(writeup) and is_list(citations) and is_binary(thread_text) do
-    effort = :low
-
     %{
       "model" => model_id,
       "max_tokens" => max_tokens,
       "stream" => false,
       "cache_control" => %{"type" => "ephemeral"},
       "output_config" => %{
-        "effort" => Atom.to_string(effort),
         "format" => %{
           "type" => "json_schema",
           "schema" => structure_schema()

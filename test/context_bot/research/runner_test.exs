@@ -76,6 +76,8 @@ defmodule ContextBot.Research.RunnerTest do
 
     refute Map.has_key?(structure, "tools")
     refute Map.has_key?(structure, "thinking")
+    refute Map.has_key?(structure, "effort")
+    refute Map.has_key?(structure["output_config"], "effort")
     refute get_in(structure, ["thinking", "type"]) == "adaptive"
     assert structure["output_config"]["format"]["type"] == "json_schema"
     assert structure["output_config"]["format"]["schema"] == Request.structure_schema()
