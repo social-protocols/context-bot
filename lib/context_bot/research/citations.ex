@@ -133,25 +133,29 @@ defmodule ContextBot.Research.Citations do
   end
 
   defp number_allowlisted(records) do
-    {numbered, _assigned} =
-      Enum.reduce(records, {[], %{}}, fn record, {acc, assigned} ->
-        url = record["url"]
-
-        if http_url?(url) do
-          case Map.fetch(assigned, url) do
-            {:ok, number} ->
-              {[{number, record} | acc], assigned}
-
-            :error ->
-              number = map_size(assigned) + 1
-              {[{number, record} | acc], Map.put(assigned, url, number)}
-          end
-        else
-          {acc, assigned}
-        end
-      end)
-
+    {numbered, _assigned} = Enum.reduce(records, {[], %{}}, &assign_number/2)
     Enum.reverse(numbered)
+  end
+
+  defp assign_number(record, {acc, assigned} = acc_pair) do
+    url = record["url"]
+
+    if http_url?(url) do
+      assign_http_number(url, record, acc, assigned)
+    else
+      acc_pair
+    end
+  end
+
+  defp assign_http_number(url, record, acc, assigned) do
+    case Map.fetch(assigned, url) do
+      {:ok, number} ->
+        {[{number, record} | acc], assigned}
+
+      :error ->
+        number = map_size(assigned) + 1
+        {[{number, record} | acc], Map.put(assigned, url, number)}
+    end
   end
 
   defp unique_sources(numbered) do
