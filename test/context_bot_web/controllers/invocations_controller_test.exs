@@ -531,6 +531,36 @@ defmodule ContextBotWeb.InvocationsControllerTest do
       assert body =~ ">3<"
     end
 
+    test "shows an internal pack-first split failure as invalid_repair, not provider_response", %{
+      conn: conn
+    } do
+      {:ok, _inv} =
+        %Invocation{}
+        |> Invocation.changeset(%{
+          dry_run: false,
+          invocation_uri: "at://did:plc:test/app.bsky.feed.post/abc123",
+          notification_cid: "cid1",
+          current_cid: "cid1",
+          actor_did: "did:plc:test",
+          actor_handle: "test.bsky.social",
+          raw_notification: %{},
+          received_at: ~U[2026-08-26 10:00:00Z],
+          status: :failed,
+          stage: :failed,
+          failure_category: :invalid_repair,
+          failure_detail: %{"reason" => "invalid_repair"}
+        })
+        |> Repo.insert()
+
+      conn = get(conn, ~p"/invocations")
+      body = html_response(conn, 200)
+
+      assert body =~ ~s(title="invalid_repair")
+      assert body =~ "invalid_repair"
+      refute body =~ "provider_response: invalid_repair"
+      refute body =~ "invalid_repair: invalid_repair"
+    end
+
     test "displays failure category and detail", %{conn: conn} do
       {:ok, _inv} =
         %Invocation{}

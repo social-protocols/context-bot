@@ -87,6 +87,8 @@ defmodule ContextBot.Research.InterruptRecovery do
   def can_restart_research?(_invocation), do: false
 
   @spec deterministic_parse_hard_fail?(Invocation.t()) :: boolean()
+  def deterministic_parse_hard_fail?(%Invocation{failure_category: :invalid_repair}), do: true
+
   def deterministic_parse_hard_fail?(%Invocation{
         failure_category: :provider_response,
         failure_detail: %{"reason" => reason}

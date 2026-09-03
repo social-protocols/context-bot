@@ -332,15 +332,21 @@ defmodule ContextBotWeb.InvocationsController do
 
   defp error_summary(detail, category) when is_map(detail) do
     reason = Map.get(detail, "reason") || Map.get(detail, :reason) || ""
+    category_text = category_text(category)
 
     message =
-      case category do
-        nil -> reason
-        cat -> "#{cat}: #{reason}"
+      cond do
+        category_text == "" -> reason
+        reason == "" -> category_text
+        reason == category_text -> reason
+        true -> "#{category_text}: #{reason}"
       end
 
     truncate(message, 100)
   end
+
+  defp category_text(nil), do: ""
+  defp category_text(category), do: to_string(category)
 
   defp truncate(text, max_length) when byte_size(text) <= max_length, do: text
 

@@ -12,7 +12,8 @@ defmodule ContextBot.Workflow.Failure do
     :provider_budget,
     :provider_response,
     :publication_auth,
-    :publication_conflict
+    :publication_conflict,
+    :invalid_repair
   ]
 
   @type category ::
@@ -25,6 +26,7 @@ defmodule ContextBot.Workflow.Failure do
           | :provider_response
           | :publication_auth
           | :publication_conflict
+          | :invalid_repair
 
   @spec category(term()) :: category()
   def category(value) when value in @categories, do: value
