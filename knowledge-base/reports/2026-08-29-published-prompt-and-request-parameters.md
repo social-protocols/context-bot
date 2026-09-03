@@ -17,10 +17,12 @@ lexicons. Homepage copy still claimed the full prompt lived in ATProto records.
 1. A stable `site.standard.document` whose rkey is derived from `CONTEXT_BOT_SYSTEM_V5` plus a
    SHA-256 prefix. `textContent` is the exact system-prompt bytes. The markdown also includes the
    `LENGTH_REPAIR` user-turn text and its hash.
-2. The full-response document links that prompt URL and prints semantic version, SHA-256, the
-   allowlisted Messages fields (`anthropic-version`, `model`, `max_tokens`, `effort`, `thinking`,
-   `tool_choice`, tool types/`allowed_callers`/`max_uses`/`max_content_tokens`/`response_inclusion`,
-   `cache_control`, continuation/length-repair flags), and the first user message.
+2. The full-response document links the research and structure prompt URLs and prints each
+   semantic version and SHA-256 plus the allowlisted Messages fields (`anthropic-version`, `model`,
+   `max_tokens`, `effort`, `thinking`, `tool_choice`, tool
+   types/`allowed_callers`/`max_uses`/`max_content_tokens`/`response_inclusion`, `cache_control`,
+   continuation/length-repair flags). New pages do not dump the structure-call user message; that
+   block duplicated the writeup already on the page.
 3. Credentials, authorization headers, cookies, non-CDN image URLs, and assistant thinking blocks
    are omitted. The page states that hidden reasoning is unavailable and that replay is not
    deterministic.

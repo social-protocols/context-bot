@@ -42,8 +42,13 @@ defmodule ContextBot.StandardSite.Document do
             required(:sha256) => String.t(),
             required(:reader_url) => String.t()
           },
+          required(:structure_prompt) => %{
+            required(:id) => String.t(),
+            required(:semantic_version) => String.t(),
+            required(:sha256) => String.t(),
+            required(:reader_url) => String.t()
+          },
           required(:parameters) => %{optional(String.t()) => term()},
-          required(:user_message) => %{required(String.t()) => term()},
           optional(:asked_text) => String.t(),
           optional(:parent_uri) => String.t() | nil,
           optional(:invoker_handle) => String.t() | nil,
@@ -165,9 +170,10 @@ defmodule ContextBot.StandardSite.Document do
   @doc """
   Markdown published on the Standard Reader full-response page.
 
-  Requires a prompt-document reader URL, prompt identity/hash, the allowlisted
-  Messages API parameters, and the canonical user message. Missing prompt inputs
-  are a create error; they are never omitted from a published full response.
+  Requires research and structure prompt-document reader URLs, prompt
+  identity/hash for both templates, and the allowlisted Messages API parameters.
+  Missing prompt inputs are a create error; they are never omitted from a
+  published full response. The structure-call user message is not dumped.
 
   New documents also include a `claude.ai/new?q=` continue link whose starter
   prompt names this document's Standard Reader URL. The writeup and system
@@ -181,8 +187,8 @@ defmodule ContextBot.StandardSite.Document do
           full_response: full_response,
           selected_reply: selected_reply,
           prompt: prompt,
-          parameters: parameters,
-          user_message: user_message
+          structure_prompt: structure_prompt,
+          parameters: parameters
         } = content
       )
       when is_binary(full_response) and is_binary(selected_reply) do
@@ -207,9 +213,13 @@ defmodule ContextBot.StandardSite.Document do
 
     ## How this response was produced
 
-    Prompt template: [#{prompt.id}](#{prompt.reader_url})
+    Research prompt template: [#{prompt.id}](#{prompt.reader_url})
     Semantic version: `#{prompt.semantic_version}`
     SHA-256: `#{prompt.sha256}`
+
+    Structure prompt template: [#{structure_prompt.id}](#{structure_prompt.reader_url})
+    Semantic version: `#{structure_prompt.semantic_version}`
+    SHA-256: `#{structure_prompt.sha256}`
 
     Hidden model reasoning is not available and is not part of this page. The same
     prompt and parameters do not guarantee an identical Claude response.
@@ -219,14 +229,6 @@ defmodule ContextBot.StandardSite.Document do
     #{format_parameters(parameters)}
 
     #{format_tools(parameters)}
-    ### Canonical thread
-
-    The first user message sent to the Messages API:
-
-    ```
-    #{user_message_text(user_message)}
-    ```
-    #{format_images(user_message)}
     """
   end
 
@@ -265,12 +267,12 @@ defmodule ContextBot.StandardSite.Document do
 
   defp validate_public_inputs(%{
          prompt: prompt,
-         parameters: parameters,
-         user_message: user_message
+         structure_prompt: structure_prompt,
+         parameters: parameters
        })
-       when is_map(prompt) and is_map(parameters) and is_map(user_message) do
+       when is_map(prompt) and is_map(structure_prompt) and is_map(parameters) do
     with :ok <- validate_prompt(prompt) do
-      validate_user_message(user_message)
+      validate_prompt(structure_prompt)
     end
   end
 
@@ -288,17 +290,6 @@ defmodule ContextBot.StandardSite.Document do
   end
 
   defp validate_prompt(_prompt), do: {:error, :prompt_inputs_missing}
-
-  defp validate_user_message(user_message) do
-    case user_message_text(user_message) do
-      text when text != "" -> :ok
-      _empty -> {:error, :prompt_inputs_missing}
-    end
-  end
-
-  defp user_message_text(%{"text" => text}) when is_binary(text), do: text
-  defp user_message_text(%{text: text}) when is_binary(text), do: text
-  defp user_message_text(_user_message), do: ""
 
   defp format_parameters(parameters) do
     @parameter_order
@@ -345,30 +336,4 @@ defmodule ContextBot.StandardSite.Document do
 
   defp maybe_tool_part(parts, key, value),
     do: parts ++ ["#{key}=#{format_parameter_value(value)}"]
-
-  defp format_images(user_message) do
-    images = user_message["images"] || user_message[:images] || []
-
-    urls =
-      Enum.flat_map(List.wrap(images), fn
-        %{"url" => url} when is_binary(url) and url != "" -> [url]
-        %{url: url} when is_binary(url) and url != "" -> [url]
-        _other -> []
-      end)
-
-    case urls do
-      [] ->
-        ""
-
-      urls ->
-        list = Enum.map_join(urls, "\n", fn url -> "- #{url}" end)
-
-        """
-
-        Images included in that message:
-
-        #{list}
-        """
-    end
-  end
 end

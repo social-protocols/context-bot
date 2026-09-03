@@ -198,15 +198,25 @@ defmodule FakePublicationAndPromptExistDocumentFails do
   end
 
   def get_record(_repo, "site.standard.document", rkey) do
-    if String.starts_with?(rkey, "prompt-") do
-      record = %{
-        "$type" => "site.standard.document",
-        "textContent" => Request.system_prompt()
-      }
+    cond do
+      rkey == Request.system_prompt_rkey() ->
+        record = %{
+          "$type" => "site.standard.document",
+          "textContent" => Request.system_prompt()
+        }
 
-      {:ok, 200, %{}, %{"value" => record}}
-    else
-      {:error, :record_not_found}
+        {:ok, 200, %{}, %{"value" => record}}
+
+      rkey == Request.structure_prompt_rkey() ->
+        record = %{
+          "$type" => "site.standard.document",
+          "textContent" => Request.structure_prompt()
+        }
+
+        {:ok, 200, %{}, %{"value" => record}}
+
+      true ->
+        {:error, :record_not_found}
     end
   end
 
@@ -248,6 +258,36 @@ defmodule FakePromptDocumentMismatch do
     record = %{
       "$type" => "site.standard.document",
       "textContent" => "CONTEXT_BOT_SYSTEM_V4\n\nstale prompt"
+    }
+
+    {:ok, 200, %{}, %{"value" => record}}
+  end
+end
+
+defmodule FakeStructurePromptDocumentExists do
+  @moduledoc false
+
+  alias ContextBot.Research.Request
+
+  def get_record(_repo, "site.standard.document", rkey) do
+    record = %{
+      "$type" => "site.standard.document",
+      "textContent" => Request.structure_prompt(),
+      "title" => "Context Bot structure prompt #{Request.structure_prompt_id()}"
+    }
+
+    send(self(), {:standard_site_get, "site.standard.document", rkey})
+    {:ok, 200, %{}, %{"value" => record}}
+  end
+end
+
+defmodule FakeStructurePromptDocumentMismatch do
+  @moduledoc false
+
+  def get_record(_repo, "site.standard.document", _rkey) do
+    record = %{
+      "$type" => "site.standard.document",
+      "textContent" => "CONTEXT_BOT_STRUCTURE_V1\n\nstale prompt"
     }
 
     {:ok, 200, %{}, %{"value" => record}}

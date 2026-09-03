@@ -7,6 +7,7 @@ defmodule ContextBot.StandardSite.DocumentTest do
   @publication_uri "at://#{@repo}/site.standard.publication/context-bot"
   @created_at ~U[2026-08-25 12:00:00Z]
   @prompt_reader_url "https://standard-reader.app/a/#{@repo}/prompt-context-bot-system-v5-testhash"
+  @structure_prompt_reader_url "https://standard-reader.app/a/#{@repo}/prompt-context-bot-structure-v2-testhash"
   @content %{
     full_response: "This is the full research response with detailed analysis.",
     selected_reply: "Compact summary here.",
@@ -16,6 +17,12 @@ defmodule ContextBot.StandardSite.DocumentTest do
       semantic_version: "5.0.0",
       sha256: "abc123def456",
       reader_url: @prompt_reader_url
+    },
+    structure_prompt: %{
+      id: "CONTEXT_BOT_STRUCTURE_V2",
+      semantic_version: "2.0.0",
+      sha256: "structurehash789",
+      reader_url: @structure_prompt_reader_url
     },
     parameters: %{
       "anthropic-version" => "2023-06-01",
@@ -34,15 +41,6 @@ defmodule ContextBot.StandardSite.DocumentTest do
           "allowed_callers" => ["direct"],
           "max_uses" => 2,
           "response_inclusion" => "excluded"
-        }
-      ]
-    },
-    user_message: %{
-      "text" => "CONTEXT_BOT_THREAD_V1\n\n[invocation]\nPlease add context.",
-      "images" => [
-        %{
-          "url" =>
-            "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:author/bafkreiaurora@jpeg"
         }
       ]
     },
@@ -114,6 +112,49 @@ defmodule ContextBot.StandardSite.DocumentTest do
                  content,
                  @created_at
                )
+    end
+
+    test "refuses to publish when the structure prompt identity is missing" do
+      content = Map.delete(@content, :structure_prompt)
+
+      assert {:error, :prompt_inputs_missing} =
+               Document.create(
+                 FakeDocClientSuccess,
+                 @repo,
+                 @publication_uri,
+                 content,
+                 @created_at
+               )
+    end
+
+    test "refuses to publish when the structure prompt reader URL is not a Standard Reader URL" do
+      content = put_in(@content, [:structure_prompt, :reader_url], "https://example.test/prompt")
+
+      assert {:error, :prompt_inputs_missing} =
+               Document.create(
+                 FakeDocClientSuccess,
+                 @repo,
+                 @publication_uri,
+                 content,
+                 @created_at
+               )
+    end
+
+    test "publishes without a user_message dump" do
+      assert {:ok, _result} =
+               Document.create(
+                 TrackingDocClient,
+                 @repo,
+                 @publication_uri,
+                 @content,
+                 @created_at
+               )
+
+      assert_received {:document_put, record}
+      markdown = record["content"]["text"]["markdown"]
+      refute markdown =~ "### Canonical thread"
+      refute markdown =~ "CONTEXT_BOT_THREAD_V1"
+      refute markdown =~ "The first user message sent to the Messages API"
     end
 
     test "maps title and description from the question, not the rkey or reply" do
@@ -213,7 +254,7 @@ defmodule ContextBot.StandardSite.DocumentTest do
   end
 
   describe "format_markdown/1" do
-    test "includes the writeup, prompt link, hashed identity, parameters, and thread" do
+    test "includes the writeup, both prompt links, hashed identities, and parameters" do
       markdown = Document.format_markdown(@content)
 
       assert markdown =~ "# Research Analysis"
@@ -221,8 +262,11 @@ defmodule ContextBot.StandardSite.DocumentTest do
       assert markdown =~ "## Summary"
       assert markdown =~ @content.selected_reply
       assert markdown =~ "[CONTEXT_BOT_SYSTEM_V5](#{@prompt_reader_url})"
+      assert markdown =~ "[CONTEXT_BOT_STRUCTURE_V2](#{@structure_prompt_reader_url})"
       assert markdown =~ "Semantic version: `5.0.0`"
+      assert markdown =~ "Semantic version: `2.0.0`"
       assert markdown =~ "SHA-256: `abc123def456`"
+      assert markdown =~ "SHA-256: `structurehash789`"
       assert markdown =~ "`anthropic-version`: 2023-06-01"
       assert markdown =~ "`model`: claude-sonnet-5"
       assert markdown =~ "`max_tokens`: 4096"
@@ -234,15 +278,39 @@ defmodule ContextBot.StandardSite.DocumentTest do
       assert markdown =~ "`length_repair`: false"
       assert markdown =~ "`web_search` (web_search_20260318)"
       assert markdown =~ "allowed_callers=[\"direct\"]"
-      assert markdown =~ "CONTEXT_BOT_THREAD_V1"
+      refute markdown =~ "### Canonical thread"
+      refute markdown =~ "CONTEXT_BOT_THREAD_V1"
+      refute markdown =~ "The first user message sent to the Messages API"
 
-      assert markdown =~
+      refute markdown =~
                "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:author/bafkreiaurora@jpeg"
 
       assert markdown =~ "Hidden model reasoning is not available"
       assert markdown =~ "do not guarantee an identical Claude response"
       refute markdown =~ "x-api-key"
       refute markdown =~ "authorization"
+    end
+
+    test "ignores a leftover user_message instead of dumping it" do
+      markdown =
+        Document.format_markdown(
+          Map.put(@content, :user_message, %{
+            "text" => "STRUCTURE_OUTPUT\n\nCanonical thread:\n\nPlease add context.",
+            "images" => [
+              %{
+                "url" =>
+                  "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:author/bafkreiaurora@jpeg"
+              }
+            ]
+          })
+        )
+
+      refute markdown =~ "### Canonical thread"
+      refute markdown =~ "STRUCTURE_OUTPUT"
+      refute markdown =~ "Please add context."
+
+      refute markdown =~
+               "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:author/bafkreiaurora@jpeg"
     end
 
     test "places a reply responding-to line before the writeup and does not repeat the question" do
