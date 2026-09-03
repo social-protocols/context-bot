@@ -9,7 +9,11 @@ defmodule ContextBot.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
-      dialyzer: [plt_add_apps: [:mix]],
+      dialyzer: [
+        plt_add_apps: [:mix],
+        plt_local_path: "priv/plts",
+        plt_core_path: "priv/plts"
+      ],
       deps: deps(),
       listeners: [Phoenix.CodeReloader]
     ]

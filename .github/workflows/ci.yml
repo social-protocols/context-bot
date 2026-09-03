@@ -76,20 +76,13 @@ jobs:
             ${{ runner.os }}-mix-
 
       # Dedicated key so PLTs are saved even when the mix.lock _build cache
-      # already exists (actions/cache is write-once per key). Defaults are
-      # ~/.mix core PLTs and _build/<env> project PLTs; priv/plts is unused
-      # today but included if mix.exs ever points Dialyxir there.
+      # already exists (actions/cache is write-once per key). Paths match
+      # mix.exs plt_local_path / plt_core_path. Do not cache ~/.mix — that
+      # clobbers setup-beam's Hex and hangs `just setup` on a TTY prompt.
       - name: Cache Dialyzer PLTs
         uses: actions/cache@v6
         with:
-          path: |
-            priv/plts
-            ~/.mix/dialyxir_*.plt
-            ~/.mix/dialyxir_*.plt.hash
-            _build/dev/dialyze_*.plt
-            _build/dev/dialyze_*.plt.hash
-            _build/test/dialyze_*.plt
-            _build/test/dialyze_*.plt.hash
+          path: priv/plts
           key: ${{ runner.os }}-plt-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
             ${{ runner.os }}-plt-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-

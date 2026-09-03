@@ -36,6 +36,8 @@ context_bot-*.tar
 /.elixir_ls/
 /.worktrees/
 /.dialyzer_plt*
+/priv/plts/*.plt
+/priv/plts/*.plt.hash
 
 # Runtime data and local secrets
 /data/
