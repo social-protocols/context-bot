@@ -507,7 +507,7 @@ defmodule ContextBotWeb.InvocationsControllerTest do
       refute body =~ "https://bsky.app/profile/did:plc:bot/"
     end
 
-    test "displays attempt count from anthropic_attempt_sequence", %{conn: conn} do
+    test "displays call count from anthropic_attempt_sequence under Calls", %{conn: conn} do
       {:ok, _inv} =
         %Invocation{}
         |> Invocation.changeset(%{
@@ -527,7 +527,10 @@ defmodule ContextBotWeb.InvocationsControllerTest do
 
       conn = get(conn, ~p"/invocations")
       body = html_response(conn, 200)
+      table = table_html(body)
 
+      assert table =~ "<th>Calls</th>"
+      refute table =~ "<th>Attempts</th>"
       assert body =~ ">3<"
     end
 

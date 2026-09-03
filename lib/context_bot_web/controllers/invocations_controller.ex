@@ -230,7 +230,7 @@ defmodule ContextBotWeb.InvocationsController do
             <th>Stage</th>
             <th>Actor</th>
             <th>Cost</th>
-            <th>Attempts</th>
+            <th>Calls</th>
             <th>Error</th>
             <th>Invocation</th>
             <th>Reply</th>
