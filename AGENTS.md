@@ -26,7 +26,7 @@ The squash SHA differs from the PR head. Treat the **code** as identical. Do not
 
 Test on the PR (the code that becomes `main`). After squash+FF, **deploy immediately**. Do **not** re-run format/compile/test on push to `main` (that is how a post-merge red happens after deploy already shipped). `main` workflows may deploy.
 
-Branch protection must **require** those PR checks so untested code cannot merge.
+Branch protection must **require** that PR check so untested code cannot merge.
 
 When CI fails on a PR, notify or resume the Cursor cloud agent that owns that branch. Do not poll. Do not merge to “fix” CI.
 
@@ -41,7 +41,7 @@ Settings → General → Pull Requests:
 Settings → Branches → rule on `main`:
 
 - Require linear history: **on**
-- Require the PR checks (e.g. Test & Quality Check, Type Check) before merge
+- Require the PR check (CI / CI) before merge
 
 Bots do not flip admin settings from the Grok computer.
 
@@ -111,7 +111,7 @@ Cursor cloud agents set `core.hooksPath=.githooks` during environment setup. The
 
 ### GitHub Actions
 
-`Test & Quality Check` and `Type Check` run on pull requests targeting `main` (and on manual `workflow_dispatch`), not on push to `main`. After squash+fast-forward onto `main`, only Deploy runs.
+`CI` runs on pull requests targeting `main` (and on manual `workflow_dispatch`), not on push to `main`. After squash+fast-forward onto `main`, only Deploy runs. Keep that one PR check required in branch protection so untested code cannot merge.
 
 ## Cursor Cloud specific instructions
 
