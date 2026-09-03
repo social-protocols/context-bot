@@ -1327,6 +1327,7 @@ defmodule ContextBot.Research.RunnerTest do
     assert research_request["model"] == "claude-sonnet-5"
     refute Map.has_key?(research_request["output_config"], "format")
     assert_received {:anthropic_call, structure_request, %{kind: :structure}, false}
+    assert structure_request["model"] == "claude-sonnet-5"
     refute Map.has_key?(structure_request, "tools")
     assert_received {:anthropic_call, title_request, %{kind: :repair}, false}
     assert title_request["model"] == "claude-haiku-4-5"
@@ -1612,7 +1613,8 @@ defmodule ContextBot.Research.RunnerTest do
     assert result.document_title == "Cited Writeup"
     assert result.full_response == "Cited writeup."
     assert_received {:anthropic_call, _request, %{kind: :research}, false}
-    assert_received {:anthropic_call, _request, %{kind: :structure}, false}
+    assert_received {:anthropic_call, structure_request, %{kind: :structure}, false}
+    assert structure_request["model"] == "claude-sonnet-5"
     assert_received {:anthropic_call, title_request, %{kind: :repair}, false}
     assert title_request["model"] == "claude-haiku-4-5"
   end
@@ -1690,7 +1692,7 @@ defmodule ContextBot.Research.RunnerTest do
       anthropic_pricing_version: "sonnet-5-2026-07-28",
       anthropic_model_id: "claude-sonnet-5",
       anthropic_title_model_id: "claude-haiku-4-5",
-      anthropic_structure_model_id: "claude-haiku-4-5",
+      anthropic_structure_model_id: "claude-sonnet-5",
       anthropic_effort: :medium,
       anthropic_research_max_tokens: 1_024,
       anthropic_length_repair_max_tokens: 256,
