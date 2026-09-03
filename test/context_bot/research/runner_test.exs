@@ -202,7 +202,14 @@ defmodule ContextBot.Research.RunnerTest do
     assert result.text == "Useful context from primary sources."
 
     assert result.full_response ==
-             "Useful context from primary sources.\n\n## Sources\n\n- https://primary.example/report"
+             """
+             Useful context from primary sources.[1]
+
+             ## Sources
+
+             1. [Primary report](https://primary.example/report)
+             """
+             |> String.trim()
 
     assert result.document_title == "Primary Sources"
 
@@ -880,7 +887,9 @@ defmodule ContextBot.Research.RunnerTest do
                [
                  %{
                    "url" => "https://primary.example/report",
-                   "cited_text" => "The cited primary source resolves the disputed date."
+                   "title" => "Primary report",
+                   "cited_text" => "The cited primary source resolves the disputed date.",
+                   "span" => "The cited primary source resolves the disputed date."
                  }
                ]
              )
@@ -1633,7 +1642,17 @@ defmodule ContextBot.Research.RunnerTest do
 
     assert {:ok, result} = Runner.run(invocation, options())
     assert result.text == compact
-    assert result.full_response == full
+
+    assert result.full_response ==
+             """
+             Thorough markdown writeup. See https://primary.example/report[1]
+
+             ## Sources
+
+             1. [source excerpt](https://primary.example/report)
+             """
+             |> String.trim()
+
     assert result.document_title == title
     refute Map.has_key?(result, :text_part2)
 
@@ -1644,7 +1663,11 @@ defmodule ContextBot.Research.RunnerTest do
            }
 
     assert Repo.reload!(invocation).citation_sources == [
-             %{"url" => "https://primary.example/report", "cited_text" => "source excerpt"}
+             %{
+               "url" => "https://primary.example/report",
+               "cited_text" => "source excerpt",
+               "span" => full
+             }
            ]
 
     assert_received {:anthropic_call, research, %{kind: :research}, false}

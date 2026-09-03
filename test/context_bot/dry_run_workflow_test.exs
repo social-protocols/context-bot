@@ -142,7 +142,9 @@ defmodule ContextBot.DryRunWorkflowTest do
     assert complete.citation_sources == [
              %{
                "url" => "https://primary.example/report",
-               "cited_text" => "primary source excerpt"
+               "cited_text" => "primary source excerpt",
+               "title" => "Primary report",
+               "span" => "Useful context from primary sources."
              }
            ]
 
