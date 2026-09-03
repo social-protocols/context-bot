@@ -551,6 +551,11 @@ defmodule ContextBot.Workers.ResearchWorker do
   end
 
   defp safe_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
+
+  defp safe_reason({:provider_response, detail})
+       when is_binary(detail) and detail != "",
+       do: detail
+
   defp safe_reason({reason, _detail}) when is_atom(reason), do: Atom.to_string(reason)
   defp safe_reason(_reason), do: "provider_failure"
 

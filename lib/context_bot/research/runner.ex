@@ -292,16 +292,42 @@ defmodule ContextBot.Research.Runner do
     end
   end
 
-  defp classify_http_error(status, _invocation, entry, _response, config)
+  defp classify_http_error(status, _invocation, entry, response, config)
        when status in 400..499 do
     with {:ok, _retained} <- retain_reservation(entry, config) do
-      {:error, :provider_response}
+      case provider_error_message(response) do
+        message when is_binary(message) -> {:error, {:provider_response, message}}
+        nil -> {:error, :provider_response}
+      end
     end
   end
 
   defp classify_http_error(_status, _invocation, entry, _response, config) do
     with {:ok, _retained} <- retain_reservation(entry, config) do
       {:error, :provider_response}
+    end
+  end
+
+  # Peek at the stored 4xx JSON without the success-path decoder. Anthropic
+  # error.message is the useful dashboard detail; malformed bodies stay silent.
+  defp provider_error_message(response) do
+    case response_value(response, :raw_body) do
+      body when is_binary(body) and body != "" ->
+        case Jason.decode(body) do
+          {:ok, %{"error" => %{"message" => message}}} when is_binary(message) ->
+            message
+            |> String.trim()
+            |> case do
+              "" -> nil
+              trimmed -> String.slice(trimmed, 0, 240)
+            end
+
+          _invalid ->
+            nil
+        end
+
+      _missing ->
+        nil
     end
   end
 

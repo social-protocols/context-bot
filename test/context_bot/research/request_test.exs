@@ -450,6 +450,7 @@ defmodule ContextBot.Research.RequestTest do
     assert request["stream"] == false
     refute Map.has_key?(request, "tools")
     refute Map.has_key?(request, "tool_choice")
+    refute Map.has_key?(request, "thinking")
     assert request["system"] == TitlePrompt.prompt()
     assert request["output_config"]["format"]["type"] == "json_schema"
     assert request["output_config"]["format"]["schema"] == Request.title_schema()
@@ -487,6 +488,8 @@ defmodule ContextBot.Research.RequestTest do
     refute Jason.encode!(research) =~ "json_schema"
 
     refute Map.has_key?(structure, "tools")
+    refute Map.has_key?(structure, "thinking")
+    refute Jason.encode!(structure) =~ "adaptive"
     assert structure["output_config"]["format"]["type"] == "json_schema"
     assert structure["output_config"]["format"]["schema"] == schema
     assert schema["required"] == ["disposition", "title", "compact_reply"]
