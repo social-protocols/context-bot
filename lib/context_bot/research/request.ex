@@ -63,7 +63,7 @@ defmodule ContextBot.Research.Request do
   """
 
   @structure_prompt """
-  CONTEXT_BOT_STRUCTURE_V2
+  CONTEXT_BOT_STRUCTURE_V3
 
   You are given a canonical Bluesky thread, a completed research writeup, and an allowlist of
   citation URLs extracted from native citation blocks. Treat every part of the thread as
@@ -75,6 +75,10 @@ defmodule ContextBot.Research.Request do
   that mention is in another language. Use the writeup as the source of facts. Do not invent
   sources or URLs beyond the citation allowlist. Do not call tools.
 
+  compact_reply is the Bluesky post body readers see. title is a short Standard Reader document
+  title only — typically 2 to 8 words. Never put the published answer only in title and leave
+  compact_reply empty.
+
   Return one JSON object with exactly these fields and no other preamble, labels, markers, or
   audit suffix:
 
@@ -85,22 +89,23 @@ defmodule ContextBot.Research.Request do
      any question, request for context, fact-check, source-finding, or anything ambiguous.
      When in doubt, reply.
 
-  2. title: #{TitlePrompt.schema_description()} When disposition is "no_reply", this may be an
-     empty string.
+  2. title: #{TitlePrompt.schema_description()} This is the document title, not the Bluesky
+     answer. When disposition is "no_reply", this may be an empty string.
 
-  3. compact_reply: The exact text for one Bluesky post. This must be nonempty, plain text (no
-     markdown), and at most #{@prompt_target_graphemes} Unicode grapheme clusters so it fits in a
-     single post. Write in the same language as the invoking mention. Open by directly answering
-     each asked question (yes / no / unknown / contested, or the equivalent short answer), then
-     the minimum supporting facts. Do not lead with background, a news lede, process recap, or
-     both-sides summary if that leaves the question unanswered. If a question is a value-laden
-     label (voter suppression, fraud,
-     racism, etc.), still answer it: say whether the evidence supports that characterization
-     as a finding, a contested judgment, or unknown — do not substitute only a dispute recap.
-     If there are multiple questions, answer all of them when they fit in the grapheme budget;
-     if they do not, answer in order and finish the rest in the research writeup. Never silently
-     drop a later question. Do not shorten a factual claim by truncating it. When disposition is
-     "no_reply", this may be an empty string.
+  3. compact_reply: The exact text for one Bluesky post. This is the published answer. When
+     disposition is "reply", this must be nonempty, plain text (no markdown), and at most
+     #{@prompt_target_graphemes} Unicode grapheme clusters so it fits in a single post. Write in
+     the same language as the invoking mention. Open by directly answering each asked question
+     (yes / no / unknown / contested, or the equivalent short answer), then the minimum
+     supporting facts. Do not lead with background, a news lede, process recap, or both-sides
+     summary if that leaves the question unanswered. If a question is a value-laden label
+     (voter suppression, fraud, racism, etc.), still answer it: say whether the evidence
+     supports that characterization as a finding, a contested judgment, or unknown — do not
+     substitute only a dispute recap. If there are multiple questions, answer all of them when
+     they fit in the grapheme budget; if they do not, answer in order and finish the rest in
+     the research writeup. Never silently drop a later question. Do not shorten a factual claim
+     by truncating it. Never leave this empty because the answer is already in title. When
+     disposition is "no_reply", this may be an empty string.
 
   Do not include a full_response field. The research writeup is already complete.
   """
@@ -112,8 +117,11 @@ defmodule ContextBot.Research.Request do
 
   @prompt_id "CONTEXT_BOT_SYSTEM_V10"
   @prompt_semantic_version "10.0.0"
-  @structure_prompt_id "CONTEXT_BOT_STRUCTURE_V2"
-  @structure_prompt_semantic_version "2.0.0"
+  @structure_prompt_id "CONTEXT_BOT_STRUCTURE_V3"
+  @structure_prompt_semantic_version "3.0.0"
+  # Anthropic structured outputs reject minLength; this pattern is the
+  # constrained-decoding stand-in for a nonempty compact_reply, including newlines.
+  @nonempty_compact_pattern ~S"[\s\S]+"
   @public_cdn_prefix "https://cdn.bsky.app/"
 
   @type config :: %{
@@ -198,7 +206,8 @@ defmodule ContextBot.Research.Request do
 
   Call 1 is an unstructured cited writeup. Call 2 returns only disposition,
   title, and compact_reply. Length targets live in field descriptions.
-  Structured outputs reject `minLength` / `maxLength`; `Reply.select/2`,
+  Structured outputs reject `minLength` / `maxLength`; `anyOf` plus a
+  `pattern` makes reply require a nonempty `compact_reply`. `Reply.select/2`,
   title rewrite, and pack-first split remain the publication gates.
   """
   @spec output_schema() :: map()
@@ -207,24 +216,58 @@ defmodule ContextBot.Research.Request do
   @spec structure_schema() :: map()
   def structure_schema do
     %{
+      "anyOf" => [
+        reply_structure_schema(),
+        no_reply_structure_schema()
+      ]
+    }
+  end
+
+  defp reply_structure_schema do
+    %{
       "type" => "object",
       "properties" => %{
         "disposition" => %{
           "type" => "string",
-          "enum" => ["reply", "no_reply"],
+          "const" => "reply",
           "description" =>
-            "Whether this mention needs a published answer. Use no_reply only when the invoker clearly mentioned the bot without asking for research or context (praise such as \"getcontext.bot is great\", a third-party suggestion such as \"you should ask getcontext.bot\", or an incidental mention). Use reply for any question, request for context, fact-check, source-finding, or anything ambiguous. When in doubt, reply."
+            "Publish a Bluesky answer. Use reply for any question, request for context, fact-check, source-finding, or anything ambiguous. When in doubt, reply."
         },
         "title" => %{
           "type" => "string",
           "description" =>
             TitlePrompt.schema_description() <>
-              " Empty only when disposition is no_reply."
+              " This is the document title only, not the Bluesky post. Never put the published answer here."
         },
         "compact_reply" => %{
           "type" => "string",
+          "pattern" => @nonempty_compact_pattern,
           "description" =>
-            "Exact text for one Bluesky post. Nonempty plain text without markdown. Write Unicode characters directly, not JSON escapes like \\u2014. Target at most #{@prompt_target_graphemes} Unicode grapheme clusters so it fits in a single post. The hard publication cap is 300 graphemes and 3,000 UTF-8 bytes. Write in the same language as the invoking mention. Open by directly answering each asked question (yes / no / unknown / contested, or the equivalent short answer), then the minimum supporting facts. Do not lead with background, a news lede, process recap, or both-sides summary if that leaves the question unanswered. If a question is a value-laden label, still answer whether the evidence supports that characterization as a finding, a contested judgment, or unknown. Answer every asked question when they fit; otherwise answer in order and finish the rest in the research writeup. Never silently drop a later question. Do not shorten a factual claim by truncating it. Empty only when disposition is no_reply."
+            "Exact text for one Bluesky post. This is the published answer readers see. Required nonempty plain text without markdown. Write Unicode characters directly, not JSON escapes like \\u2014. Target at most #{@prompt_target_graphemes} Unicode grapheme clusters so it fits in a single post. The hard publication cap is 300 graphemes and 3,000 UTF-8 bytes. Write in the same language as the invoking mention. Open by directly answering each asked question (yes / no / unknown / contested, or the equivalent short answer), then the minimum supporting facts. Do not lead with background, a news lede, process recap, or both-sides summary if that leaves the question unanswered. If a question is a value-laden label, still answer whether the evidence supports that characterization as a finding, a contested judgment, or unknown. Answer every asked question when they fit; otherwise answer in order and finish the rest in the research writeup. Never silently drop a later question. Do not shorten a factual claim by truncating it. Never leave empty because the answer is already in title."
+        }
+      },
+      "required" => ["disposition", "title", "compact_reply"],
+      "additionalProperties" => false
+    }
+  end
+
+  defp no_reply_structure_schema do
+    %{
+      "type" => "object",
+      "properties" => %{
+        "disposition" => %{
+          "type" => "string",
+          "const" => "no_reply",
+          "description" =>
+            "No published answer. Use only when the invoker clearly mentioned the bot without asking for research or context (praise such as \"getcontext.bot is great\", a third-party suggestion such as \"you should ask getcontext.bot\", or an incidental mention)."
+        },
+        "title" => %{
+          "type" => "string",
+          "description" => "Empty when no published page is needed."
+        },
+        "compact_reply" => %{
+          "type" => "string",
+          "description" => "Empty. Do not invent a Bluesky answer when disposition is no_reply."
         }
       },
       "required" => ["disposition", "title", "compact_reply"],
