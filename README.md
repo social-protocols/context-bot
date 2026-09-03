@@ -43,7 +43,7 @@ curl --fail --silent --show-error http://127.0.0.1:4000/
 curl --fail --silent --show-error http://127.0.0.1:4000/invocations
 ```
 
-`GET /invocations` shows operational metadata: counts, spend, tokens, status, actor handle, Bluesky links, Standard.site full-response links, and short error reasons. It does not show API keys, post bodies, prompts, or envelopes, and it has no reprocess or other mutation endpoints. Reprocess stays on `just fly-reprocess` over Fly SSH.
+`GET /invocations` shows operational metadata: counts, spend, tokens, status, actor handle, Bluesky links, Standard.site full-response links, and short error reasons. It does not show API keys, post bodies, prompts, or envelopes, and it has no reprocess, reenqueue, or other mutation endpoints. Envelope replay stays on `just fly-reprocess` over Fly SSH. A fresh two-phase research run of the same invocation id stays on `just fly-reenqueue`.
 
 The homepage is reachable via the configured Phoenix host. Serving https://getcontext.bot (the bot's Bluesky handle and site.standard.publication domain) requires separate DNS configuration pointing to the Fly deployment.
 
@@ -111,6 +111,14 @@ the Bluesky limit, the normal budgeted length-repair call may still occur.
 
 For production invocations on Fly, use `just fly-reprocess <id>` instead. This command connects via SSH to the running Fly machine, starts the necessary dependencies, and reprocesses the invocation directly on the production database. It may publish a Bluesky reply and requires explicit operator authorization. The bot remains enabled during reprocessing. Query production invocation status with `just fly-invocation <id>` before reprocessing to inspect failure details and decide whether reprocessing is appropriate.
 
+When the latest retained envelope is a 400 or an obsolete request body (for example a pre-two-phase `json_schema` Messages request), envelope replay is the wrong tool. Reset that same invocation id in place and enqueue a fresh two-phase research run:
+
+```bash
+just reenqueue 42
+```
+
+`just fly-reenqueue <id>` is the production SSH form. It keeps identity, the thread snapshot, and historical budget/envelope rows, clears the research and publication checkpoint, and inserts one `ResearchWorker` job with `new_attempt: true`. It refuses a published `reply_uri` / part2 / part3, an in-flight provider attempt still inside the Anthropic HTTP timeout, and any row that is not a failed or unpublished-complete invocation with a canonical thread. It does not call `Reprocessor.reprocess/2`.
+
 Every row created this way has `dry_run = 1`. It skips mention eligibility and mention-rate admission, but retains provider budgets, response/tool/token/storage limits, retries, leases, and full bounded provider response envelopes. It never starts the notification poller or ATProto session, never creates a reply record, and cannot acquire a publication lease. A budget deferral remains durable for later operator inspection; rerunning the command creates a new check.
 
 Inspect dry-run metadata without selecting stored thread, prompt, response, or answer content:
@@ -166,7 +174,9 @@ it reports the existing reply URL without another Claude request or Bluesky post
 | `just dry-run [post] <question>` | Run a durable local-only context check; omit the post for a question-only subject. May spend Anthropic budget. |
 | `just live-run <invocation-url>` | Process one real direct mention locally and publish its Bluesky reply. Explicit authorization required. |
 | `just reprocess <invocation-id>` | With the bot disabled and workers stopped, reopen a guarded provider-processing failure from its retained response; performs no external I/O. |
+| `just reenqueue <invocation-id>` | With the bot disabled and workers stopped, reset one failed or unpublished-complete invocation and enqueue a fresh two-phase research run. |
 | `just fly-reprocess <id>` | Reprocess one production invocation from its retained response on Fly. May publish a Bluesky reply. External authorization required. |
+| `just fly-reenqueue <id>` | Reenqueue one production invocation as a fresh two-phase research run on Fly. May publish a Bluesky reply. External authorization required. |
 | `just fly-invocation <id>` | Query and display production invocation status by ID on Fly. External authorization required. |
 | `just docker-build` | Build `context-bot:local`. |
 | `just secrets` | Validate the allowlisted Bitwarden fields without printing values. |

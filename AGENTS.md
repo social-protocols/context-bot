@@ -131,6 +131,8 @@ After boot, rebase a feature branch onto `origin/main` before editing. Do not as
 | `just db-create` / `db-migrate` / `db-reset` | Manage SQLite. |
 | `just dry-run [post] <question>` | Run the durable local-only research path; omit the post for a question-only subject. |
 | `just live-run <invocation-url>` | Process one selected direct mention using isolated SQLite and publish its reply. |
+| `just reprocess <id>` / `fly-reprocess` | Replay a retained 2xx envelope for one invocation. |
+| `just reenqueue <id>` / `fly-reenqueue` | Reset one failed or unpublished-complete invocation and enqueue a fresh two-phase research run. |
 | `just docker-build` | Build the production image locally. |
 | `just secrets` / `deploy` | Validate Bitwarden fields or deploy to Fly. |
 | `just fly-status` / `fly-logs` | Inspect the Fly app. |
@@ -139,7 +141,7 @@ Run `direnv exec . just check` before any completion claim. For release or deplo
 
 ## Architecture
 
-This is one Phoenix API application, not an umbrella. `ContextBot.Application` starts Repo and Finch always, and starts Oban, `ContextBot.ATProto.Session`, and `ContextBot.Mentions.Poller` only when the validated settings enable the bot. `GET /health` returns bounded operational aggregates and never stored content or credentials. Public `GET /invocations` is a GET-only HTML log of operational metadata (counts, spend, tokens, status, actor handle, Bluesky and Standard.site links, short error reasons). It does not show post bodies, prompts, envelopes, or secrets, and it has no reprocess or other mutation endpoints. Reprocess stays on `just fly-reprocess` over Fly SSH.
+This is one Phoenix API application, not an umbrella. `ContextBot.Application` starts Repo and Finch always, and starts Oban, `ContextBot.ATProto.Session`, and `ContextBot.Mentions.Poller` only when the validated settings enable the bot. `GET /health` returns bounded operational aggregates and never stored content or credentials. Public `GET /invocations` is a GET-only HTML log of operational metadata (counts, spend, tokens, status, actor handle, Bluesky and Standard.site links, short error reasons). It does not show post bodies, prompts, envelopes, or secrets, and it has no reprocess, reenqueue, or other mutation endpoints. Envelope replay stays on `just fly-reprocess` over Fly SSH. A fresh two-phase research run of the same invocation id stays on `just fly-reenqueue`.
 
 The public pipeline is `Mentions.Poller` → `EligibilityWorker` → `ThreadWorker` → `ResearchWorker` → `ReplyWorker`; `DeferredWorker` repairs missing jobs and reconsiders bounded deferred work. The read-only local path is `just dry-run` → `ThreadWorker` → `ResearchWorker` for a selected public post, or `just dry-run` → `ResearchWorker` for a question-only local subject; both terminate at `complete` without reply construction. The explicit local public-write path is `just live-run` → `ThreadWorker` → `ResearchWorker` → `ReplyWorker`; it uses `data/live-demo.db` by default, starts no poller, bypasses only actor eligibility, and processes one selected direct mention. `Workflow.Store` and Ecto/SQLite own invocation checkpoints, leases, budget entries, exact bounded provider response envelopes, and any public frozen reply intent. Development and test databases live under ignored `data/`; Fly mounts `/data/context_bot.db`.
 
