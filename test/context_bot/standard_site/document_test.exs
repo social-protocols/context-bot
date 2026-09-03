@@ -247,8 +247,8 @@ defmodule ContextBot.StandardSite.DocumentTest do
 
     test "places a reply responding-to line before the writeup and does not repeat the question" do
       markdown = Document.format_markdown(@content)
-      responding_at = :binary.match(markdown, "Responding to") |> elem(0)
-      analysis_at = :binary.match(markdown, "# Research Analysis") |> elem(0)
+      responding_at = match_at(markdown, "Responding to")
+      analysis_at = match_at(markdown, "# Research Analysis")
       block = responding_block(markdown)
 
       assert responding_at < analysis_at
@@ -259,16 +259,22 @@ defmodule ContextBot.StandardSite.DocumentTest do
                "Responding to [@alice.test](https://bsky.app/profile/alice.test/post/3k123)'s reply to [@bob.test](https://bsky.app/profile/bob.test/post/3parentrkey12)'s post."
     end
 
-    test "places a Claude continue link after the responding-to line and before the writeup" do
+    test "places the compact summary first, then responding-to, writeup, continue link, and metadata" do
       markdown = Document.format_markdown(@content)
-      responding_at = :binary.match(markdown, "Responding to") |> elem(0)
-      continue_at = :binary.match(markdown, "Continue this conversation in Claude") |> elem(0)
-      analysis_at = :binary.match(markdown, "# Research Analysis") |> elem(0)
+      summary_at = match_at(markdown, "## Summary")
+      selected_at = match_at(markdown, @content.selected_reply)
+      responding_at = match_at(markdown, "Responding to")
+      analysis_at = match_at(markdown, "# Research Analysis")
+      continue_at = match_at(markdown, "Continue this conversation in Claude")
+      metadata_at = match_at(markdown, "## How this response was produced")
       href = continue_href(markdown)
       query = continue_query(href)
 
-      assert responding_at < continue_at
-      assert continue_at < analysis_at
+      assert summary_at < selected_at
+      assert selected_at < responding_at
+      assert responding_at < analysis_at
+      assert analysis_at < continue_at
+      assert continue_at < metadata_at
       assert href =~ "https://claude.ai/new?q="
       assert query =~ @content.document_reader_url
       refute query =~ @content.full_response
@@ -320,6 +326,13 @@ defmodule ContextBot.StandardSite.DocumentTest do
 
       assert {:error, :record_not_found} =
                Document.add_post_ref(FakeDocClientNotFound, @repo, "3k123", post_uri)
+    end
+  end
+
+  defp match_at(markdown, pattern) do
+    case :binary.match(markdown, pattern) do
+      {pos, _len} -> pos
+      :nomatch -> flunk("missing #{inspect(pattern)}")
     end
   end
 
