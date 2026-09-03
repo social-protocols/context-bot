@@ -13,26 +13,68 @@ defmodule ContextBot.DryRun.ResultPrinter do
 
     [
       "status=complete",
-      "disposition=no_reply",
-      usage_line(totals, invocation, cost_microdollars),
-      link_line(:none)
-    ]
+      "disposition=no_reply"
+    ] ++
+      phase_lines(invocation) ++
+      [
+        usage_line(totals, invocation, cost_microdollars),
+        link_line(:none)
+      ]
   end
 
   def format_complete(%Invocation{} = invocation, cost_microdollars)
       when is_integer(cost_microdollars) and cost_microdollars >= 0 do
     totals = get_in(invocation.anthropic_usage || %{}, ["totals"]) || %{}
     plan = PublicationPlan.from_invocation(invocation)
+    title = document_title(invocation)
 
     [
-      "status=complete",
-      "answer=#{one_line(invocation.selected_reply)}",
-      usage_line(totals, invocation, cost_microdollars)
+      "status=complete"
     ] ++
+      phase_lines(invocation) ++
+      [
+        "title=#{one_line(title)}",
+        "answer=#{one_line(invocation.selected_reply)}",
+        usage_line(totals, invocation, cost_microdollars)
+      ] ++
+      citation_section(invocation.citation_sources) ++
       full_response_section(invocation.full_response) ++
       post_section(plan.posts) ++
       [link_line(plan.link_placement)]
   end
+
+  defp phase_lines(%Invocation{} = invocation) do
+    writeup = invocation.full_response || ""
+    citations = invocation.citation_sources || []
+    citation_count = length(citations)
+    title = document_title(invocation)
+
+    [
+      "phase=research writeup_chars=#{String.length(String.trim(writeup))} citations=#{citation_count}",
+      "phase=structure title=#{one_line(title)}"
+    ]
+  end
+
+  defp document_title(%Invocation{reply_validation: %{"document_title" => title}})
+       when is_binary(title),
+       do: title
+
+  defp document_title(_invocation), do: ""
+
+  defp citation_section(sources) when is_list(sources) do
+    urls =
+      sources
+      |> Enum.map(& &1["url"])
+      |> Enum.filter(&(is_binary(&1) and &1 != ""))
+      |> Enum.uniq()
+
+    case urls do
+      [] -> []
+      list -> ["Citation URLs:" | Enum.map(list, &"- #{&1}")]
+    end
+  end
+
+  defp citation_section(_sources), do: []
 
   defp usage_line(totals, invocation, cost_microdollars) do
     "usage input_tokens=#{integer(totals["input_tokens"])} " <>

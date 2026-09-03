@@ -53,7 +53,15 @@
       },
       {
         "type": "text",
-        "text": "{\"title\":\"Disputed Date\",\"compact_reply\":\"The cited primary source resolves the disputed date.\",\"full_response\":\"The cited primary source resolves the disputed date.\"}"
+        "text": "The cited primary source resolves the disputed date.",
+        "citations": [
+          {
+            "type": "web_search_result_location",
+            "url": "https://primary.example/report",
+            "title": "Primary report",
+            "cited_text": "The cited primary source resolves the disputed date."
+          }
+        ]
       }
     ],
     "stop_reason": "end_turn",

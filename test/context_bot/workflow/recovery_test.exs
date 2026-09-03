@@ -150,6 +150,34 @@ defmodule ContextBot.Workflow.RecoveryTest do
     assert Repo.aggregate(ResponseEnvelope, :count) == 1
   end
 
+  test "a failed structure-parse envelope stays failed without automatic replay" do
+    invocation =
+      invocation(:failed, true, "structure-parse-failure",
+        failure_category: :provider_response,
+        failure_detail: %{"reason" => "invalid_structured_output"},
+        canonical_thread: "thread",
+        canonical_thread_version: "1",
+        anthropic_messages: %{"model" => "claude-sonnet-5", "messages" => []},
+        completed_at: @now
+      )
+
+    job = executing_job(invocation, "ContextBot.Workers.ResearchWorker", :dry_research)
+
+    job =
+      job |> Ecto.Changeset.change(%{state: "discarded", discarded_at: @now}) |> Repo.update!()
+
+    entry = budget_entry(invocation, :sent, @now, :structure)
+    _envelope = response_envelope(invocation, entry)
+
+    assert :unchanged = recover_invocation(invocation, startup?: true)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :failed
+    assert persisted.failure_detail == %{"reason" => "invalid_structured_output"}
+    assert Repo.reload!(job).state == "discarded"
+    assert available_research_jobs(invocation) == []
+  end
+
   test "a failed local parser envelope stays failed without automatic replay" do
     invocation =
       invocation(:failed, true, "parser-failure",
@@ -611,13 +639,13 @@ defmodule ContextBot.Workflow.RecoveryTest do
     |> Repo.update!()
   end
 
-  defp budget_entry(invocation, state, response_recorded_at) do
+  defp budget_entry(invocation, state, response_recorded_at, kind \\ :research) do
     %BudgetEntry{}
     |> BudgetEntry.changeset(%{
-      attempt_key: "recovery-#{invocation.id}-research",
+      attempt_key: "recovery-#{invocation.id}-#{kind}",
       invocation_id: invocation.id,
       budget_date: DateTime.to_date(@now),
-      kind: :research,
+      kind: kind,
       reserved_microdollars: 5_000_000,
       state: state,
       sent_at: if(state == :sent, do: @now),

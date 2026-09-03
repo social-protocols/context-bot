@@ -45,6 +45,7 @@ defmodule ContextBot.DryRunWorkflowTest do
     public_job = seed_public_thread_job!()
 
     raw_response = fixture("anthropic/tool_success.json")
+    structure_response = fixture("anthropic/structure_success.json")
 
     Req.Test.expect(AnthropicClient, fn conn ->
       invocation = Repo.one!(Invocation)
@@ -54,11 +55,9 @@ defmodule ContextBot.DryRunWorkflowTest do
       assert Plug.Conn.get_req_header(conn, "x-api-key") == ["anthropic-test-key-never-expose"]
       assert conn.body_params["max_tokens"] == 8_192
       assert conn.body_params["output_config"]["effort"] == "medium"
-      assert conn.body_params["output_config"]["format"]["type"] == "json_schema"
+      refute Map.has_key?(conn.body_params["output_config"], "format")
 
-      assert conn.body_params["output_config"]["format"]["schema"] == Request.output_schema()
-
-      assert Enum.at(conn.body_params["tools"], 1)["citations"] == %{"enabled" => false}
+      assert Enum.at(conn.body_params["tools"], 1)["citations"] == %{"enabled" => true}
 
       assert [search, fetch] = conn.body_params["tools"]
       assert search["max_uses"] == 5
@@ -85,6 +84,22 @@ defmodule ContextBot.DryRunWorkflowTest do
       |> Plug.Conn.put_resp_header("content-type", "application/json")
       |> Plug.Conn.put_resp_header("request-id", "dry-run-test")
       |> Plug.Conn.send_resp(200, raw_response)
+    end)
+
+    Req.Test.expect(AnthropicClient, fn conn ->
+      assert conn.method == "POST"
+      refute Map.has_key?(conn.body_params, "tools")
+      assert conn.body_params["output_config"]["format"]["type"] == "json_schema"
+      assert conn.body_params["output_config"]["format"]["schema"] == Request.structure_schema()
+      assert conn.body_params["max_tokens"] == 1_024
+      assert [message] = conn.body_params["messages"]
+      assert message["content"] =~ "STRUCTURE_OUTPUT"
+      assert message["content"] =~ "https://primary.example/report"
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "application/json")
+      |> Plug.Conn.put_resp_header("request-id", "dry-run-structure-test")
+      |> Plug.Conn.send_resp(200, structure_response)
     end)
 
     assert {:ok, invocation, :created} = DryRun.prepare(@post_url, "What's missing?")
@@ -120,14 +135,29 @@ defmodule ContextBot.DryRunWorkflowTest do
     assert complete.reply_record == nil
     assert complete.reply_uri == nil
     assert complete.reply_cid == nil
-    assert complete.anthropic_usage["totals"]["input_tokens"] == 100
-    assert complete.anthropic_usage["totals"]["output_tokens"] == 20
+    assert complete.anthropic_usage["totals"]["input_tokens"] == 130
+    assert complete.anthropic_usage["totals"]["output_tokens"] == 32
+    assert complete.full_response =~ "Useful context from primary sources."
 
-    assert [response] = Store.anthropic_responses(complete)
-    assert response.raw_body == raw_response
+    assert complete.citation_sources == [
+             %{
+               "url" => "https://primary.example/report",
+               "cited_text" => "primary source excerpt"
+             }
+           ]
 
-    assert [%BudgetEntry{state: :settled, response_recorded_at: %DateTime{}}] =
-             Repo.all(BudgetEntry)
+    assert [research_response, structure_envelope] = Store.anthropic_responses(complete)
+    assert research_response.raw_body == raw_response
+    assert structure_envelope.kind == :structure
+
+    assert Enum.map(
+             Repo.all(from(entry in BudgetEntry, order_by: entry.id)),
+             &{&1.kind, &1.state}
+           ) ==
+             [
+               {:research, :settled},
+               {:structure, :settled}
+             ]
 
     assert queued_jobs() == [{"thread", "ContextBot.Workers.ThreadWorker"}]
     assert Repo.get!(Oban.Job, public_job.id).state == "available"
@@ -140,6 +170,7 @@ defmodule ContextBot.DryRunWorkflowTest do
     public_job = seed_public_thread_job!()
 
     raw_response = fixture("anthropic/tool_success.json")
+    structure_response = fixture("anthropic/structure_success.json")
 
     Req.Test.expect(AnthropicClient, fn conn ->
       invocation = Repo.one!(Invocation)
@@ -161,6 +192,16 @@ defmodule ContextBot.DryRunWorkflowTest do
       |> Plug.Conn.put_resp_header("content-type", "application/json")
       |> Plug.Conn.put_resp_header("request-id", "question-only-dry-run-test")
       |> Plug.Conn.send_resp(200, raw_response)
+    end)
+
+    Req.Test.expect(AnthropicClient, fn conn ->
+      refute Map.has_key?(conn.body_params, "tools")
+      assert conn.body_params["output_config"]["format"]["schema"] == Request.structure_schema()
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "application/json")
+      |> Plug.Conn.put_resp_header("request-id", "question-only-structure-test")
+      |> Plug.Conn.send_resp(200, structure_response)
     end)
 
     assert {:ok, invocation, :created} = DryRun.prepare_question("What's missing?")
@@ -186,13 +227,20 @@ defmodule ContextBot.DryRunWorkflowTest do
     assert complete.reply_uri == nil
     assert complete.reply_cid == nil
     assert complete.publication_claim_token == nil
-    assert complete.anthropic_usage["totals"]["input_tokens"] == 100
+    assert complete.anthropic_usage["totals"]["input_tokens"] == 130
 
-    assert [response] = Store.anthropic_responses(complete)
-    assert response.raw_body == raw_response
+    assert [research_response, structure_envelope] = Store.anthropic_responses(complete)
+    assert research_response.raw_body == raw_response
+    assert structure_envelope.kind == :structure
 
-    assert [%BudgetEntry{state: :settled, response_recorded_at: %DateTime{}}] =
-             Repo.all(BudgetEntry)
+    assert Enum.map(
+             Repo.all(from(entry in BudgetEntry, order_by: entry.id)),
+             &{&1.kind, &1.state}
+           ) ==
+             [
+               {:research, :settled},
+               {:structure, :settled}
+             ]
 
     assert queued_jobs() == [{"thread", "ContextBot.Workers.ThreadWorker"}]
     assert Repo.get!(Oban.Job, public_job.id).state == "available"
@@ -266,7 +314,7 @@ defmodule ContextBot.DryRunWorkflowTest do
     assert complete.selected_reply =~ "occurred"
     assert complete.anthropic_usage["totals"]["input_tokens"] > 0
     assert complete.reply_record == nil
-    assert Repo.aggregate(BudgetEntry, :count) == 1
+    assert Repo.aggregate(BudgetEntry, :count) == 2
     assert queued_jobs() == []
   end
 

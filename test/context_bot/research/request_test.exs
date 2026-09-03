@@ -65,8 +65,7 @@ defmodule ContextBot.Research.RequestTest do
                "response_inclusion" => "excluded",
                "max_uses" => 3,
                "max_content_tokens" => 24_000,
-               # Structured JSON + web_fetch citations.enabled=true 400s.
-               "citations" => %{"enabled" => false}
+               "citations" => %{"enabled" => true}
              }
            ]
 
@@ -93,19 +92,19 @@ defmodule ContextBot.Research.RequestTest do
     assert prompt =~ "uncertainty"
     assert prompt =~ "untrusted"
     assert prompt =~ "prompt injection"
-    assert prompt =~ "275 Unicode grapheme"
+    assert Request.structure_prompt() =~ "275 Unicode grapheme"
     refute prompt =~ "at most 300 Unicode grapheme clusters"
     refute prompt =~ "---COMPACT_REPLY---"
-    assert prompt =~ "disposition"
-    assert prompt =~ "no_reply"
-    assert prompt =~ "getcontext.bot is great"
+    assert prompt =~ "no published"
+    assert prompt =~ "reply is needed"
+    assert prompt =~ "getcontext.bot is"
+    assert prompt =~ "great"
     assert prompt =~ "you should ask getcontext.bot"
-    assert prompt =~ "When in doubt, reply"
-    assert prompt =~ "title"
-    assert prompt =~ "compact_reply"
-    assert prompt =~ "full_response"
-    assert prompt =~ "What Is That Bird?"
-    assert prompt =~ "one Bluesky post"
+    assert prompt =~ "When in doubt, research"
+    refute prompt =~ "compact_reply"
+    refute prompt =~ "full_response"
+    assert prompt =~ "native web_fetch citations"
+    assert prompt =~ "Do not return JSON"
     assert prompt =~ "images and their alt text"
     assert prompt =~ "directly"
     assert prompt =~ "observe in an image"
@@ -239,7 +238,7 @@ defmodule ContextBot.Research.RequestTest do
     assert projection.parameters["model"] == "claude-sonnet-5"
     assert projection.parameters["max_tokens"] == 4_096
     assert projection.parameters["effort"] == "medium"
-    assert projection.parameters["output_format"] == "json_schema"
+    refute Map.has_key?(projection.parameters, "output_format")
     assert projection.parameters["thinking"] == "adaptive"
     assert projection.parameters["tool_choice"] == "auto"
     assert projection.parameters["cache_control"] == "ephemeral"
@@ -262,7 +261,7 @@ defmodule ContextBot.Research.RequestTest do
                "response_inclusion" => "excluded",
                "max_uses" => 2,
                "max_content_tokens" => 10_000,
-               "citations" => false
+               "citations" => true
              }
            ]
 
@@ -385,12 +384,12 @@ defmodule ContextBot.Research.RequestTest do
     refute inspect(projection) =~ "session=secret"
   end
 
-  test "V9 prompt and schema require answering the invoker's questions first" do
+  test "V9 research prompt and structure schema require answering the invoker's questions first" do
     prompt = Request.system_prompt()
     normalized = String.replace(prompt, ~r/\s+/, " ")
-    schema = Request.output_schema()
+    schema = Request.structure_schema()
     compact = schema["properties"]["compact_reply"]["description"]
-    full = schema["properties"]["full_response"]["description"]
+    structure = String.replace(Request.structure_prompt(), ~r/\s+/, " ")
 
     assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V9")
     assert normalized =~ "invoking mention"
@@ -411,38 +410,24 @@ defmodule ContextBot.Research.RequestTest do
     assert compact =~ "yes / no / unknown / contested"
     assert compact =~ "Never silently drop a later question"
     refute compact =~ "Capture the core finding concisely"
+    refute Map.has_key?(schema["properties"], "full_response")
 
-    assert full =~ "bottom-line paragraph"
-    assert full =~ "same question"
-    refute full =~ "Capture the core finding concisely"
+    assert structure =~ "Open by directly answering each asked question"
+    assert structure =~ "Do not include a full_response field"
   end
 
-  test "V9 prompt and schema require markdown https source URLs in full_response" do
+  test "V9 research prompt uses native citations instead of a full_response schema field" do
     prompt = Request.system_prompt()
     normalized = String.replace(prompt, ~r/\s+/, " ")
     schema = Request.output_schema()
     compact = schema["properties"]["compact_reply"]["description"]
-    full = schema["properties"]["full_response"]["description"]
 
     assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V9")
     assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V9"
     assert Request.system_prompt_semantic_version() == "9.0.0"
-
-    assert normalized =~ "Sources"
-    assert normalized =~ "[label](https://"
-    assert normalized =~ "https://"
-    assert normalized =~ "outlet name alone"
+    assert normalized =~ "native web_fetch citations"
     assert normalized =~ "Do not invent URLs"
-    assert normalized =~ "not fetched"
-    assert normalized =~ "web_search"
-    assert normalized =~ "web_fetch"
-
-    assert full =~ "Sources"
-    assert full =~ "[label](https://"
-    assert full =~ "https://"
-    assert full =~ "outlet name alone"
-    assert full =~ "Do not invent URLs"
-    assert full =~ "not fetched"
+    refute Map.has_key?(schema["properties"], "full_response")
 
     assert compact =~ "plain text"
     assert compact =~ "without markdown"
@@ -483,33 +468,40 @@ defmodule ContextBot.Research.RequestTest do
     refute user["content"] =~ "LENGTH_REPAIR"
   end
 
-  test "sends json_schema format beside effort and omits unsupported length keywords" do
-    request = Request.initial(@canonical_thread, config())
-    schema = Request.output_schema()
-    encoded = Jason.encode!(request)
+  test "research request omits JSON schema; structure request is schema-only and tool-free" do
+    research = Request.initial(@canonical_thread, config())
+    schema = Request.structure_schema()
 
-    assert_output_config(request, "medium")
-    assert schema["type"] == "object"
-    assert schema["additionalProperties"] == false
-    assert schema["required"] == ["disposition", "title", "compact_reply", "full_response"]
-    assert schema["properties"]["disposition"]["enum"] == ["reply", "no_reply"]
-    assert schema["properties"]["disposition"]["description"] =~ "no_reply"
-    assert schema["properties"]["disposition"]["description"] =~ "ambiguous"
-    assert schema["properties"]["title"]["description"] =~ "What Is That Bird?"
-    assert schema["properties"]["compact_reply"]["description"] =~ "275"
+    structure =
+      Request.structure(%{
+        model_id: "claude-sonnet-5",
+        max_tokens: 1_024,
+        writeup: "Cited writeup.",
+        citations: [%{"url" => "https://primary.example/report", "cited_text" => "excerpt"}],
+        canonical_thread: @canonical_thread.text
+      })
 
-    assert schema["properties"]["compact_reply"]["description"] =~
-             "Write Unicode characters directly"
+    assert research["output_config"]["effort"] == "medium"
+    refute Map.has_key?(research["output_config"], "format")
+    assert Enum.at(research["tools"], 1)["citations"] == %{"enabled" => true}
+    refute Jason.encode!(research) =~ "json_schema"
 
-    refute encoded =~ "maxLength"
-    refute encoded =~ "minLength"
-    refute encoded =~ "structured-outputs"
+    refute Map.has_key?(structure, "tools")
+    assert structure["output_config"]["format"]["type"] == "json_schema"
+    assert structure["output_config"]["format"]["schema"] == schema
+    assert schema["required"] == ["disposition", "title", "compact_reply"]
+    refute Map.has_key?(schema["properties"], "full_response")
+    assert Request.structure_request?(structure)
+    refute Request.structure_request?(research)
+    assert structure["messages"] |> hd() |> Map.get("content") =~ "STRUCTURE_OUTPUT"
+    assert structure["messages"] |> hd() |> Map.get("content") =~ "https://primary.example/report"
+    refute Jason.encode!(structure) =~ "maxLength"
+    refute Jason.encode!(structure) =~ "minLength"
   end
 
   defp assert_output_config(request, effort) do
     assert request["output_config"]["effort"] == effort
-    assert request["output_config"]["format"]["type"] == "json_schema"
-    assert request["output_config"]["format"]["schema"] == Request.output_schema()
+    refute Map.has_key?(request["output_config"], "format")
   end
 
   defp config do

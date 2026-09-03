@@ -19,19 +19,28 @@ end
 defmodule ContextBot.Workers.ResearchWorkerTest.AnthropicClient do
   @moduledoc false
 
-  def send_message(_request, metadata) do
+  alias ContextBot.Repo
+  alias ContextBot.Research.{BudgetEntry, Request}
+
+  def send_message(request, metadata) do
     test_pid = Process.get(:research_worker_integration_pid)
 
-    entry =
-      ContextBot.Repo.get_by!(ContextBot.Research.BudgetEntry, attempt_key: metadata.attempt_key)
+    entry = Repo.get_by!(BudgetEntry, attempt_key: metadata.attempt_key)
 
-    send(test_pid, {:integrated_anthropic_call, entry.state, ContextBot.Repo.in_transaction?()})
+    send(test_pid, {:integrated_anthropic_call, entry.state, Repo.in_transaction?()})
+
+    raw_body =
+      if Request.structure_request?(request) do
+        File.read!(Path.expand("../../fixtures/anthropic/structure_success.json", __DIR__))
+      else
+        Process.get(:research_worker_integration_body)
+      end
 
     {:ok,
      %{
        status: 200,
        headers: %{"content-type" => ["application/json"], "request-id" => ["integrated"]},
-       raw_body: Process.get(:research_worker_integration_body),
+       raw_body: raw_body,
        received_at: ~U[2026-07-29 12:34:56.123456Z],
        duration_ms: 12
      }}
@@ -92,14 +101,16 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
 
     assert :ok = perform(invocation)
     assert_received {:integrated_anthropic_call, :sent, false}
+    assert_received {:integrated_anthropic_call, :sent, false}
 
     persisted = Repo.reload!(invocation)
     assert persisted.stage == :reply_ready
     assert persisted.selected_reply == "Useful context from primary sources."
-    assert persisted.full_response == "Useful context from primary sources."
+    assert persisted.full_response =~ "Useful context from primary sources."
     assert persisted.standard_site_document_uri =~ "site.standard.document"
-    assert [response] = Store.anthropic_responses(persisted)
-    assert response.raw_body == body
+    assert [research_response, structure_response] = Store.anthropic_responses(persisted)
+    assert research_response.raw_body == body
+    assert structure_response.kind == :structure
     assert persisted.reply_record["text"] == persisted.selected_reply <> " (full response)"
     assert [%Oban.Job{worker: "ContextBot.Workers.ReplyWorker"}] = Repo.all(Oban.Job)
 

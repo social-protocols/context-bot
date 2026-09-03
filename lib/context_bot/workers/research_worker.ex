@@ -320,12 +320,21 @@ defmodule ContextBot.Workers.ResearchWorker do
     do: Map.get(result, :disposition) == :no_reply
 
   defp dry_run_validation(result) do
+    validation =
+      case Map.get(result, :document_title) do
+        title when is_binary(title) and title != "" ->
+          Map.put(result.validation || %{}, "document_title", title)
+
+        _missing ->
+          result.validation || %{}
+      end
+
     case Map.get(result, :text_part2) do
       part2 when is_binary(part2) and part2 != "" ->
-        Map.put(result.validation || %{}, "text_part2", part2)
+        Map.put(validation, "text_part2", part2)
 
       _missing ->
-        result.validation
+        validation
     end
   end
 

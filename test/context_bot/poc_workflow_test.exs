@@ -58,16 +58,24 @@ defmodule ContextBot.POCWorkflowTest do
     assert_received {:before_pds_put, :publishing, reply_record, nil}
     assert reply_record == invocation.reply_record
 
-    [request] = POCFixture.anthropic_requests(fixture)
-    [message] = request["messages"]
+    [research, structure] = POCFixture.anthropic_requests(fixture)
+    [message] = research["messages"]
     assert [image, text] = message["content"]
     assert image["source"] == %{"type" => "url", "url" => hd(invocation.canonical_media)["url"]}
     assert text == %{"type" => "text", "text" => invocation.canonical_thread}
     refute text["text"] =~ "DESCENDANT"
+    refute Map.has_key?(research["output_config"], "format")
+    refute Map.has_key?(structure, "tools")
+    assert structure["output_config"]["format"]["type"] == "json_schema"
 
-    assert [response] = Store.anthropic_responses(invocation)
-    assert response.raw_body == POCFixture.anthropic_fixture("tool_success.json")
-    assert [%BudgetEntry{state: :settled}] = Repo.all(BudgetEntry)
+    [research_response, structure_response] = Store.anthropic_responses(invocation)
+    assert research_response.raw_body == POCFixture.anthropic_fixture("tool_success.json")
+    assert structure_response.raw_body == POCFixture.anthropic_fixture("structure_success.json")
+
+    assert Enum.map(Repo.all(from entry in BudgetEntry, order_by: entry.id), & &1.kind) == [
+             :research,
+             :structure
+           ]
 
     assert invocation.selected_reply == "Useful context from primary sources."
     assert String.length(invocation.selected_reply) <= 300
@@ -307,7 +315,10 @@ defmodule ContextBot.POCWorkflowTest do
 
     fixture =
       POCFixture.start!(
-        anthropic_results: [{:response, 200, success, %{}}],
+        anthropic_results: [
+          {:response, 200, success, %{}},
+          {:response, 200, POCFixture.anthropic_fixture("structure_success.json"), %{}}
+        ],
         pds_mode: :ambiguous_once
       )
 
@@ -338,25 +349,23 @@ defmodule ContextBot.POCWorkflowTest do
     assert invocation.stage == :complete
     assert POCFixture.call_count(fixture, :notifications) == 5
     assert POCFixture.call_count(fixture, :session_create) == 4
-    assert POCFixture.call_count(fixture, :anthropic_post) == 1
+    assert POCFixture.call_count(fixture, :anthropic_post) == 2
     assert POCFixture.created_reply_count(fixture) == 1
     assert POCFixture.call_count(fixture, :pds_put) == 1
 
     entries = Repo.all(from entry in BudgetEntry, order_by: entry.id)
-    assert Enum.map(entries, & &1.state) == [:settled]
 
-    assert Enum.map(
-             entries,
-             &{&1.kind, &1.reserved_microdollars, &1.settled_microdollars}
-           ) == [{:research, 5_000_000, 650}]
+    assert Enum.map(entries, &{&1.kind, &1.state}) == [
+             {:research, :settled},
+             {:structure, :settled}
+           ]
 
-    assert charged_microdollars(entries) == 650
+    assert charged_microdollars(entries) ==
+             Enum.reduce(entries, 0, fn entry, acc -> acc + (entry.settled_microdollars || 0) end)
 
-    assert Budget.remaining(now(), fixture.settings.anthropic_daily_budget_microdollars) ==
-             19_999_350
-
-    assert [response] = Store.anthropic_responses(invocation)
-    assert response.raw_body == success
+    assert [research_response, structure_response] = Store.anthropic_responses(invocation)
+    assert research_response.raw_body == success
+    assert structure_response.kind == :structure
     assert POCFixture.visible_reply(fixture)["value"] == invocation.reply_record
     assert Repo.aggregate(Oban.Job, :count) == 0
   end

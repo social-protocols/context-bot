@@ -58,7 +58,8 @@ defmodule ContextBot.POCFixture do
       anthropic_requests: [],
       anthropic_results:
         Keyword.get(options, :anthropic_results, [
-          {:response, 200, anthropic_fixture("tool_success.json"), %{}}
+          {:response, 200, anthropic_fixture("tool_success.json"), %{}},
+          {:response, 200, anthropic_fixture("structure_success.json"), %{}}
         ]),
       calls: [],
       created_reply_count: 0,
@@ -229,7 +230,14 @@ defmodule ContextBot.POCFixture do
         )
 
       json_content = Jason.encode!(full_response)
-      %{state | anthropic_results: [{:response, 200, json_content, %{}}]}
+
+      %{
+        state
+        | anthropic_results: [
+            {:response, 200, json_content, %{}},
+            {:response, 200, anthropic_fixture("structure_success.json"), %{}}
+          ]
+      }
     end)
   end
 
