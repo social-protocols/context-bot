@@ -15,34 +15,55 @@ jobs:
   ci:
     name: CI
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
 
       - name: Set up Elixir
+        id: beam
         uses: erlef/setup-beam@v1
         with:
           elixir-version: '1.20.2'
           otp-version: '28.5'
 
-      - name: Install shell tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y shellcheck
-          
-      - name: Install shfmt
-        run: |
-          curl -Lo shfmt https://github.com/mvdan/sh/releases/download/v3.10.0/shfmt_v3.10.0_linux_amd64
-          chmod +x shfmt
-          sudo mv shfmt /usr/local/bin/
+      # setup-beam has no hex/rebar cache input (install-hex/install-rebar only).
+      # Skip that; deps/_build remain on the mix.lock cache below.
 
-      - name: Install just
+      - name: Cache CLI tools
+        uses: actions/cache@v6
+        id: ci-tools
+        with:
+          path: ${{ runner.temp }}/ci-tools
+          key: ${{ runner.os }}-ci-tools-just-1.58.0-shfmt-3.10.0-shellcheck-0.11.0
+
+      - name: Install CLI tools
+        env:
+          CI_TOOLS: ${{ runner.temp }}/ci-tools
         run: |
-          curl -fsSL -o just.tar.gz https://github.com/casey/just/releases/download/1.58.0/just-1.58.0-x86_64-unknown-linux-musl.tar.gz
-          tar -xzf just.tar.gz just
-          sudo install -m 0755 just /usr/local/bin/just
+          mkdir -p "$CI_TOOLS"
+          if [[ ! -x "$CI_TOOLS/just" ]]; then
+            curl -fsSL -o "$CI_TOOLS/just.tar.gz" \
+              https://github.com/casey/just/releases/download/1.58.0/just-1.58.0-x86_64-unknown-linux-musl.tar.gz
+            tar -xzf "$CI_TOOLS/just.tar.gz" -C "$CI_TOOLS" just
+            rm -f "$CI_TOOLS/just.tar.gz"
+          fi
+          if [[ ! -x "$CI_TOOLS/shfmt" ]]; then
+            curl -fsSL -o "$CI_TOOLS/shfmt" \
+              https://github.com/mvdan/sh/releases/download/v3.10.0/shfmt_v3.10.0_linux_amd64
+          fi
+          if [[ ! -x "$CI_TOOLS/shellcheck" ]]; then
+            curl -fsSL -o "$CI_TOOLS/shellcheck.tar.xz" \
+              https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+            tar -xJf "$CI_TOOLS/shellcheck.tar.xz" -C "$CI_TOOLS" --strip-components=1 \
+              shellcheck-v0.11.0/shellcheck
+            rm -f "$CI_TOOLS/shellcheck.tar.xz"
+          fi
+          chmod +x "$CI_TOOLS/just" "$CI_TOOLS/shfmt" "$CI_TOOLS/shellcheck"
+          sudo install -m 0755 "$CI_TOOLS/just" "$CI_TOOLS/shfmt" "$CI_TOOLS/shellcheck" /usr/local/bin/
           just --version
+          shfmt --version
+          shellcheck --version
 
       - name: Cache Mix dependencies and build artifacts
         uses: actions/cache@v6
@@ -53,6 +74,18 @@ jobs:
           key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
             ${{ runner.os }}-mix-
+
+      # Dedicated key so PLTs are saved even when the mix.lock _build cache
+      # already exists (actions/cache is write-once per key). Paths match
+      # mix.exs plt_local_path / plt_core_path. Do not cache ~/.mix — that
+      # clobbers setup-beam's Hex and hangs `just setup` on a TTY prompt.
+      - name: Cache Dialyzer PLTs
+        uses: actions/cache@v6
+        with:
+          path: priv/plts
+          key: ${{ runner.os }}-plt-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-plt-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
 
       - name: Install dependencies
         run: just setup
