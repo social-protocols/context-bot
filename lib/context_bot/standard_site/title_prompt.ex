@@ -9,18 +9,19 @@ defmodule ContextBot.StandardSite.TitlePrompt do
   Haiku call; it is not a compact-reply rewrite.
   """
 
-  @id "READER_TITLE_V1"
+  @id "READER_TITLE_V2"
 
   @schema_description """
-  Standard Reader page title. A Title Case headline of the topic or question, typically 2 to 8 words and at most 80 Unicode grapheme clusters. Summarize what the page is about; do not narrate the mention or greeting. Match this style: Context Bot Launch; What Is That Bird?; The Story on the Yosemite Land Deal; 'The Range of Acceptable Opinion' on Bluesky; Planned Explosion? Do not copy the invocation verbatim, take the first six words, strip @mentions and leave punctuation holes, use a TID or a title that starts with "Context on", copy the compact Bluesky reply, or include @handles unless the handle itself is the subject. No trailing period unless it is part of an abbreviation.
+  Standard Reader page title. Write in the same language as the invoking mention. A Title Case headline of the topic or question, typically 2 to 8 words and at most 80 Unicode grapheme clusters. Summarize what the page is about; do not narrate the mention or greeting. Match this style: Context Bot Launch; What Is That Bird?; The Story on the Yosemite Land Deal; 'The Range of Acceptable Opinion' on Bluesky; Planned Explosion? Do not copy the invocation verbatim, take the first six words, strip @mentions and leave punctuation holes, use a TID or a title that starts with "Context on", copy the compact Bluesky reply, or include @handles unless the handle itself is the subject. No trailing period unless it is part of an abbreviation.
   """
 
   @prompt """
-  READER_TITLE_V1
+  READER_TITLE_V2
 
   Write one Standard Reader page title for the Bluesky invocation below.
 
   Requirements:
+  - Write the title in the same language as the invoking mention
   - A Title Case headline of the topic or question, typically 2 to 8 words
   - Summarize what the page is about; do not narrate the mention or greeting
   - Match this style:
