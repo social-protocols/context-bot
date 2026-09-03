@@ -752,9 +752,11 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     for {suffix, runner_error, category} <- [
           {"auth", :provider_auth, :provider_auth},
           {"malformed", :malformed_provider_response, :provider_response},
+          {"structured", :invalid_structured_output, :provider_response},
           {"interrupted", :interrupted_after_send, :provider_response},
           {"tool-cap", :tool_use_limit_exceeded, :provider_response},
-          {"code-exec", :code_execution_failed, :provider_response}
+          {"code-exec", :code_execution_failed, :provider_response},
+          {"invalid-repair", :invalid_repair, :invalid_repair}
         ] do
       invocation = invocation(suffix, :thread_ready)
       configure_runner({:error, runner_error})

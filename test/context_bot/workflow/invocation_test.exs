@@ -96,6 +96,26 @@ defmodule ContextBot.Workflow.InvocationTest do
     assert persisted.reply_validation == %{"result" => "no_reply", "repair_used" => false}
   end
 
+  test "persists an internal invalid_repair failure without remapping it to provider_response" do
+    invocation =
+      %Invocation{}
+      |> Invocation.changeset(public_attrs())
+      |> Repo.insert!()
+
+    invocation
+    |> Invocation.transition_changeset(%{
+      status: :failed,
+      stage: :failed,
+      failure_category: :invalid_repair,
+      failure_detail: %{"reason" => "invalid_repair"}
+    })
+    |> Repo.update!()
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.failure_category == :invalid_repair
+    assert persisted.failure_detail == %{"reason" => "invalid_repair"}
+  end
+
   defp public_attrs do
     %{
       invocation_uri: "at://did:plc:actor/app.bsky.feed.post/public",

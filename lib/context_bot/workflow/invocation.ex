@@ -32,7 +32,8 @@ defmodule ContextBot.Workflow.Invocation do
     :provider_budget,
     :provider_response,
     :publication_auth,
-    :publication_conflict
+    :publication_conflict,
+    :invalid_repair
   ]
 
   @did_regex ~r/\Adid:[a-z0-9]+:[A-Za-z0-9._:%-]+\z/

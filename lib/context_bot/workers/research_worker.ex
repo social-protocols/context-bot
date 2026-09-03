@@ -540,6 +540,7 @@ defmodule ContextBot.Workers.ResearchWorker do
 
   defp failure_category(:provider_auth), do: :provider_auth
   defp failure_category(:daily_budget_exhausted), do: :provider_budget
+  defp failure_category(:invalid_repair), do: :invalid_repair
   defp failure_category(_reason), do: :provider_response
 
   defp research_failure(invocation) do
