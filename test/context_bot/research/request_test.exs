@@ -451,6 +451,8 @@ defmodule ContextBot.Research.RequestTest do
     refute Map.has_key?(request, "tools")
     refute Map.has_key?(request, "tool_choice")
     refute Map.has_key?(request, "thinking")
+    refute Map.has_key?(request, "effort")
+    refute Map.has_key?(request["output_config"], "effort")
     assert request["system"] == TitlePrompt.prompt()
     assert request["output_config"]["format"]["type"] == "json_schema"
     assert request["output_config"]["format"]["schema"] == Request.title_schema()
@@ -482,6 +484,7 @@ defmodule ContextBot.Research.RequestTest do
         canonical_thread: @canonical_thread.text
       })
 
+    assert research["thinking"] == %{"type" => "adaptive"}
     assert research["output_config"]["effort"] == "medium"
     refute Map.has_key?(research["output_config"], "format")
     assert Enum.at(research["tools"], 1)["citations"] == %{"enabled" => true}
@@ -489,6 +492,8 @@ defmodule ContextBot.Research.RequestTest do
 
     refute Map.has_key?(structure, "tools")
     refute Map.has_key?(structure, "thinking")
+    refute Map.has_key?(structure, "effort")
+    refute Map.has_key?(structure["output_config"], "effort")
     refute Jason.encode!(structure) =~ "adaptive"
     assert structure["output_config"]["format"]["type"] == "json_schema"
     assert structure["output_config"]["format"]["schema"] == schema
@@ -500,6 +505,24 @@ defmodule ContextBot.Research.RequestTest do
     assert structure["messages"] |> hd() |> Map.get("content") =~ "https://primary.example/report"
     refute Jason.encode!(structure) =~ "maxLength"
     refute Jason.encode!(structure) =~ "minLength"
+  end
+
+  test "structure ignores optional effort and stays Haiku-safe" do
+    structure =
+      Request.structure(%{
+        model_id: "claude-haiku-4-5",
+        max_tokens: 1_024,
+        writeup: "Cited writeup.",
+        citations: [],
+        canonical_thread: @canonical_thread.text,
+        effort: :low
+      })
+
+    refute Map.has_key?(structure, "thinking")
+    refute Map.has_key?(structure, "effort")
+    refute Map.has_key?(structure["output_config"], "effort")
+    assert structure["output_config"]["format"]["type"] == "json_schema"
+    assert structure["output_config"]["format"]["schema"] == Request.structure_schema()
   end
 
   defp assert_output_config(request, effort) do
