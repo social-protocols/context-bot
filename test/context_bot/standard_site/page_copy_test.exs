@@ -354,8 +354,10 @@ defmodule ContextBot.StandardSite.PageCopyTest do
       prompt = TitlePrompt.prompt()
       description = TitlePrompt.schema_description()
 
-      assert TitlePrompt.id() == "READER_TITLE_V1"
-      assert String.starts_with?(prompt, "READER_TITLE_V1")
+      assert TitlePrompt.id() == "READER_TITLE_V2"
+      assert String.starts_with?(prompt, "READER_TITLE_V2")
+      assert prompt =~ "same language as the invoking mention"
+      assert description =~ "same language as the invoking mention"
       assert prompt =~ "Title Case"
       assert prompt =~ "Context Bot Launch"
       assert prompt =~ "What Is That Bird?"

@@ -79,7 +79,7 @@ defmodule ContextBot.Research.RequestTest do
   test "sends one versioned prompt with the complete research and reply safety contract" do
     prompt = Request.initial(@canonical_thread, config())["system"]
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V9")
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V10")
     assert prompt =~ "ancestor"
     assert prompt =~ "unstable"
     assert prompt =~ "primary sources"
@@ -211,15 +211,15 @@ defmodule ContextBot.Research.RequestTest do
   test "exposes a stable hashed identity for the versioned system prompt" do
     prompt = Request.system_prompt()
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V9")
-    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V9"
-    assert Request.system_prompt_semantic_version() == "9.0.0"
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V10")
+    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V10"
+    assert Request.system_prompt_semantic_version() == "10.0.0"
 
     assert Request.system_prompt_sha256() ==
              :sha256 |> :crypto.hash(prompt) |> Base.encode16(case: :lower)
 
     assert Request.system_prompt_rkey() ==
-             "prompt-context-bot-system-v9-#{String.slice(Request.system_prompt_sha256(), 0, 16)}"
+             "prompt-context-bot-system-v10-#{String.slice(Request.system_prompt_sha256(), 0, 16)}"
   end
 
   test "projects allowlisted Messages parameters and the first user message" do
@@ -231,8 +231,8 @@ defmodule ContextBot.Research.RequestTest do
         research_max_tokens: 4_096
       })
 
-    assert projection.prompt.id == "CONTEXT_BOT_SYSTEM_V9"
-    assert projection.prompt.semantic_version == "9.0.0"
+    assert projection.prompt.id == "CONTEXT_BOT_SYSTEM_V10"
+    assert projection.prompt.semantic_version == "10.0.0"
     assert projection.prompt.sha256 == Request.system_prompt_sha256()
     assert projection.parameters["anthropic-version"] == "2023-06-01"
     assert projection.parameters["model"] == "claude-sonnet-5"
@@ -384,14 +384,14 @@ defmodule ContextBot.Research.RequestTest do
     refute inspect(projection) =~ "session=secret"
   end
 
-  test "V9 research prompt and structure schema require answering the invoker's questions first" do
+  test "V10 research prompt and structure schema require answering the invoker's questions first" do
     prompt = Request.system_prompt()
     normalized = String.replace(prompt, ~r/\s+/, " ")
     schema = Request.structure_schema()
     compact = schema["properties"]["compact_reply"]["description"]
     structure = String.replace(Request.structure_prompt(), ~r/\s+/, " ")
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V9")
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V10")
     assert normalized =~ "invoking mention"
     assert normalized =~ "last post in the canonical thread"
     assert normalized =~ "every distinct question"
@@ -416,15 +416,15 @@ defmodule ContextBot.Research.RequestTest do
     assert structure =~ "Do not include a full_response field"
   end
 
-  test "V9 research prompt uses native citations instead of a full_response schema field" do
+  test "V10 research prompt uses native citations instead of a full_response schema field" do
     prompt = Request.system_prompt()
     normalized = String.replace(prompt, ~r/\s+/, " ")
     schema = Request.output_schema()
     compact = schema["properties"]["compact_reply"]["description"]
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V9")
-    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V9"
-    assert Request.system_prompt_semantic_version() == "9.0.0"
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V10")
+    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V10"
+    assert Request.system_prompt_semantic_version() == "10.0.0"
     assert normalized =~ "native web_fetch citations"
     assert normalized =~ "Do not invent URLs"
     refute Map.has_key?(schema["properties"], "full_response")
@@ -433,6 +433,30 @@ defmodule ContextBot.Research.RequestTest do
     assert compact =~ "without markdown"
     refute compact =~ "[label](https://"
     refute compact =~ "Sources section"
+  end
+
+  test "V10 research and structure prompts write in the invoking mention language" do
+    prompt = Request.system_prompt()
+    normalized = String.replace(prompt, ~r/\s+/, " ")
+    structure = String.replace(Request.structure_prompt(), ~r/\s+/, " ")
+    schema = Request.structure_schema()
+    title = schema["properties"]["title"]["description"]
+    compact = schema["properties"]["compact_reply"]["description"]
+
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V10")
+    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V2")
+    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V2"
+    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V10"
+    assert Request.system_prompt_semantic_version() == "10.0.0"
+
+    assert normalized =~ "same language as the invoking mention"
+    assert normalized =~ "Do not default to English"
+    assert structure =~ "same language as the invoking mention"
+    assert structure =~ "Do not default to English"
+    assert title =~ "same language as the invoking mention"
+    assert compact =~ "same language as the invoking mention"
+    assert TitlePrompt.prompt() =~ "same language as the invoking mention"
+    assert TitlePrompt.schema_description() =~ "same language as the invoking mention"
   end
 
   test "builds a title-only rewrite request with no tools and the leftover repair token cap" do

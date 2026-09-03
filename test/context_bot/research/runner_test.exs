@@ -1401,7 +1401,7 @@ defmodule ContextBot.Research.RunnerTest do
     assert title_request["model"] == "claude-haiku-4-5"
     refute Map.has_key?(title_request, "tools")
     assert title_request["output_config"]["format"]["schema"]["required"] == ["title"]
-    assert title_request["system"] =~ "READER_TITLE_V1"
+    assert title_request["system"] =~ "READER_TITLE_V2"
     assert hd(title_request["messages"])["content"] =~ "@getcontext.bot what bird is that?"
     assert hd(title_request["messages"])["content"] =~ compact
     assert hd(title_request["messages"])["content"] =~ full
