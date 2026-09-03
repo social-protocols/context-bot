@@ -76,4 +76,63 @@ defmodule ContextBot.StandardSite.PromptDocumentTest do
                )
     end
   end
+
+  describe "ensure_structure_exists/4" do
+    test "creates the hashed structure prompt document when it is missing" do
+      assert {:ok, result} =
+               PromptDocument.ensure_structure_exists(
+                 FakeStandardSiteTrackingClient,
+                 @repo,
+                 @publication_uri,
+                 @created_at
+               )
+
+      rkey = Request.structure_prompt_rkey()
+      assert result.rkey == rkey
+      assert result.uri == "at://#{@repo}/site.standard.document/#{rkey}"
+      assert result.reader_url == "https://standard-reader.app/a/#{@repo}/#{rkey}"
+
+      assert_received {:standard_site_get, "site.standard.document", ^rkey}
+
+      assert_received {:standard_site_put, "site.standard.document", ^rkey, record}
+
+      assert record["$type"] == "site.standard.document"
+      assert record["site"] == @publication_uri
+      assert record["textContent"] == Request.structure_prompt()
+      assert record["title"] =~ Request.structure_prompt_id()
+      markdown = record["content"]["text"]["markdown"]
+      assert markdown =~ Request.structure_prompt_id()
+      assert markdown =~ Request.structure_prompt_semantic_version()
+      assert markdown =~ Request.structure_prompt_sha256()
+      assert markdown =~ Request.structure_prompt()
+      refute markdown =~ Request.system_prompt()
+      assert markdown =~ "Hidden model reasoning is not available"
+    end
+
+    test "reuses a matching structure prompt document without rewriting it" do
+      assert {:ok, result} =
+               PromptDocument.ensure_structure_exists(
+                 FakeStructurePromptDocumentExists,
+                 @repo,
+                 @publication_uri,
+                 @created_at
+               )
+
+      rkey = Request.structure_prompt_rkey()
+      assert result.rkey == rkey
+      assert result.reader_url == "https://standard-reader.app/a/#{@repo}/#{rkey}"
+      assert_received {:standard_site_get, "site.standard.document", ^rkey}
+      refute_received {:standard_site_put, "site.standard.document", _, _}
+    end
+
+    test "fails closed when the stored structure prompt bytes do not match" do
+      assert {:error, :prompt_document_conflict} =
+               PromptDocument.ensure_structure_exists(
+                 FakeStructurePromptDocumentMismatch,
+                 @repo,
+                 @publication_uri,
+                 @created_at
+               )
+    end
+  end
 end

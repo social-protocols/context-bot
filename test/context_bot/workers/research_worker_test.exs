@@ -257,14 +257,23 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert pub_record["$type"] == "site.standard.publication"
 
     prompt_rkey = Request.system_prompt_rkey()
+    structure_rkey = Request.structure_prompt_rkey()
     assert_received {:standard_site_get, "site.standard.document", ^prompt_rkey}
     assert_received {:standard_site_put, "site.standard.document", ^prompt_rkey, prompt_record}
     assert prompt_record["$type"] == "site.standard.document"
     assert prompt_record["textContent"] == Request.system_prompt()
+    assert_received {:standard_site_get, "site.standard.document", ^structure_rkey}
+
+    assert_received {:standard_site_put, "site.standard.document", ^structure_rkey,
+                     structure_record}
+
+    assert structure_record["$type"] == "site.standard.document"
+    assert structure_record["textContent"] == Request.structure_prompt()
 
     assert_received {:standard_site_put, "site.standard.document", doc_rkey, doc_record}
     assert is_binary(doc_rkey) and doc_rkey != ""
     assert doc_rkey != prompt_rkey
+    assert doc_rkey != structure_rkey
     assert doc_record["$type"] == "site.standard.document"
     assert doc_record["textContent"] == "Thorough markdown writeup."
     assert doc_record["title"] == "What Is That Bird?"
@@ -284,10 +293,14 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert markdown =~ "Thorough markdown writeup."
     assert markdown =~ Request.system_prompt_id()
     assert markdown =~ Request.system_prompt_sha256()
+    assert markdown =~ Request.structure_prompt_id()
+    assert markdown =~ Request.structure_prompt_sha256()
     assert markdown =~ "https://standard-reader.app/a/#{@bot_did}/#{prompt_rkey}"
+    assert markdown =~ "https://standard-reader.app/a/#{@bot_did}/#{structure_rkey}"
     assert markdown =~ "`anthropic-version`: 2023-06-01"
     assert markdown =~ "`model`: claude-sonnet-5"
-    assert markdown =~ "canonical thread"
+    refute markdown =~ "### Canonical thread"
+    refute markdown =~ "The first user message sent to the Messages API"
     assert markdown =~ "Hidden model reasoning is not available"
     assert markdown =~ "[Continue this conversation in Claude](https://claude.ai/new?q="
 

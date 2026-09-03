@@ -113,6 +113,7 @@ defmodule ContextBot.Research.Request do
   @prompt_id "CONTEXT_BOT_SYSTEM_V10"
   @prompt_semantic_version "10.0.0"
   @structure_prompt_id "CONTEXT_BOT_STRUCTURE_V2"
+  @structure_prompt_semantic_version "2.0.0"
   @public_cdn_prefix "https://cdn.bsky.app/"
 
   @type config :: %{
@@ -176,6 +177,21 @@ defmodule ContextBot.Research.Request do
 
   @spec structure_prompt_id() :: String.t()
   def structure_prompt_id, do: @structure_prompt_id
+
+  @spec structure_prompt_semantic_version() :: String.t()
+  def structure_prompt_semantic_version, do: @structure_prompt_semantic_version
+
+  @spec structure_prompt_sha256() :: String.t()
+  def structure_prompt_sha256, do: sha256_hex(@structure_prompt)
+
+  @doc """
+  Stable Standard.site document rkey for the current structure-prompt bytes.
+  """
+  @spec structure_prompt_rkey() :: String.t()
+  def structure_prompt_rkey do
+    id_slug = @structure_prompt_id |> String.downcase() |> String.replace("_", "-")
+    "prompt-#{id_slug}-#{String.slice(structure_prompt_sha256(), 0, 16)}"
+  end
 
   @doc """
   Anthropic GA JSON schema for the structure-phase object.

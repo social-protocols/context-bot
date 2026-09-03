@@ -222,6 +222,20 @@ defmodule ContextBot.Research.RequestTest do
              "prompt-context-bot-system-v10-#{String.slice(Request.system_prompt_sha256(), 0, 16)}"
   end
 
+  test "exposes a stable hashed identity for the versioned structure prompt" do
+    prompt = Request.structure_prompt()
+
+    assert String.starts_with?(prompt, "CONTEXT_BOT_STRUCTURE_V2")
+    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V2"
+    assert Request.structure_prompt_semantic_version() == "2.0.0"
+
+    assert Request.structure_prompt_sha256() ==
+             :sha256 |> :crypto.hash(prompt) |> Base.encode16(case: :lower)
+
+    assert Request.structure_prompt_rkey() ==
+             "prompt-context-bot-structure-v2-#{String.slice(Request.structure_prompt_sha256(), 0, 16)}"
+  end
+
   test "projects allowlisted Messages parameters and the first user message" do
     request = Request.initial(@canonical_thread, config())
 

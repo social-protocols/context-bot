@@ -372,54 +372,26 @@ defmodule ContextBot.Workers.ResearchWorker do
          created_at,
          settings
        ) do
-    case PromptDocument.ensure_exists(client, repo, publication_uri, created_at) do
-      {:ok, prompt_doc} ->
-        create_full_response_document(
-          invocation,
-          result,
-          client,
-          repo,
-          publication_uri,
-          created_at,
-          prompt_doc,
-          settings
-        )
-
+    with {:ok, prompt_doc} <-
+           PromptDocument.ensure_exists(client, repo, publication_uri, created_at),
+         {:ok, structure_doc} <-
+           PromptDocument.ensure_structure_exists(client, repo, publication_uri, created_at),
+         content = full_response_content(invocation, result, prompt_doc, structure_doc, settings),
+         {:ok, doc_result} <- Document.create(client, repo, publication_uri, content, created_at) do
+      {:ok, doc_result}
+    else
       {:error, reason} ->
         fail_standard_site(invocation, "site.standard.document", reason)
     end
   end
 
-  defp create_full_response_document(
-         invocation,
-         result,
-         client,
-         repo,
-         publication_uri,
-         created_at,
-         prompt_doc,
-         settings
-       ) do
-    content = full_response_content(invocation, result, prompt_doc, settings)
-
-    case Document.create(client, repo, publication_uri, content, created_at) do
-      {:ok, doc_result} ->
-        {:ok, doc_result}
-
-      {:error, reason} ->
-        fail_standard_site(invocation, "site.standard.document", reason)
-    end
-  end
-
-  defp full_response_content(invocation, result, prompt_doc, settings) do
+  defp full_response_content(invocation, result, prompt_doc, structure_doc, settings) do
     request = Map.get(result, :messages) || invocation.anthropic_messages || %{}
 
     projection =
       Request.public_projection(request, %{
         anthropic_api_version: settings.anthropic_api_version,
-        research_max_tokens: settings.anthropic_research_max_tokens,
-        canonical_thread: invocation.canonical_thread,
-        canonical_media: invocation.canonical_media || []
+        research_max_tokens: settings.anthropic_research_max_tokens
       })
 
     subject = PageCopy.subject(invocation, settings)
@@ -433,9 +405,19 @@ defmodule ContextBot.Workers.ResearchWorker do
       invoker_handle: subject.invoker_handle,
       parent_handle: subject.parent_handle,
       document_title: Map.get(result, :document_title),
-      prompt: Map.put(projection.prompt, :reader_url, prompt_doc.reader_url),
-      parameters: projection.parameters,
-      user_message: projection.user_message
+      prompt: %{
+        id: Request.system_prompt_id(),
+        semantic_version: Request.system_prompt_semantic_version(),
+        sha256: Request.system_prompt_sha256(),
+        reader_url: prompt_doc.reader_url
+      },
+      structure_prompt: %{
+        id: Request.structure_prompt_id(),
+        semantic_version: Request.structure_prompt_semantic_version(),
+        sha256: Request.structure_prompt_sha256(),
+        reader_url: structure_doc.reader_url
+      },
+      parameters: projection.parameters
     }
   end
 
