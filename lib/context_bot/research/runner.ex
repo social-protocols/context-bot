@@ -308,28 +308,30 @@ defmodule ContextBot.Research.Runner do
     end
   end
 
-  # Peek at the stored 4xx JSON without the success-path decoder. Anthropic
-  # error.message is the useful dashboard detail; malformed bodies stay silent.
   defp provider_error_message(response) do
-    case response_value(response, :raw_body) do
-      body when is_binary(body) and body != "" ->
-        case Jason.decode(body) do
-          {:ok, %{"error" => %{"message" => message}}} when is_binary(message) ->
-            message
-            |> String.trim()
-            |> case do
-              "" -> nil
-              trimmed -> String.slice(trimmed, 0, 240)
-            end
+    response
+    |> response_value(:raw_body)
+    |> decode_provider_error_message()
+  end
 
-          _invalid ->
-            nil
-        end
-
-      _missing ->
-        nil
+  defp decode_provider_error_message(body) when is_binary(body) and body != "" do
+    case Jason.decode(body) do
+      {:ok, decoded} -> compact_provider_error_message(decoded)
+      _invalid -> nil
     end
   end
+
+  defp decode_provider_error_message(_body), do: nil
+
+  defp compact_provider_error_message(%{"error" => %{"message" => message}})
+       when is_binary(message) do
+    case String.trim(message) do
+      "" -> nil
+      trimmed -> String.slice(trimmed, 0, 240)
+    end
+  end
+
+  defp compact_provider_error_message(_decoded), do: nil
 
   defp retry_http(invocation, response, config) do
     retry_count = recorded_retry_count(invocation)
