@@ -95,7 +95,8 @@ defmodule ContextBot.StandardSite.PageCopy do
   end
 
   @doc """
-  One responding-to line placed above the Claude continue link.
+  One responding-to line placed after the compact Summary and before the
+  research writeup.
 
   Uses a public bsky.app **post** URL for the invocation and, when the
   invocation is a reply with a parseable parent URI, for the parent. Handles

@@ -13,8 +13,9 @@ conversation if we hand them a prefilled new-chat URL.
 
 ## What ships
 
-1. After the Asked block and before `# Research Analysis`, new documents render
-   `[Continue this conversation in Claude](https://claude.ai/new?q=...)`.
+1. New documents render `[Continue this conversation in Claude](https://claude.ai/new?q=...)`
+   immediately before the production metadata (`## How this response was produced`).
+   The compact Summary is first; the responding-to line and writeup follow.
 2. `q=` is a URL-encoded starter that includes
    `https://standard-reader.app/a/{did}/{rkey}` for this document. The rkey is
    allocated before `putRecord`, so the published markdown can name its own URL.
