@@ -292,10 +292,13 @@ defmodule ContextBot.Research.Runner do
     end
   end
 
-  defp classify_http_error(status, _invocation, entry, _response, config)
+  defp classify_http_error(status, _invocation, entry, response, config)
        when status in 400..499 do
     with {:ok, _retained} <- retain_reservation(entry, config) do
-      {:error, :provider_response}
+      case provider_error_message(response) do
+        message when is_binary(message) -> {:error, {:provider_response, message}}
+        nil -> {:error, :provider_response}
+      end
     end
   end
 
@@ -304,6 +307,31 @@ defmodule ContextBot.Research.Runner do
       {:error, :provider_response}
     end
   end
+
+  defp provider_error_message(response) do
+    response
+    |> response_value(:raw_body)
+    |> decode_provider_error_message()
+  end
+
+  defp decode_provider_error_message(body) when is_binary(body) and body != "" do
+    case Jason.decode(body) do
+      {:ok, decoded} -> compact_provider_error_message(decoded)
+      _invalid -> nil
+    end
+  end
+
+  defp decode_provider_error_message(_body), do: nil
+
+  defp compact_provider_error_message(%{"error" => %{"message" => message}})
+       when is_binary(message) do
+    case String.trim(message) do
+      "" -> nil
+      trimmed -> String.slice(trimmed, 0, 240)
+    end
+  end
+
+  defp compact_provider_error_message(_decoded), do: nil
 
   defp retry_http(invocation, response, config) do
     retry_count = recorded_retry_count(invocation)

@@ -75,6 +75,8 @@ defmodule ContextBot.Research.RunnerTest do
     assert Enum.at(request["tools"], 1)["citations"] == %{"enabled" => true}
 
     refute Map.has_key?(structure, "tools")
+    refute Map.has_key?(structure, "thinking")
+    refute get_in(structure, ["thinking", "type"]) == "adaptive"
     assert structure["output_config"]["format"]["type"] == "json_schema"
     assert structure["output_config"]["format"]["schema"] == Request.structure_schema()
 
@@ -377,6 +379,33 @@ defmodule ContextBot.Research.RunnerTest do
       assert [stored] = responses(invocation)
       assert stored.raw_body == body
     end
+  end
+
+  test "surfaces an Anthropic 400 error.message instead of a bare provider_response atom" do
+    invocation = invocation("inv-22-adaptive-thinking")
+
+    body =
+      Jason.encode!(%{
+        "type" => "error",
+        "error" => %{
+          "type" => "invalid_request_error",
+          "message" => "adaptive thinking is not supported on this model"
+        },
+        "request_id" => "req_inv22"
+      })
+
+    Process.put(:runner_client_results, [{:ok, envelope(400, body)}])
+
+    decoder = fn _raw_body -> flunk("non-2xx response body must not use the success decoder") end
+
+    assert {:error, {:provider_response, "adaptive thinking is not supported on this model"}} =
+             Runner.run(invocation, options(decoder: decoder))
+
+    assert_received {:anthropic_call, _request, _metadata, false}
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+    assert [stored] = responses(invocation)
+    assert stored.raw_body == body
+    assert stored.status == 400
   end
 
   test "classifies malformed non-retryable HTTP errors without decoding their bodies" do

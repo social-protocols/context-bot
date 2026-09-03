@@ -774,6 +774,28 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert Repo.aggregate(Oban.Job, :count) == 0
   end
 
+  test "stores an Anthropic 400 error.message in failure_detail instead of repeating provider_response" do
+    invocation = invocation("inv-22-adaptive", :thread_ready)
+
+    configure_runner(
+      {:error, {:provider_response, "adaptive thinking is not supported on this model"}}
+    )
+
+    configure_worker()
+
+    assert :ok = perform(invocation)
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :failed
+    assert persisted.failure_category == :provider_response
+
+    assert persisted.failure_detail == %{
+             "reason" => "adaptive thinking is not supported on this model"
+           }
+
+    assert persisted.completed_at == @now
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
   test "posts the funding notice once when the daily budget is exhausted" do
     invocation = invocation("budget-notice", :thread_ready)
     rollover = ~U[2026-07-30 00:00:00.000000Z]

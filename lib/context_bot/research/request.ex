@@ -381,7 +381,6 @@ defmodule ContextBot.Research.Request do
       "max_tokens" => max_tokens,
       "stream" => false,
       "cache_control" => %{"type" => "ephemeral"},
-      "thinking" => %{"type" => "adaptive"},
       "output_config" => %{
         "effort" => Atom.to_string(effort),
         "format" => %{
