@@ -86,5 +86,12 @@ defmodule ContextBot.Research.InterruptRecoveryTest do
            })
 
     refute InterruptRecovery.published?(%Invocation{reply_uri: nil})
+
+    assert InterruptRecovery.stored_writeup?(%Invocation{
+             full_response: "Stored writeup from research."
+           })
+
+    refute InterruptRecovery.stored_writeup?(%Invocation{full_response: nil})
+    refute InterruptRecovery.stored_writeup?(%Invocation{full_response: ""})
   end
 end

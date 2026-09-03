@@ -84,8 +84,13 @@ defmodule ContextBot.Research.Runner do
     end)
   end
 
-  defp resume_attempt(invocation, nil, config),
-    do: start_attempt(invocation, :research, config)
+  defp resume_attempt(invocation, nil, config) do
+    if structure_from_writeup?(invocation) and structure_request?(invocation) do
+      start_structure_from_writeup(invocation, config)
+    else
+      start_attempt(invocation, :research, config)
+    end
+  end
 
   defp resume_attempt(invocation, %BudgetEntry{state: :reserved} = entry, config) do
     case config.budget.reconcile_attempt(entry, now(config), config.claim_token) do
@@ -114,14 +119,46 @@ defmodule ContextBot.Research.Runner do
        when state in [:sent, :indeterminate] do
     case stored_response(invocation, entry.attempt_key, config) do
       nil -> start_replacement_attempt(invocation, entry, config)
-      response -> process_recorded(invocation, entry, response, config)
+      response -> resume_recorded_response(invocation, entry, response, config)
     end
   end
 
   defp resume_recorded_or_replace(invocation, %BudgetEntry{} = entry, config) do
     case stored_response(invocation, entry.attempt_key, config) do
       nil -> {:error, :invalid_attempt_state}
-      response -> process_recorded(invocation, entry, response, config)
+      response -> resume_recorded_response(invocation, entry, response, config)
+    end
+  end
+
+  defp resume_recorded_response(invocation, entry, response, config) do
+    if structure_from_writeup_resume?(invocation, response) do
+      start_structure_from_writeup(invocation, config)
+    else
+      process_recorded(invocation, entry, response, config)
+    end
+  end
+
+  defp structure_from_writeup_resume?(invocation, response) do
+    status = response_value(response, :status)
+
+    structure_from_writeup?(invocation) and
+      not (is_integer(status) and status in 200..299)
+  end
+
+  defp structure_from_writeup?(%Invocation{} = invocation) do
+    InterruptRecovery.stored_writeup?(invocation) and
+      is_binary(invocation.canonical_thread) and invocation.canonical_thread != ""
+  end
+
+  defp start_structure_from_writeup(invocation, config) do
+    with {:ok, checkpoint} <-
+           persist_research_phase(
+             invocation,
+             invocation.full_response,
+             invocation.citation_sources || [],
+             config
+           ) do
+      start_attempt(checkpoint, :structure, config)
     end
   end
 

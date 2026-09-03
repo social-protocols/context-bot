@@ -5,9 +5,10 @@ defmodule ContextBot.Workflow.Recovery do
   Provider-exposed research is never replayed while its HTTP timeout window is
   still open. After that window, a lost sent-without-envelope attempt stays
   indeterminate and a new reservation may be created. Dry and public invocations
-  always remain on their respective queues. Deterministic parser hard-fails stay
-  failed until an explicit operator reprocess; automatic recovery does not loop
-  them.
+  always remain on their respective queues. A stored research writeup whose last
+  structure or provider call is not a replayable 2xx resumes structure-only from
+  a live `Request.structure/1`. Deterministic parser hard-fails stay failed
+  until an explicit operator reprocess; automatic recovery does not loop them.
   """
 
   import Ecto.Query
@@ -15,7 +16,7 @@ defmodule ContextBot.Workflow.Recovery do
   require Logger
 
   alias ContextBot.Repo
-  alias ContextBot.Research.{Budget, BudgetEntry, InterruptRecovery, ResponseEnvelope}
+  alias ContextBot.Research.{Budget, BudgetEntry, InterruptRecovery, Request, ResponseEnvelope}
   alias ContextBot.Workflow.Invocation
 
   @candidate_stages [
@@ -172,8 +173,7 @@ defmodule ContextBot.Workflow.Recovery do
     Invocation
     |> where(
       [invocation],
-      invocation.stage == :failed and invocation.failure_category == :provider_response and
-        is_nil(invocation.reply_uri)
+      invocation.stage == :failed and is_nil(invocation.reply_uri)
     )
     |> order_by(
       [invocation],
@@ -192,20 +192,33 @@ defmodule ContextBot.Workflow.Recovery do
     |> Repo.one()
   end
 
-  @spec recover_invocation(Invocation.t(), keyword()) :: result()
-  def recover_invocation(%Invocation{id: id}, options \\ []) when is_list(options) do
+  @spec recover_invocation(Invocation.t() | pos_integer(), keyword()) ::
+          result() | {:error, :not_found}
+  def recover_invocation(invocation_or_id, options \\ [])
+
+  def recover_invocation(%Invocation{id: id}, options) when is_list(options) do
+    recover_invocation(id, options)
+  end
+
+  def recover_invocation(id, options)
+      when is_integer(id) and id > 0 and is_list(options) do
     config = config(options)
 
-    {:ok, result} =
+    result =
       Repo.transaction(
         fn ->
-          invocation = Repo.get!(Invocation, id)
-          recover_locked(invocation, config)
+          case Repo.get(Invocation, id) do
+            %Invocation{} = invocation -> recover_locked(invocation, config)
+            nil -> Repo.rollback(:not_found)
+          end
         end,
         mode: :immediate
       )
 
-    result
+    case result do
+      {:ok, recovered} -> recovered
+      {:error, :not_found} -> {:error, :not_found}
+    end
   end
 
   defp recover_locked(%Invocation{stage: :failed} = invocation, config) do
@@ -282,9 +295,12 @@ defmodule ContextBot.Workflow.Recovery do
         mark_checked(invocation, config.now)
         :unchanged
 
+      InterruptRecovery.deterministic_parse_hard_fail?(invocation) ->
+        mark_checked(invocation, config.now)
+        :unchanged
+
       InterruptRecovery.replayable_recorded_response?(invocation) and
-        InterruptRecovery.can_restart_research?(invocation) and
-          not InterruptRecovery.deterministic_parse_hard_fail?(invocation) ->
+          InterruptRecovery.can_restart_research?(invocation) ->
         work = research_work(invocation)
         job = latest_job(invocation, work.worker)
         reopen_for_replay(invocation, job, work, config)
@@ -294,6 +310,11 @@ defmodule ContextBot.Workflow.Recovery do
         work = research_work(invocation)
         job = latest_job(invocation, work.worker)
         recover_research(invocation, job, work, config)
+
+      structure_from_writeup?(invocation) ->
+        work = research_work(invocation)
+        job = latest_job(invocation, work.worker)
+        reopen_for_structure(invocation, job, work, config)
 
       true ->
         mark_checked(invocation, config.now)
@@ -482,6 +503,61 @@ defmodule ContextBot.Workflow.Recovery do
     make_available(job, invocation, work, config.now)
     log_interrupt_recovery(invocation, latest_budget_entry(invocation), :replay_envelope, 0)
     :resumed
+  end
+
+  defp reopen_for_structure(invocation, job, work, config) do
+    case live_structure_request(invocation, config.settings) do
+      {:ok, request} ->
+        invocation
+        |> Invocation.transition_changeset(
+          Map.put(reopen_research_attrs(config.now, :thread_ready), :anthropic_messages, request)
+        )
+        |> Repo.update!()
+
+        make_available(job, invocation, work, config.now)
+        log_interrupt_recovery(invocation, latest_budget_entry(invocation), :resume_structure, 0)
+        :resumed
+
+      :error ->
+        mark_checked(invocation, config.now)
+        :unchanged
+    end
+  end
+
+  defp structure_from_writeup?(%Invocation{} = invocation) do
+    InterruptRecovery.stored_writeup?(invocation) and present_thread?(invocation)
+  end
+
+  defp present_thread?(%Invocation{canonical_thread: thread})
+       when is_binary(thread) and thread != "",
+       do: true
+
+  defp present_thread?(_invocation), do: false
+
+  defp live_structure_request(invocation, settings) do
+    citations = invocation.citation_sources || []
+
+    if structure_from_writeup?(invocation) and is_list(citations) do
+      {:ok,
+       Request.structure(%{
+         model_id: structure_model_id(settings),
+         max_tokens: structure_max_tokens(settings),
+         writeup: invocation.full_response,
+         citations: citations,
+         canonical_thread: invocation.canonical_thread
+       })}
+    else
+      :error
+    end
+  end
+
+  defp structure_model_id(settings) do
+    Map.get(settings, :anthropic_structure_model_id) || settings.anthropic_model_id
+  end
+
+  defp structure_max_tokens(settings) do
+    Map.get(settings, :anthropic_structure_max_tokens) ||
+      settings.anthropic_length_repair_max_tokens
   end
 
   defp reopen_research_attrs(now, stage) do

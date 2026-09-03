@@ -22,6 +22,10 @@ if ! just --summary 2>/dev/null | grep -qw "fly-invocation"; then
 	fail "fly-invocation recipe not found in justfile"
 fi
 
+if ! just --summary 2>/dev/null | grep -qw "fly-recover"; then
+	fail "fly-recover recipe not found in justfile"
+fi
+
 if just --summary 2>/dev/null | grep -qw "fly-dashboard"; then
 	fail "fly-dashboard recipe should be removed; invocations are public on GET /invocations"
 fi
@@ -47,6 +51,20 @@ if [[ -n "$recipe_content" ]]; then
 	[[ "$recipe_content" == *"ContextBot.Repo.start_link"* ]] || fail "fly-reenqueue does not start Repo"
 	[[ "$recipe_content" == *"Reenqueuer.reenqueue"* ]] || fail "fly-reenqueue does not call Reenqueuer"
 	[[ "$recipe_content" != *"Reprocessor.reprocess"* ]] || fail "fly-reenqueue must not call Reprocessor.reprocess"
+fi
+
+# Verify fly-recover recipe structure (without actually executing SSH)
+recipe_content=$(just --show fly-recover 2>/dev/null || echo "")
+if [[ -n "$recipe_content" ]]; then
+	[[ "$recipe_content" == *"fly ssh console"* ]] || fail "fly-recover does not use fly ssh console"
+	[[ "$recipe_content" == *"context-bot-social-protocols"* ]] || fail "fly-recover does not target correct app"
+	[[ "$recipe_content" == *"/app/bin/context_bot"* ]] || fail "fly-recover does not use context_bot eval"
+	[[ "$recipe_content" == *"ContextBot.Repo.start_link"* ]] || fail "fly-recover does not start Repo"
+	[[ "$recipe_content" == *"Recovery.recover_orphans"* ]] || fail "fly-recover does not call Recovery.recover_orphans"
+	[[ "$recipe_content" == *"Recovery.recover_invocation"* ]] || fail "fly-recover does not call Recovery.recover_invocation"
+	[[ "$recipe_content" == *"job_states"* ]] || fail "fly-recover does not pass live-app job-state options"
+	[[ "$recipe_content" != *"Reprocessor.reprocess"* ]] || fail "fly-recover must not call Reprocessor.reprocess"
+	[[ "$recipe_content" != *"Reenqueuer.reenqueue"* ]] || fail "fly-recover must not call Reenqueuer.reenqueue"
 fi
 
 # Verify fly-invocation recipe structure

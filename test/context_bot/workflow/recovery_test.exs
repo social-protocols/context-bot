@@ -3,7 +3,7 @@ defmodule ContextBot.Workflow.RecoveryTest do
 
   import Ecto.Query
 
-  alias ContextBot.Research.{BudgetEntry, ResponseEnvelope}
+  alias ContextBot.Research.{BudgetEntry, Request, ResponseEnvelope}
   alias ContextBot.Settings
   alias ContextBot.Workflow.{Invocation, Recovery}
 
@@ -150,6 +150,101 @@ defmodule ContextBot.Workflow.RecoveryTest do
     assert Repo.aggregate(ResponseEnvelope, :count) == 1
   end
 
+  test "a failed writeup plus 4xx structure envelope resumes a live structure request" do
+    writeup = "Stored writeup from research."
+    citations = [%{"url" => "https://primary.example/report", "cited_text" => "excerpt"}]
+
+    stale_structure = %{
+      "model" => "claude-haiku-4-5",
+      "max_tokens" => 1_024,
+      "thinking" => %{"type" => "adaptive"},
+      "output_config" => %{
+        "effort" => "low",
+        "format" => %{"type" => "json_schema", "schema" => %{}}
+      },
+      "messages" => [%{"role" => "user", "content" => "STRUCTURE_OUTPUT\n\nstale"}]
+    }
+
+    invocation =
+      invocation(:failed, false, "structure-4xx-writeup",
+        failure_category: :provider_response,
+        failure_detail: %{"reason" => "effort is not supported on this model"},
+        canonical_thread: "thread",
+        canonical_thread_version: "1",
+        anthropic_messages: stale_structure,
+        full_response: writeup,
+        citation_sources: citations,
+        completed_at: @now
+      )
+
+    job = executing_job(invocation, "ContextBot.Workers.ResearchWorker", :research)
+
+    job =
+      job |> Ecto.Changeset.change(%{state: "discarded", discarded_at: @now}) |> Repo.update!()
+
+    entry = budget_entry(invocation, :sent, @now, :structure)
+    _envelope = response_envelope(invocation, entry, 400)
+
+    assert :resumed = recover_invocation(invocation, startup?: true)
+    assert {:ok, %{resumed: 0, unchanged: 1}} = recover(startup?: true)
+
+    settings = Settings.load(bot_enabled: false)
+
+    expected =
+      Request.structure(%{
+        model_id: settings.anthropic_structure_model_id,
+        max_tokens: settings.anthropic_structure_max_tokens,
+        writeup: writeup,
+        citations: citations,
+        canonical_thread: "thread"
+      })
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :thread_ready
+    assert persisted.failure_category == nil
+    assert persisted.failure_detail == nil
+    assert persisted.completed_at == nil
+    assert persisted.full_response == writeup
+    assert persisted.citation_sources == citations
+    assert persisted.anthropic_messages == expected
+    refute Map.has_key?(persisted.anthropic_messages, "thinking")
+    refute Map.has_key?(persisted.anthropic_messages["output_config"], "effort")
+    assert persisted.anthropic_messages["output_config"]["format"]["type"] == "json_schema"
+    assert Repo.reload!(entry).state == :sent
+    assert Repo.aggregate(BudgetEntry, :count) == 1
+    assert [replay] = available_research_jobs(invocation)
+    assert replay.id != job.id
+    assert replay.state == "available"
+    assert replay.queue == "research"
+    refute Map.get(replay.args, "new_attempt")
+  end
+
+  test "a published writeup plus 4xx structure envelope stays unpublished" do
+    invocation =
+      invocation(:failed, false, "published-structure-4xx",
+        failure_category: :provider_response,
+        failure_detail: %{"reason" => "effort is not supported on this model"},
+        canonical_thread: "thread",
+        canonical_thread_version: "1",
+        anthropic_messages: %{"model" => "claude-haiku-4-5", "messages" => []},
+        full_response: "Stored writeup from research.",
+        citation_sources: [%{"url" => "https://primary.example/report"}],
+        reply_uri: "at://did:plc:bot/app.bsky.feed.post/already",
+        reply_cid: "bafy-already",
+        completed_at: @now
+      )
+
+    entry = budget_entry(invocation, :sent, @now, :structure)
+    _envelope = response_envelope(invocation, entry, 400)
+
+    assert :unchanged = recover_invocation(invocation, startup?: true)
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :failed
+    assert persisted.reply_uri == "at://did:plc:bot/app.bsky.feed.post/already"
+    assert persisted.full_response == "Stored writeup from research."
+    assert available_research_jobs(invocation) == []
+  end
+
   test "a failed structure-parse envelope stays failed without automatic replay" do
     invocation =
       invocation(:failed, true, "structure-parse-failure",
@@ -158,6 +253,8 @@ defmodule ContextBot.Workflow.RecoveryTest do
         canonical_thread: "thread",
         canonical_thread_version: "1",
         anthropic_messages: %{"model" => "claude-sonnet-5", "messages" => []},
+        full_response: "Stored writeup from research.",
+        citation_sources: [%{"url" => "https://primary.example/report"}],
         completed_at: @now
       )
 
@@ -251,6 +348,8 @@ defmodule ContextBot.Workflow.RecoveryTest do
         canonical_thread: "thread",
         canonical_thread_version: "1",
         anthropic_messages: %{"model" => "claude-sonnet-5", "messages" => []},
+        full_response: "Stored writeup from research.",
+        citation_sources: [%{"url" => "https://primary.example/report"}],
         completed_at: @now
       )
 
@@ -270,6 +369,7 @@ defmodule ContextBot.Workflow.RecoveryTest do
     assert persisted.failure_category == :provider_response
     assert persisted.failure_detail == %{"reason" => "invalid_structured_output"}
     assert persisted.completed_at == @now
+    assert persisted.full_response == "Stored writeup from research."
     assert available_research_jobs(invocation) == []
     assert Repo.aggregate(BudgetEntry, :count) == 1
     assert Repo.aggregate(ResponseEnvelope, :count) == 1
@@ -521,6 +621,14 @@ defmodule ContextBot.Workflow.RecoveryTest do
     assert Repo.reload!(thread_job).queue == "dry_thread"
   end
 
+  test "recover_invocation by missing id is not_found" do
+    assert {:error, :not_found} =
+             Recovery.recover_invocation(9_999_999,
+               now: @now,
+               settings: Settings.load(bot_enabled: false)
+             )
+  end
+
   test "deferred and terminal invocations remain unchanged" do
     deferred = invocation(:deferred_budget, false, "deferred")
     complete = invocation(:complete, true, "complete")
@@ -687,17 +795,23 @@ defmodule ContextBot.Workflow.RecoveryTest do
     |> Repo.insert!()
   end
 
-  defp response_envelope(invocation, entry) do
-    raw_body = ~s({"type":"message"})
-    metadata_blob = :erlang.term_to_binary(%{status: 200, attempt_key: entry.attempt_key})
+  defp response_envelope(invocation, entry, status \\ 200) do
+    raw_body =
+      if status in 200..299 do
+        ~s({"type":"message"})
+      else
+        ~s({"error":{"type":"invalid_request_error","message":"effort is not supported on this model"}})
+      end
+
+    metadata_blob = :erlang.term_to_binary(%{status: status, attempt_key: entry.attempt_key})
 
     %ResponseEnvelope{}
     |> ResponseEnvelope.changeset(%{
       invocation_id: invocation.id,
       budget_entry_id: entry.id,
       attempt_key: entry.attempt_key,
-      kind: :research,
-      status: 200,
+      kind: entry.kind,
+      status: status,
       metadata_blob: metadata_blob,
       raw_body: raw_body,
       received_at: @now,
