@@ -1230,6 +1230,74 @@ defmodule ContextBot.Research.RunnerTest do
     assert result.usage["tool_use_counts"] == %{"web_fetch" => 1, "web_search" => 0}
   end
 
+  test "a stored writeup plus 4xx structure envelope starts a live structure call" do
+    writeup = "Stored writeup from research."
+    citations = [%{"url" => "https://primary.example/report", "cited_text" => "excerpt"}]
+
+    stale_structure = %{
+      "model" => "claude-haiku-4-5",
+      "max_tokens" => 1_024,
+      "thinking" => %{"type" => "adaptive"},
+      "output_config" => %{
+        "effort" => "low",
+        "format" => %{"type" => "json_schema", "schema" => %{}}
+      },
+      "messages" => [%{"role" => "user", "content" => "STRUCTURE_OUTPUT\n\nstale"}]
+    }
+
+    invocation =
+      invocation("structure-4xx-resume", %{
+        anthropic_messages: stale_structure,
+        anthropic_attempt_sequence: 1,
+        full_response: writeup,
+        citation_sources: citations
+      })
+
+    entry =
+      %BudgetEntry{}
+      |> BudgetEntry.changeset(%{
+        attempt_key: "invocation-#{invocation.id}-attempt-1-structure",
+        invocation_id: invocation.id,
+        budget_date: DateTime.to_date(@now),
+        kind: :structure,
+        reserved_microdollars: 100_000,
+        state: :sent,
+        sent_at: @now,
+        response_recorded_at: @now,
+        research_claim_token: @claim_token
+      })
+      |> Repo.insert!()
+
+    prepared =
+      ResponseEnvelope.prepare(
+        envelope(
+          400,
+          ~s({"error":{"type":"invalid_request_error","message":"effort is not supported on this model"}})
+        ),
+        %{attempt_key: entry.attempt_key, kind: :structure}
+      )
+
+    %ResponseEnvelope{}
+    |> ResponseEnvelope.changeset(Map.put(prepared, :invocation_id, invocation.id))
+    |> ResponseEnvelope.changeset(%{budget_entry_id: entry.id})
+    |> Repo.insert!()
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, fixture("structure_success.json"))}
+    ])
+
+    assert {:ok, result} = Runner.run(Repo.reload!(invocation), options())
+    assert result.full_response == writeup
+    assert_received {:anthropic_call, structure, %{kind: :structure}, false}
+    assert Request.structure_request?(structure)
+    refute Map.has_key?(structure, "thinking")
+    refute Map.has_key?(structure["output_config"], "effort")
+    assert structure["output_config"]["format"]["type"] == "json_schema"
+    assert structure["messages"] |> hd() |> Map.get("content") =~ writeup
+    refute_received {:anthropic_call, _request, %{kind: :research}, _in_transaction}
+    assert length(responses(invocation)) == 2
+  end
+
   test "operator force_new_attempt starts a new POST instead of replaying a failed code_execution envelope" do
     invocation = invocation("code-exec-new-attempt")
     fixture = decoded_fixture("tool_success.json")

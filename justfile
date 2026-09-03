@@ -80,6 +80,11 @@ reprocess invocation_id:
 reenqueue invocation_id:
     mix context_bot.reenqueue {{quote(invocation_id)}}
 
+# Recover failed invocations using the same Recovery path as boot. May publish a Bluesky reply.
+[positional-arguments]
+recover *args:
+    mix context_bot.recover {{args}}
+
 # Reprocess one production invocation from its retained response. May publish a Bluesky reply.
 fly-reprocess invocation_id:
     #!/usr/bin/env bash
@@ -120,6 +125,44 @@ fly-reenqueue invocation_id:
     {:ok, _} = ContextBot.Repo.start_link()
     IO.inspect(ContextBot.Workflow.Reenqueuer.reenqueue({{quote(invocation_id)}}, now: DateTime.utc_now()))
     "'
+
+# Recover failed production invocations using the same Recovery path as boot. May publish a Bluesky reply.
+# With no id, scans the same abandoned and failed rows as startup. With one id, recovers that row.
+# Uses runtime job-states so discarded parked rows resume on a live app.
+[positional-arguments]
+fly-recover *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    if [[ $# -gt 1 ]]; then
+      printf 'Error: expected no arguments or one positive integer invocation ID\n' >&2
+      exit 1
+    fi
+
+    if [[ $# -eq 1 ]] && ! [[ "$1" =~ ^[1-9][0-9]*$ ]]; then
+      printf 'Error: expected no arguments or one positive integer invocation ID\n' >&2
+      exit 1
+    fi
+
+    if ! fly status -a context-bot-social-protocols 2>/dev/null | grep -q "started"; then
+      printf 'Fly machine is not running. Starting it...\n' >&2
+      fly machine start -a context-bot-social-protocols
+      sleep 3
+    fi
+
+    if [[ $# -eq 0 ]]; then
+      target='ContextBot.Workflow.Recovery.recover_orphans(now: DateTime.utc_now(), job_states: ~w(executing completed cancelled discarded))'
+    else
+      target="ContextBot.Workflow.Recovery.recover_invocation($1, now: DateTime.utc_now())"
+    fi
+
+    fly ssh console -a context-bot-social-protocols --command "/app/bin/context_bot eval \"
+    Application.ensure_all_started(:ssl)
+    Application.load(:context_bot)
+    Application.ensure_all_started(:ecto_sqlite3)
+    {:ok, _} = ContextBot.Repo.start_link()
+    IO.inspect(${target})
+    \""
 
 # Query production invocation status by ID
 fly-invocation invocation_id:
