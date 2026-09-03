@@ -24,7 +24,42 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       assert selected.disposition == :reply
     end
 
-    test "concatenates split JSON text blocks before decoding" do
+    test "selects the last valid structured object after a json_schema placeholder" do
+      final =
+        StructuredFixtures.structured_json("Short summary for Bluesky",
+          title: "Fact-Checking the Texas 'Suspense List' Op-Ed",
+          full: "Full writeup with sources."
+        )
+
+      content = [
+        %{"type" => "text", "text" => json_schema_placeholder()},
+        %{"type" => "text", "text" => final}
+      ]
+
+      assert {:ok, selected} = Reply.select(content, :end_turn)
+      assert selected.text == "Short summary for Bluesky"
+      assert selected.full_response == "Full writeup with sources."
+      assert selected.document_title == "Fact-Checking the Texas 'Suspense List' Op-Ed"
+      assert selected.disposition == :reply
+    end
+
+    test "fails closed when every text block is a placeholder or otherwise invalid" do
+      for content <- [
+            [%{"type" => "text", "text" => json_schema_placeholder()}],
+            [
+              %{"type" => "text", "text" => json_schema_placeholder()},
+              %{"type" => "text", "text" => "Just a regular reply without JSON"}
+            ],
+            [
+              %{"type" => "text", "text" => json_schema_placeholder()},
+              %{"type" => "text", "text" => ~s({"title":"Bird","compact_reply":"Short"})}
+            ]
+          ] do
+        assert Reply.select(content, :end_turn) == {:error, :invalid_structured_output}
+      end
+    end
+
+    test "does not concatenate split JSON fragments across text blocks" do
       encoded =
         StructuredFixtures.structured_json("Short summary for Bluesky",
           title: "Context Bot Launch",
@@ -38,10 +73,46 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
         %{"type" => "text", "text" => second}
       ]
 
-      assert {:ok, selected} = Reply.select(content, :end_turn)
+      assert Reply.select(content, :end_turn) == {:error, :invalid_structured_output}
+    end
+
+    test "ignores extra JSON keys when the required structured fields are valid" do
+      text =
+        Jason.encode!(%{
+          "disposition" => "reply",
+          "title" => "What Is That Bird?",
+          "compact_reply" => "Short summary for Bluesky",
+          "full_response" => "Writeup.",
+          "confidence" => 0.9,
+          "notes" => "extra"
+        })
+
+      assert {:ok, selected} =
+               Reply.select([%{"type" => "text", "text" => text}], :end_turn)
+
       assert selected.text == "Short summary for Bluesky"
-      assert selected.full_response == "Full writeup"
-      assert selected.document_title == "Context Bot Launch"
+      assert selected.full_response == "Writeup."
+      assert selected.document_title == "What Is That Bird?"
+      assert selected.disposition == :reply
+    end
+
+    test "an over-cap compact after a placeholder still pack-first splits" do
+      long_compact = String.duplicate("a", 301)
+
+      content = [
+        %{"type" => "text", "text" => json_schema_placeholder()},
+        %{
+          "type" => "text",
+          "text" =>
+            StructuredFixtures.structured_json(long_compact,
+              title: "Overlong Reply",
+              full: "Full response here"
+            )
+        }
+      ]
+
+      assert {:repairable, ^long_compact, [:too_many_graphemes]} =
+               Reply.select(content, :end_turn)
     end
 
     test "fails closed when the model returns prose instead of JSON" do
@@ -265,6 +336,31 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
   end
 
   describe "full_response_from_messages/1 and document_title_from_messages/1" do
+    test "recovers writeup and title from the last valid object after a placeholder" do
+      messages = %{
+        "messages" => [
+          %{"role" => "user", "content" => "thread"},
+          %{
+            "role" => "assistant",
+            "content" => [
+              %{"type" => "text", "text" => json_schema_placeholder()},
+              %{
+                "type" => "text",
+                "text" =>
+                  StructuredFixtures.structured_json("Too long compact",
+                    title: "What Is That Bird?",
+                    full: "Thorough markdown writeup."
+                  )
+              }
+            ]
+          }
+        ]
+      }
+
+      assert Reply.full_response_from_messages(messages) == "Thorough markdown writeup."
+      assert Reply.document_title_from_messages(messages) == "What Is That Bird?"
+    end
+
     test "returns the writeup and title from an earlier structured assistant turn" do
       messages = %{
         "messages" => [
@@ -311,5 +407,10 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
   # After Jason.decode, a model-written JSON `\\uXXXX` is the six characters `\uXXXX`.
   defp leftover_unicode_escape(hex) when is_binary(hex) and byte_size(hex) == 4 do
     "\\u#{hex}"
+  end
+
+  # Anthropic json_schema mid-turn placeholder observed on invocation 22.
+  defp json_schema_placeholder do
+    ~s({"compact_reply":"","disposition":"reply","full_response":"","title":"placeholder"})
   end
 end

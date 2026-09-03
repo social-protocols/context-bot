@@ -54,7 +54,10 @@ defmodule ContextBot.Research.Reply do
           | {:error, reason()}
 
   @doc """
-  Concatenates final model-authored text in order and classifies it for publication or local split.
+  Classifies the last valid structured JSON object among model-authored text blocks.
+
+  Mid-turn `json_schema` placeholders are ignored. Text blocks are decoded independently;
+  they are never concatenated into one JSON string. Missing or invalid final JSON fails closed.
 
   A bare stop reason means there are no server-tool calls pending from an earlier response. For a
   continued `pause_turn`, pass `%{stop_reason: reason, pending_server_tools: %{id => name}}` so a
@@ -362,8 +365,8 @@ defmodule ContextBot.Research.Reply do
   defp select_response(content_blocks, stop_reason, pending_server_tools, seen_tool_ids)
        when is_list(content_blocks) and stop_reason in ["end_turn", :end_turn] do
     case content_text(content_blocks, pending_server_tools, seen_tool_ids) do
-      {:ok, text} ->
-        classify_text(text)
+      {:ok, texts} ->
+        classify_texts(texts)
 
       {:error, reason} ->
         {:error, reason}
@@ -404,8 +407,8 @@ defmodule ContextBot.Research.Reply do
       &collect_block/2
     )
     |> case do
-      {:ok, text, pending, _prior_pending, _seen_tool_ids} when map_size(pending) == 0 ->
-        {:ok, text |> Enum.reverse() |> IO.iodata_to_binary()}
+      {:ok, texts, pending, _prior_pending, _seen_tool_ids} when map_size(pending) == 0 ->
+        {:ok, Enum.reverse(texts)}
 
       {:ok, _text, _pending, _prior_pending, _seen_tool_ids} ->
         {:error, :pending_tool_use}
@@ -825,45 +828,69 @@ defmodule ContextBot.Research.Reply do
   defp structured_field_from_messages(_messages, _field), do: nil
 
   defp assistant_structured(%{"role" => "assistant", "content" => content}) do
-    case parse_structured_response(assistant_plain_text(content)) do
+    case last_structured_parse(text_block_strings(content)) do
       {:ok, %{disposition: :no_reply}} -> :invalid
       {:ok, selected} -> {:ok, selected}
       {:title_rewrite, selected} -> {:ok, selected}
       :invalid -> :invalid
+      :empty -> :invalid
     end
   end
 
   defp assistant_structured(_message), do: :invalid
 
-  defp assistant_plain_text(content) when is_binary(content), do: content
-
   defp assistant_plain_text(content) when is_list(content) do
     content
-    |> Enum.flat_map(fn
-      %{"type" => "text", "text" => text} when is_binary(text) -> [text]
-      _block -> []
-    end)
+    |> text_block_strings()
     |> IO.iodata_to_binary()
   end
 
-  defp assistant_plain_text(_content), do: ""
+  defp text_block_strings(content) when is_binary(content), do: [content]
 
-  defp classify_text(text) do
-    case String.trim(text) do
-      "" ->
+  defp text_block_strings(content) when is_list(content) do
+    Enum.flat_map(content, fn
+      %{"type" => "text", "text" => text} when is_binary(text) -> [text]
+      _block -> []
+    end)
+  end
+
+  defp text_block_strings(_content), do: []
+
+  defp classify_texts(texts) when is_list(texts) do
+    case last_structured_parse(texts) do
+      :empty ->
         {:error, :empty_reply}
 
-      nonempty ->
-        case parse_structured_response(nonempty) do
-          {:ok, selected} ->
-            classify_structured(selected)
+      :invalid ->
+        {:error, :invalid_structured_output}
 
-          {:title_rewrite, selected} ->
-            {:title_rewrite, selected}
+      {:ok, selected} ->
+        classify_structured(selected)
 
-          :invalid ->
-            {:error, :invalid_structured_output}
-        end
+      {:title_rewrite, selected} ->
+        {:title_rewrite, selected}
+    end
+  end
+
+  defp last_structured_parse(texts) when is_list(texts) do
+    texts
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> last_nonempty_structured_parse()
+  end
+
+  defp last_nonempty_structured_parse([]), do: :empty
+
+  defp last_nonempty_structured_parse(candidates) do
+    candidates
+    |> Enum.reverse()
+    |> Enum.find_value(:invalid, &structured_parse_or_skip/1)
+  end
+
+  defp structured_parse_or_skip(text) do
+    case parse_structured_response(text) do
+      :invalid -> nil
+      result -> result
     end
   end
 
