@@ -8,10 +8,11 @@ defmodule ContextBot.Research.InterruptRecovery do
   may be created. That can double-charge if Anthropic later completed the first
   call; a clean drain should make that rare.
 
-  Automatic recover_failed reopens interruptions and locally retryable envelope
-  work. It does not reopen deterministic parser hard-fails; those stay failed
-  until an operator reprocess. `code_execution_failed` reprocess starts a new
-  paid attempt instead of replaying the failed envelope.
+  Automatic recover_failed reopens interruptions, locally retryable envelope
+  work, and a stored research writeup whose last structure or provider call is
+  not a replayable 2xx. It does not reopen deterministic parser hard-fails;
+  those stay failed until an operator reprocess. `code_execution_failed`
+  reprocess starts a new paid attempt instead of replaying the failed envelope.
   """
 
   import Ecto.Query
@@ -75,6 +76,13 @@ defmodule ContextBot.Research.InterruptRecovery do
   @spec published?(Invocation.t()) :: boolean()
   def published?(%Invocation{reply_uri: uri}) when is_binary(uri) and uri != "", do: true
   def published?(_invocation), do: false
+
+  @spec stored_writeup?(Invocation.t()) :: boolean()
+  def stored_writeup?(%Invocation{full_response: writeup})
+      when is_binary(writeup) and writeup != "",
+      do: true
+
+  def stored_writeup?(_invocation), do: false
 
   @spec can_restart_research?(Invocation.t()) :: boolean()
   def can_restart_research?(%Invocation{
