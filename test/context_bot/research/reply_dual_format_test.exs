@@ -51,7 +51,7 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
             ],
             [
               %{"type" => "text", "text" => json_schema_placeholder()},
-              %{"type" => "text", "text" => ~s({"title":"Bird","compact_reply":"Short"})}
+              %{"type" => "text", "text" => ~s({"title":"Bird"})}
             ]
           ] do
         assert Reply.select(content, :end_turn) == {:error, :invalid_structured_output}
