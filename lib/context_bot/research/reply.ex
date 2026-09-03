@@ -873,24 +873,24 @@ defmodule ContextBot.Research.Reply do
   end
 
   defp last_structured_parse(texts) when is_list(texts) do
-    candidates =
-      texts
-      |> Enum.map(&String.trim/1)
-      |> Enum.reject(&(&1 == ""))
+    texts
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> last_nonempty_structured_parse()
+  end
 
-    case candidates do
-      [] ->
-        :empty
+  defp last_nonempty_structured_parse([]), do: :empty
 
-      _nonempty ->
-        candidates
-        |> Enum.reverse()
-        |> Enum.find_value(:invalid, fn text ->
-          case parse_structured_response(text) do
-            :invalid -> nil
-            result -> result
-          end
-        end)
+  defp last_nonempty_structured_parse(candidates) do
+    candidates
+    |> Enum.reverse()
+    |> Enum.find_value(:invalid, &structured_parse_or_skip/1)
+  end
+
+  defp structured_parse_or_skip(text) do
+    case parse_structured_response(text) do
+      :invalid -> nil
+      result -> result
     end
   end
 
