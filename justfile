@@ -77,6 +77,9 @@ live-run invocation_url:
 reprocess invocation_id:
     mix context_bot.reprocess {{quote(invocation_id)}}
 
+reenqueue invocation_id:
+    mix context_bot.reenqueue {{quote(invocation_id)}}
+
 # Reprocess one production invocation from its retained response. May publish a Bluesky reply.
 fly-reprocess invocation_id:
     #!/usr/bin/env bash
@@ -95,6 +98,27 @@ fly-reprocess invocation_id:
     Application.ensure_all_started(:ecto_sqlite3)
     {:ok, _} = ContextBot.Repo.start_link()
     IO.inspect(ContextBot.Workflow.Reprocessor.reprocess({{quote(invocation_id)}}, now: DateTime.utc_now()))
+    "'
+
+# Reenqueue one production invocation as a fresh two-phase research run. May publish a Bluesky reply.
+# Use this when fly-reprocess would replay a 400 or an obsolete request body.
+fly-reenqueue invocation_id:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Check if machine is running (auto_start_machines may be enabled, but explicit start is safer)
+    if ! fly status -a context-bot-social-protocols 2>/dev/null | grep -q "started"; then
+      printf 'Fly machine is not running. Starting it...\n' >&2
+      fly machine start -a context-bot-social-protocols
+      sleep 3
+    fi
+    
+    fly ssh console -a context-bot-social-protocols --command '/app/bin/context_bot eval "
+    Application.ensure_all_started(:ssl)
+    Application.load(:context_bot)
+    Application.ensure_all_started(:ecto_sqlite3)
+    {:ok, _} = ContextBot.Repo.start_link()
+    IO.inspect(ContextBot.Workflow.Reenqueuer.reenqueue({{quote(invocation_id)}}, now: DateTime.utc_now()))
     "'
 
 # Query production invocation status by ID

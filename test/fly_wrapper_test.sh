@@ -14,6 +14,10 @@ if ! just --summary 2>/dev/null | grep -qw "fly-reprocess"; then
 	fail "fly-reprocess recipe not found in justfile"
 fi
 
+if ! just --summary 2>/dev/null | grep -qw "fly-reenqueue"; then
+	fail "fly-reenqueue recipe not found in justfile"
+fi
+
 if ! just --summary 2>/dev/null | grep -qw "fly-invocation"; then
 	fail "fly-invocation recipe not found in justfile"
 fi
@@ -32,6 +36,17 @@ if [[ -n "$recipe_content" ]]; then
 	[[ "$recipe_content" == *"/app/bin/context_bot"* ]] || fail "fly-reprocess does not use context_bot eval"
 	[[ "$recipe_content" == *"ContextBot.Repo.start_link"* ]] || fail "fly-reprocess does not start Repo"
 	[[ "$recipe_content" == *"Reprocessor.reprocess"* ]] || fail "fly-reprocess does not call Reprocessor"
+fi
+
+# Verify fly-reenqueue recipe structure (without actually executing SSH)
+recipe_content=$(just --show fly-reenqueue 2>/dev/null || echo "")
+if [[ -n "$recipe_content" ]]; then
+	[[ "$recipe_content" == *"fly ssh console"* ]] || fail "fly-reenqueue does not use fly ssh console"
+	[[ "$recipe_content" == *"context-bot-social-protocols"* ]] || fail "fly-reenqueue does not target correct app"
+	[[ "$recipe_content" == *"/app/bin/context_bot"* ]] || fail "fly-reenqueue does not use context_bot eval"
+	[[ "$recipe_content" == *"ContextBot.Repo.start_link"* ]] || fail "fly-reenqueue does not start Repo"
+	[[ "$recipe_content" == *"Reenqueuer.reenqueue"* ]] || fail "fly-reenqueue does not call Reenqueuer"
+	[[ "$recipe_content" != *"Reprocessor.reprocess"* ]] || fail "fly-reenqueue must not call Reprocessor.reprocess"
 fi
 
 # Verify fly-invocation recipe structure
