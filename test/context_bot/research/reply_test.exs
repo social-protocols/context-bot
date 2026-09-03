@@ -7,6 +7,40 @@ defmodule ContextBot.Research.ReplyTest do
   alias ContextBot.Research.StructuredFixtures
   alias Unicode.String.Segment
 
+  test "select_writeup/2 joins text blocks into one trimmed writeup and keeps citations" do
+    content = [
+      %{
+        "type" => "text",
+        "text" => "  Useful context ",
+        "citations" => [
+          %{
+            "type" => "web_search_result_location",
+            "url" => "https://primary.example/report",
+            "cited_text" => "exact excerpt"
+          }
+        ]
+      },
+      %{
+        "type" => "text",
+        "text" => "from primary sources.  ",
+        "citations" => [
+          %{
+            "type" => "web_search_result_location",
+            "url" => "https://second.example/page"
+          }
+        ]
+      }
+    ]
+
+    assert {:ok, writeup} = Reply.select_writeup(content, :end_turn)
+    assert writeup.text == "Useful context from primary sources."
+
+    assert writeup.citations == [
+             %{"url" => "https://primary.example/report", "cited_text" => "exact excerpt"},
+             %{"url" => "https://second.example/page"}
+           ]
+  end
+
   test "accepts ordered model text at exactly 300 graphemes and 3,000 bytes" do
     reply =
       String.duplicate("👩‍💻", 268) <>

@@ -393,10 +393,10 @@ defmodule ContextBot.Research.Reply do
   defp select_writeup_response(content_blocks, stop_reason, pending_server_tools, seen_tool_ids)
        when is_list(content_blocks) and stop_reason in ["end_turn", :end_turn] do
     case content_text(content_blocks, pending_server_tools, seen_tool_ids) do
-      {:ok, text} ->
+      {:ok, texts} when is_list(texts) ->
         {:ok,
          %{
-           text: String.trim(text),
+           text: texts |> Enum.join() |> String.trim(),
            citations: Citations.from_content(content_blocks)
          }}
 
