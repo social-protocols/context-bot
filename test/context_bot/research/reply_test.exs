@@ -7,6 +7,16 @@ defmodule ContextBot.Research.ReplyTest do
   alias ContextBot.Research.StructuredFixtures
   alias Unicode.String.Segment
 
+  test "select_writeup/2 joins text blocks into one trimmed writeup" do
+    content = [
+      %{"type" => "text", "text" => "  Useful context "},
+      %{"type" => "text", "text" => "from primary sources.  "}
+    ]
+
+    assert {:ok, writeup} = Reply.select_writeup(content, :end_turn)
+    assert writeup.text == "Useful context from primary sources."
+  end
+
   test "accepts ordered model text at exactly 300 graphemes and 3,000 bytes" do
     reply =
       String.duplicate("👩‍💻", 268) <>
