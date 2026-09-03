@@ -13,8 +13,11 @@ defmodule ContextBot.Research.Citations do
 
   @sources_heading ~r/^(\#{1,6})[ \t]+Sources[ \t]*:?[ \t]*$/i
   @atx_heading ~r/^(\#{1,6})[ \t]+\S/
-  @leading_markers ~r/\A((?:\[\d+\])+)/u
-  @marker_number ~r/\[(\d+)\]/u
+  @bold_sources_label ~r/\A[ \t]*\*\*Sources:?\*\*:?[ \t]*/i
+  @plain_sources_label ~r/\A[ \t]*Sources:[ \t]*/i
+  @plain_sources_heading ~r/\A[ \t]*Sources[ \t]*\z/i
+  @leading_markers ~r/\A((?:\[\[\d+\]\]\(#source-\d+\)|\[\d+\])+)/u
+  @marker_number ~r/\[\[(\d+)\]\]\(#source-\d+\)|\[(\d+)\]/u
   @max_title_graphemes 80
 
   @spec from_content([map()]) :: [citation()]
@@ -37,12 +40,12 @@ defmodule ContextBot.Research.Citations do
   def urls(_records), do: []
 
   @doc """
-  Returns the research writeup with inline `[n]` markers after each cited span
-  or `cited_text` match, and exactly one titled Sources list.
+  Returns the research writeup with inline `[[n]](#source-n)` markers after each
+  cited span or `cited_text` match, and exactly one titled Sources list.
 
-  Same allowlisted URL reuses the same number. A model-written Sources section
-  is replaced. GFM `[^n]` footnotes are never emitted. URLs are taken only
-  from citation objects.
+  Same allowlisted URL reuses the same number. A model-written ATX Sources
+  section or trailing Sources paragraph is replaced. GFM `[^n]` footnotes are
+  never emitted. URLs are taken only from citation objects.
   """
   @spec publishable_writeup(String.t(), [citation()]) :: String.t()
   def publishable_writeup(writeup, records) when is_binary(writeup) and is_list(records) do
@@ -50,10 +53,10 @@ defmodule ContextBot.Research.Citations do
     numbered = number_allowlisted(records)
 
     if numbered == [] do
-      strip_sources_sections(trimmed)
+      strip_model_written_sources(trimmed)
     else
       trimmed
-      |> strip_sources_sections()
+      |> strip_model_written_sources()
       |> insert_markers(numbered)
       |> append_sources(unique_sources(numbered))
     end
@@ -231,7 +234,7 @@ defmodule ContextBot.Research.Citations do
   end
 
   defp needles_for(value) when is_binary(value) and value != "" do
-    [value, String.trim(value), strip_sources_sections(value)]
+    [value, String.trim(value), strip_model_written_sources(value)]
     |> Enum.reject(&(&1 == ""))
     |> Enum.uniq()
   end
@@ -256,7 +259,7 @@ defmodule ContextBot.Research.Citations do
     {left, right} = String.split_at(text, idx)
     {existing, existing_len} = leading_marker_numbers(right)
     missing = Enum.reject(numbers, &(&1 in existing))
-    markers = Enum.map_join(missing, fn number -> "[#{number}]" end)
+    markers = Enum.map_join(missing, &source_marker/1)
     {before, after_existing} = String.split_at(right, existing_len)
 
     {left <> before <> markers <> after_existing, existing_len + String.length(markers)}
@@ -268,7 +271,7 @@ defmodule ContextBot.Research.Citations do
         numbers =
           @marker_number
           |> Regex.scan(run)
-          |> Enum.map(fn [_, number] -> String.to_integer(number) end)
+          |> Enum.map(&marker_number/1)
 
         {numbers, String.length(run)}
 
@@ -277,12 +280,72 @@ defmodule ContextBot.Research.Citations do
     end
   end
 
+  defp marker_number([_match | captures]) do
+    captures
+    |> Enum.find(&present?/1)
+    |> String.to_integer()
+  end
+
+  defp source_marker(number), do: "[[#{number}]](#source-#{number})"
+
+  defp source_anchor_id(number), do: "source-#{number}"
+
+  defp strip_model_written_sources(text) when is_binary(text) do
+    text
+    |> strip_sources_sections()
+    |> strip_trailing_sources_paragraph()
+  end
+
   defp strip_sources_sections(text) when is_binary(text) do
     text
     |> String.split("\n")
     |> drop_sources_sections([])
     |> Enum.join("\n")
     |> String.trim()
+  end
+
+  defp strip_trailing_sources_paragraph(text) do
+    lines = String.split(text, "\n")
+
+    case last_sources_label_index(lines) do
+      nil ->
+        text
+
+      index ->
+        {keep, drop} = Enum.split(lines, index)
+
+        if later_paragraph?(drop) do
+          text
+        else
+          keep |> Enum.join("\n") |> String.trim()
+        end
+    end
+  end
+
+  defp last_sources_label_index(lines) do
+    lines
+    |> Enum.with_index()
+    |> Enum.reduce(nil, fn {line, index}, acc ->
+      if sources_label_line?(line), do: index, else: acc
+    end)
+  end
+
+  defp later_paragraph?([_label | rest]) do
+    rest
+    |> Enum.drop_while(&(not blank_line?(&1)))
+    |> Enum.any?(&(not blank_line?(&1)))
+  end
+
+  defp later_paragraph?([]), do: false
+
+  defp blank_line?(line), do: String.trim(strip_cr(line)) == ""
+
+  defp sources_label_line?(line) do
+    stripped = strip_cr(line)
+
+    Regex.match?(@bold_sources_label, stripped) or
+      Regex.match?(@plain_sources_label, stripped) or
+      Regex.match?(@plain_sources_heading, stripped)
   end
 
   defp drop_sources_sections([], acc), do: Enum.reverse(acc)
@@ -328,12 +391,13 @@ defmodule ContextBot.Research.Citations do
   defp strip_cr(line), do: String.trim_trailing(line, "\r")
 
   defp append_sources(text, sources) do
-    list =
-      Enum.map_join(sources, "\n", fn {number, url, title} ->
-        "#{number}. [#{escape_link_text(title)}](#{url})"
-      end)
+    list = Enum.map_join(sources, "\n", &source_list_item/1)
 
     text <> "\n\n## Sources\n\n" <> list
+  end
+
+  defp source_list_item({number, url, title}) do
+    "#{number}. <a id=\"#{source_anchor_id(number)}\"></a>[#{escape_link_text(title)}](#{url})"
   end
 
   defp escape_link_text(title) do

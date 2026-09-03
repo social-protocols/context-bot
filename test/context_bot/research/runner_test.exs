@@ -203,11 +203,11 @@ defmodule ContextBot.Research.RunnerTest do
 
     assert result.full_response ==
              """
-             Useful context from primary sources.[1]
+             Useful context from primary sources.[[1]](#source-1)
 
              ## Sources
 
-             1. [Primary report](https://primary.example/report)
+             1. <a id="source-1"></a>[Primary report](https://primary.example/report)
              """
              |> String.trim()
 
@@ -1645,11 +1645,11 @@ defmodule ContextBot.Research.RunnerTest do
 
     assert result.full_response ==
              """
-             Thorough markdown writeup. See https://primary.example/report[1]
+             Thorough markdown writeup. See https://primary.example/report[[1]](#source-1)
 
              ## Sources
 
-             1. [source excerpt](https://primary.example/report)
+             1. <a id="source-1"></a>[source excerpt](https://primary.example/report)
              """
              |> String.trim()
 
