@@ -115,7 +115,7 @@ Cursor cloud agents set `core.hooksPath=.githooks` during environment setup. The
 
 ## Cursor Cloud specific instructions
 
-After boot, rebase a feature branch onto `origin/main` before editing. Do not assume start’s fetch has finished if you need `origin/main` immediately — wait for it, or fetch once if refs are stale. Do not assume the VM checkout or Cursor Build snapshot is current. Fetch and rebase again before opening or updating a PR if `main` has moved.
+Start sets `core.hooksPath`, fetches origin, fast-forwards `main` with `--ff-only`, and rebases a feature branch onto `origin/main` (aborts on conflict and leaves the branch as fetched). Do not assume start has finished if you need current refs immediately — wait for it, or fetch once if refs are stale. Do not assume the VM checkout or Cursor Build snapshot is current. Fetch and rebase again before opening or updating a PR if `main` has moved.
 
 ## Commands
 
