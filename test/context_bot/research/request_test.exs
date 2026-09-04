@@ -225,15 +225,15 @@ defmodule ContextBot.Research.RequestTest do
   test "exposes a stable hashed identity for the versioned structure prompt" do
     prompt = Request.structure_prompt()
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_STRUCTURE_V2")
-    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V2"
-    assert Request.structure_prompt_semantic_version() == "2.0.0"
+    assert String.starts_with?(prompt, "CONTEXT_BOT_STRUCTURE_V3")
+    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V3"
+    assert Request.structure_prompt_semantic_version() == "3.0.0"
 
     assert Request.structure_prompt_sha256() ==
              :sha256 |> :crypto.hash(prompt) |> Base.encode16(case: :lower)
 
     assert Request.structure_prompt_rkey() ==
-             "prompt-context-bot-structure-v2-#{String.slice(Request.structure_prompt_sha256(), 0, 16)}"
+             "prompt-context-bot-structure-v3-#{String.slice(Request.structure_prompt_sha256(), 0, 16)}"
   end
 
   test "projects allowlisted Messages parameters and the first user message" do
@@ -402,7 +402,7 @@ defmodule ContextBot.Research.RequestTest do
     prompt = Request.system_prompt()
     normalized = String.replace(prompt, ~r/\s+/, " ")
     schema = Request.structure_schema()
-    compact = schema["properties"]["compact_reply"]["description"]
+    compact = structure_variant(schema, "reply")["properties"]["compact_reply"]["description"]
     structure = String.replace(Request.structure_prompt(), ~r/\s+/, " ")
 
     assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V10")
@@ -424,24 +424,76 @@ defmodule ContextBot.Research.RequestTest do
     assert compact =~ "yes / no / unknown / contested"
     assert compact =~ "Never silently drop a later question"
     refute compact =~ "Capture the core finding concisely"
-    refute Map.has_key?(schema["properties"], "full_response")
+    refute Map.has_key?(structure_variant(schema, "reply")["properties"], "full_response")
+    refute Map.has_key?(structure_variant(schema, "no_reply")["properties"], "full_response")
 
     assert structure =~ "Open by directly answering each asked question"
     assert structure =~ "Do not include a full_response field"
+  end
+
+  test "structure schema anyOf requires nonempty compact_reply when disposition is reply" do
+    schema = Request.structure_schema()
+    encoded = Jason.encode!(schema)
+    reply = structure_variant(schema, "reply")
+    no_reply = structure_variant(schema, "no_reply")
+    compact = reply["properties"]["compact_reply"]
+    structure = String.replace(Request.structure_prompt(), ~r/\s+/, " ")
+
+    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V3")
+    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V3"
+    assert Request.structure_prompt_semantic_version() == "3.0.0"
+    assert structure =~ "compact_reply is the Bluesky"
+    assert structure =~ "title is a short"
+    assert structure =~ "Never put the published answer only in title"
+
+    assert is_list(schema["anyOf"])
+    assert length(schema["anyOf"]) == 2
+    assert reply["required"] == ["disposition", "title", "compact_reply"]
+    assert no_reply["required"] == ["disposition", "title", "compact_reply"]
+    assert reply["additionalProperties"] == false
+    assert no_reply["additionalProperties"] == false
+    assert reply["properties"]["disposition"]["const"] == "reply"
+    assert no_reply["properties"]["disposition"]["const"] == "no_reply"
+    assert compact["pattern"] == ~S"[\s\S]+"
+    refute Map.has_key?(compact, "minLength")
+    refute Map.has_key?(compact, "maxLength")
+    refute encoded =~ "minLength"
+    refute encoded =~ "maxLength"
+    refute Map.has_key?(reply["properties"], "full_response")
+    refute Map.has_key?(no_reply["properties"], "full_response")
+
+    refute structure_schema_accepts?(schema, %{
+             "disposition" => "reply",
+             "title" => "The stuffed Bluesky answer that belongs in compact_reply",
+             "compact_reply" => ""
+           })
+
+    assert structure_schema_accepts?(schema, %{
+             "disposition" => "reply",
+             "title" => "What Is That Bird?",
+             "compact_reply" => "A Himalayan Monal."
+           })
+
+    assert structure_schema_accepts?(schema, %{
+             "disposition" => "no_reply",
+             "title" => "",
+             "compact_reply" => ""
+           })
   end
 
   test "V10 research prompt uses native citations instead of a full_response schema field" do
     prompt = Request.system_prompt()
     normalized = String.replace(prompt, ~r/\s+/, " ")
     schema = Request.output_schema()
-    compact = schema["properties"]["compact_reply"]["description"]
+    compact = structure_variant(schema, "reply")["properties"]["compact_reply"]["description"]
 
     assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V10")
     assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V10"
     assert Request.system_prompt_semantic_version() == "10.0.0"
     assert normalized =~ "native web_fetch citations"
     assert normalized =~ "Do not invent URLs"
-    refute Map.has_key?(schema["properties"], "full_response")
+    refute Map.has_key?(structure_variant(schema, "reply")["properties"], "full_response")
+    refute Map.has_key?(structure_variant(schema, "no_reply")["properties"], "full_response")
 
     assert compact =~ "plain text"
     assert compact =~ "without markdown"
@@ -454,12 +506,13 @@ defmodule ContextBot.Research.RequestTest do
     normalized = String.replace(prompt, ~r/\s+/, " ")
     structure = String.replace(Request.structure_prompt(), ~r/\s+/, " ")
     schema = Request.structure_schema()
-    title = schema["properties"]["title"]["description"]
-    compact = schema["properties"]["compact_reply"]["description"]
+    reply = structure_variant(schema, "reply")
+    title = reply["properties"]["title"]["description"]
+    compact = reply["properties"]["compact_reply"]["description"]
 
     assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V10")
-    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V2")
-    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V2"
+    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V3")
+    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V3"
     assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V10"
     assert Request.system_prompt_semantic_version() == "10.0.0"
 
@@ -535,8 +588,21 @@ defmodule ContextBot.Research.RequestTest do
     refute Jason.encode!(structure) =~ "adaptive"
     assert structure["output_config"]["format"]["type"] == "json_schema"
     assert structure["output_config"]["format"]["schema"] == schema
-    assert schema["required"] == ["disposition", "title", "compact_reply"]
-    refute Map.has_key?(schema["properties"], "full_response")
+
+    assert structure_variant(schema, "reply")["required"] == [
+             "disposition",
+             "title",
+             "compact_reply"
+           ]
+
+    assert structure_variant(schema, "no_reply")["required"] == [
+             "disposition",
+             "title",
+             "compact_reply"
+           ]
+
+    refute Map.has_key?(structure_variant(schema, "reply")["properties"], "full_response")
+    refute Map.has_key?(structure_variant(schema, "no_reply")["properties"], "full_response")
     assert Request.structure_request?(structure)
     refute Request.structure_request?(research)
     assert structure["messages"] |> hd() |> Map.get("content") =~ "STRUCTURE_OUTPUT"
@@ -562,6 +628,39 @@ defmodule ContextBot.Research.RequestTest do
     assert structure["output_config"]["format"]["type"] == "json_schema"
     assert structure["output_config"]["format"]["schema"] == Request.structure_schema()
   end
+
+  defp structure_variant(schema, disposition) do
+    schema
+    |> Map.fetch!("anyOf")
+    |> Enum.find(&(&1["properties"]["disposition"]["const"] == disposition))
+  end
+
+  defp structure_schema_accepts?(schema, payload) do
+    Enum.any?(schema["anyOf"] || [], &object_schema_accepts?(&1, payload))
+  end
+
+  defp object_schema_accepts?(variant, payload) when is_map(variant) and is_map(payload) do
+    props = variant["properties"] || %{}
+    required = variant["required"] || []
+    extra_keys = Map.keys(payload) -- Map.keys(props)
+
+    Enum.all?(required, &Map.has_key?(payload, &1)) and
+      (variant["additionalProperties"] != false or extra_keys == []) and
+      Enum.all?(payload, fn {key, value} ->
+        field_accepts?(Map.get(props, key), value)
+      end)
+  end
+
+  defp object_schema_accepts?(_variant, _payload), do: false
+
+  defp field_accepts?(%{"const" => const}, value), do: value == const
+
+  defp field_accepts?(%{"type" => "string", "pattern" => pattern}, value) when is_binary(value) do
+    Regex.match?(Regex.compile!(pattern), value)
+  end
+
+  defp field_accepts?(%{"type" => "string"}, value), do: is_binary(value)
+  defp field_accepts?(_field, _value), do: false
 
   defp assert_output_config(request, effort) do
     assert request["output_config"]["effort"] == effort

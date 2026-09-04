@@ -136,6 +136,14 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       end
     end
 
+    test "fails closed when disposition is reply and compact_reply is empty (inv 28)" do
+      text =
+        ~s({"disposition":"reply","title":"The stuffed Bluesky answer that belongs in compact_reply","compact_reply":""})
+
+      assert Reply.select([%{"type" => "text", "text" => text}], :end_turn) ==
+               {:error, :invalid_structured_output}
+    end
+
     test "signals title rewrite when disposition is reply and title is blank" do
       for text <- [
             ~s({"disposition":"reply","title":"","compact_reply":"Short summary.","full_response":"Writeup."}),

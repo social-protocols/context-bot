@@ -82,10 +82,9 @@ defmodule ContextBot.Research.RunnerTest do
     assert structure["output_config"]["format"]["type"] == "json_schema"
     assert structure["output_config"]["format"]["schema"] == Request.structure_schema()
 
-    refute Map.has_key?(
-             structure["output_config"]["format"]["schema"]["properties"],
-             "full_response"
-           )
+    schema = structure["output_config"]["format"]["schema"]
+
+    refute Enum.any?(schema["anyOf"], &Map.has_key?(&1["properties"], "full_response"))
 
     assert Repo.reload!(invocation).anthropic_messages == structure
   end
