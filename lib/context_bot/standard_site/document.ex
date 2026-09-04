@@ -14,6 +14,7 @@ defmodule ContextBot.StandardSite.Document do
 
   @collection "site.standard.document"
   @reader_base_url "https://standard-reader.app/a"
+  @mirror_base_url "https://getcontext.bot/r"
   @claude_new_url "https://claude.ai/new"
   @continue_link_text "Continue this conversation in Claude"
   @parameter_order [
@@ -104,18 +105,27 @@ defmodule ContextBot.StandardSite.Document do
   Returns nil when the URI is missing or is not that collection. The scheme matches
   the compact-reply facet: `https://standard-reader.app/a/{did}/{rkey}`.
   """
-  @spec reader_url_from_uri(String.t() | nil) :: String.t() | nil
-  def reader_url_from_uri("at://" <> rest) do
+  @spec parse_document_uri(String.t() | nil) ::
+          {:ok, %{did: String.t(), rkey: String.t()}} | :error
+  def parse_document_uri("at://" <> rest) do
     case String.split(rest, "/", parts: 3) do
       [did, @collection, rkey] when did != "" and rkey != "" ->
-        reader_url(did, rkey)
+        {:ok, %{did: did, rkey: rkey}}
 
       _ ->
-        nil
+        :error
     end
   end
 
-  def reader_url_from_uri(_uri), do: nil
+  def parse_document_uri(_uri), do: :error
+
+  @spec reader_url_from_uri(String.t() | nil) :: String.t() | nil
+  def reader_url_from_uri(uri) do
+    case parse_document_uri(uri) do
+      {:ok, %{did: did, rkey: rkey}} -> reader_url(did, rkey)
+      :error -> nil
+    end
+  end
 
   defp reader_url(did, rkey), do: "#{@reader_base_url}/#{did}/#{rkey}"
 
@@ -258,11 +268,16 @@ defmodule ContextBot.StandardSite.Document do
   defp document_reader_url(content) when is_map(content) do
     case Map.get(content, :document_reader_url) || Map.get(content, "document_reader_url") do
       url when is_binary(url) and url != "" ->
-        if String.starts_with?(url, "#{@reader_base_url}/"), do: url, else: nil
+        if accepted_continue_url?(url), do: url, else: nil
 
       _missing ->
         nil
     end
+  end
+
+  defp accepted_continue_url?(url) do
+    String.starts_with?(url, "#{@reader_base_url}/") or
+      String.starts_with?(url, "#{@mirror_base_url}/")
   end
 
   defp validate_public_inputs(%{

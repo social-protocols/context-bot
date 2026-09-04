@@ -41,9 +41,10 @@ The application also serves a public homepage at `GET /` and a GET-only invocati
 ```bash
 curl --fail --silent --show-error http://127.0.0.1:4000/
 curl --fail --silent --show-error http://127.0.0.1:4000/invocations
+curl --fail --silent --show-error -o /dev/null -w '%{http_code} %{redirect_url}\n' http://127.0.0.1:4000/r/1
 ```
 
-`GET /invocations` shows operational metadata: counts, spend, tokens, status, actor handle, Bluesky links, Standard.site full-response links, and short error reasons. It does not show API keys, post bodies, prompts, or envelopes, and it has no reprocess, reenqueue, recover, or other mutation endpoints. General failed-invocation recovery is `just fly-recover` (the same `Recovery.recover_orphans/1` path as boot). Envelope replay stays on `just fly-reprocess` over Fly SSH. A fresh two-phase research run of the same invocation id stays on `just fly-reenqueue`.
+`GET /invocations` shows operational metadata: counts, spend, tokens, status, actor handle, Bluesky links, getcontext.bot full-response mirror links, and short error reasons. `GET /r/:id` serves that mirror immediately and 302s to Standard Reader once Reader has indexed the `site.standard.document`. It does not show API keys, post bodies, prompts, or envelopes, and it has no reprocess, reenqueue, recover, or other mutation endpoints. General failed-invocation recovery is `just fly-recover` (the same `Recovery.recover_orphans/1` path as boot). Envelope replay stays on `just fly-reprocess` over Fly SSH. A fresh two-phase research run of the same invocation id stays on `just fly-reenqueue`.
 
 The homepage is reachable via the configured Phoenix host. Serving https://getcontext.bot (the bot's Bluesky handle and site.standard.publication domain) requires separate DNS configuration pointing to the Fly deployment.
 

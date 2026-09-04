@@ -642,9 +642,10 @@ defmodule ContextBotWeb.InvocationsControllerTest do
       refute body =~ ~s("status")
     end
 
-    test "links to the full Standard Reader response when standard_site_document_uri exists", %{
-      conn: conn
-    } do
+    test "links to the getcontext.bot full-response mirror when standard_site_document_uri exists",
+         %{
+           conn: conn
+         } do
       {:ok, inv} =
         %Invocation{}
         |> Invocation.changeset(%{
@@ -671,7 +672,8 @@ defmodule ContextBotWeb.InvocationsControllerTest do
       body = html_response(conn, 200)
 
       assert body =~ "Full Response"
-      assert body =~ ~s(href="https://standard-reader.app/a/did:plc:bot/3kfullresp")
+      assert body =~ ~s(href="https://getcontext.bot/r/#{inv.id}")
+      refute body =~ "https://standard-reader.app/"
       assert body =~ ">full response</a>"
       assert body =~ "https://bsky.app/profile/did:plc:test/post/abc123"
       assert body =~ "https://bsky.app/profile/did:plc:bot/post/reply1"

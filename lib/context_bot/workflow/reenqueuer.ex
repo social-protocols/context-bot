@@ -131,6 +131,8 @@ defmodule ContextBot.Workflow.Reenqueuer do
       no_reply: false,
       standard_site_document_uri: nil,
       standard_site_document_rkey: nil,
+      reader_ready_at: nil,
+      reader_checked_at: nil,
       reply_repo: nil,
       reply_rkey: nil,
       reply_record: nil,

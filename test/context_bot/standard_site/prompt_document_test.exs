@@ -135,4 +135,22 @@ defmodule ContextBot.StandardSite.PromptDocumentTest do
                )
     end
   end
+
+  describe "research_ref/1 and structure_ref/1" do
+    test "derive Reader URLs from the current hashed prompt rkeys without PDS I/O" do
+      research = PromptDocument.research_ref(@repo)
+      structure = PromptDocument.structure_ref(@repo)
+
+      assert research.id == Request.system_prompt_id()
+      assert research.sha256 == Request.system_prompt_sha256()
+
+      assert research.reader_url ==
+               "https://standard-reader.app/a/#{@repo}/#{Request.system_prompt_rkey()}"
+
+      assert structure.id == Request.structure_prompt_id()
+
+      assert structure.reader_url ==
+               "https://standard-reader.app/a/#{@repo}/#{Request.structure_prompt_rkey()}"
+    end
+  end
 end

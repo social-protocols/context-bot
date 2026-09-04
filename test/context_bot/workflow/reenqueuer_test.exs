@@ -42,6 +42,8 @@ defmodule ContextBot.Workflow.ReenqueuerTest do
     assert reopened.no_reply == false
     assert reopened.standard_site_document_uri == nil
     assert reopened.standard_site_document_rkey == nil
+    assert reopened.reader_ready_at == nil
+    assert reopened.reader_checked_at == nil
     assert reopened.reply_repo == nil
     assert reopened.reply_rkey == nil
     assert reopened.reply_record == nil
@@ -308,6 +310,8 @@ defmodule ContextBot.Workflow.ReenqueuerTest do
       no_reply: false,
       standard_site_document_uri: "at://did:plc:bot/site.standard.document/#{suffix}",
       standard_site_document_rkey: "doc#{suffix}",
+      reader_ready_at: @now,
+      reader_checked_at: @now,
       failure_category: :provider_response,
       failure_detail: %{"reason" => "provider_http_error", "status" => 400},
       research_claim_token: "old-owner",

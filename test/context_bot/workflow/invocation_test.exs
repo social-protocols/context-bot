@@ -71,7 +71,30 @@ defmodule ContextBot.Workflow.InvocationTest do
     assert persisted.full_response == "Detailed writeup."
     assert persisted.standard_site_document_uri == uri
     assert persisted.standard_site_document_rkey == "3kfullresp"
+    assert persisted.reader_ready_at == nil
+    assert persisted.reader_checked_at == nil
     assert persisted.no_reply == false
+  end
+
+  test "persists Standard Reader index cache timestamps" do
+    invocation =
+      %Invocation{}
+      |> Invocation.changeset(public_attrs())
+      |> Repo.insert!()
+
+    checked = ~U[2026-09-04 12:00:00.000000Z]
+    ready = ~U[2026-09-04 12:01:00.000000Z]
+
+    invocation
+    |> Invocation.reader_index_changeset(%{
+      reader_checked_at: checked,
+      reader_ready_at: ready
+    })
+    |> Repo.update!()
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.reader_checked_at == checked
+    assert persisted.reader_ready_at == ready
   end
 
   test "persists a completed no-reply decision" do

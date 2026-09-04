@@ -82,6 +82,8 @@ defmodule ContextBot.Workflow.Invocation do
     :no_reply,
     :standard_site_document_uri,
     :standard_site_document_rkey,
+    :reader_ready_at,
+    :reader_checked_at,
     :reply_repo,
     :reply_rkey,
     :reply_record,
@@ -165,6 +167,8 @@ defmodule ContextBot.Workflow.Invocation do
     field :no_reply, :boolean, default: false
     field :standard_site_document_uri, :string
     field :standard_site_document_rkey, :string
+    field :reader_ready_at, :utc_datetime_usec
+    field :reader_checked_at, :utc_datetime_usec
     field :reply_repo, :string
     field :reply_rkey, :string
     field :reply_record, :map
@@ -235,6 +239,11 @@ defmodule ContextBot.Workflow.Invocation do
   @spec anthropic_responses_changeset(t(), [map()]) :: Ecto.Changeset.t()
   def anthropic_responses_changeset(invocation, responses) do
     change(invocation, anthropic_responses: responses)
+  end
+
+  @spec reader_index_changeset(t(), map()) :: Ecto.Changeset.t()
+  def reader_index_changeset(invocation, attrs) do
+    cast(invocation, attrs, [:reader_ready_at, :reader_checked_at])
   end
 
   defp validate_immutable_identity(

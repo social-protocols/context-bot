@@ -40,6 +40,44 @@ defmodule ContextBot.StandardSite.PromptDocument do
     ensure_prompt(client, repo, publication_uri, created_at, structure_spec())
   end
 
+  @doc "Current research-prompt identity and Reader URL for `repo`, without a PDS read."
+  @spec research_ref(String.t()) :: %{
+          id: String.t(),
+          semantic_version: String.t(),
+          sha256: String.t(),
+          reader_url: String.t()
+        }
+  def research_ref(repo) when is_binary(repo) and repo != "" do
+    spec = research_spec()
+    uri = "at://#{repo}/#{@collection}/#{spec.rkey}"
+
+    %{
+      id: spec.id,
+      semantic_version: spec.version,
+      sha256: spec.sha256,
+      reader_url: Document.reader_url_from_uri(uri)
+    }
+  end
+
+  @doc "Current structure-prompt identity and Reader URL for `repo`, without a PDS read."
+  @spec structure_ref(String.t()) :: %{
+          id: String.t(),
+          semantic_version: String.t(),
+          sha256: String.t(),
+          reader_url: String.t()
+        }
+  def structure_ref(repo) when is_binary(repo) and repo != "" do
+    spec = structure_spec()
+    uri = "at://#{repo}/#{@collection}/#{spec.rkey}"
+
+    %{
+      id: spec.id,
+      semantic_version: spec.version,
+      sha256: spec.sha256,
+      reader_url: Document.reader_url_from_uri(uri)
+    }
+  end
+
   defp ensure_prompt(client, repo, publication_uri, created_at, spec) do
     rkey = spec.rkey
     uri = "at://#{repo}/#{@collection}/#{rkey}"
