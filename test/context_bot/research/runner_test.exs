@@ -22,6 +22,8 @@ end
 defmodule ContextBot.Research.RunnerTest do
   use ContextBot.DataCase, async: false
 
+  alias ContextBot.ATProto.Post
+
   alias ContextBot.Research.{
     Budget,
     BudgetEntry,
@@ -34,6 +36,7 @@ defmodule ContextBot.Research.RunnerTest do
     Runner
   }
 
+  alias ContextBot.Reply.PublicationPlan
   alias ContextBot.Research.StructuredFixtures
   alias ContextBot.Workflow.{Invocation, Store}
   alias Ecto.Adapters.SQL
@@ -1566,8 +1569,8 @@ defmodule ContextBot.Research.RunnerTest do
     ])
 
     assert {:ok, result} = Runner.run(invocation, options())
-    assert result.text == String.duplicate("a", 300)
-    refute Map.has_key?(result, :text_part2)
+    assert result.compact_source == over_text
+    assert String.ends_with?(result.text, ReplyLimits.continuation_ellipsis())
     assert result.full_response == full
     assert result.document_title == "What Is That Bird?"
     assert result.validation["repair_used"] == false
@@ -1818,10 +1821,19 @@ defmodule ContextBot.Research.RunnerTest do
     ])
 
     assert {:ok, result} = Runner.run(invocation, options())
-    assert result.text == String.duplicate("a", 300)
+    assert result.compact_source == overlong
+    assert String.ends_with?(result.text, ReplyLimits.continuation_ellipsis())
+    refute result.text == overlong
     assert result.full_response == writeup
     assert result.validation["repair_used"] == false
-    refute Map.has_key?(result, :text_part2)
+
+    plan = PublicationPlan.preview(result.text, Map.get(result, :text_part2), writeup)
+    assert length(plan.posts) in 1..2
+    last = List.last(plan.posts)
+    assert String.contains?(last, "full response")
+
+    assert String.contains?(last, ReplyLimits.continuation_ellipsis() <> Post.link_suffix()) or
+             plan.link_placement == :post_2_link_only
 
     assert_received {:anthropic_call, _research, %{kind: :research}, false}
     assert_received {:anthropic_call, _structure, %{kind: :structure}, false}
@@ -1848,12 +1860,35 @@ defmodule ContextBot.Research.RunnerTest do
     assert {:ok, result} = Runner.run(invocation, options())
     assert result.text == split1
     assert result.text_part2 == split2
+    assert result.compact_source == overlong
     assert result.full_response == writeup
     assert result.validation["repair_used"] == false
     assert result.validation["result"] == "split"
 
     assert_received {:anthropic_call, _research, %{kind: :research}, false}
     assert_received {:anthropic_call, _structure, %{kind: :structure}, false}
+    refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
+  end
+
+  test "a shortened structured compact still keeps the research-draft compact in the writeup" do
+    invocation = invocation("structure-shortened-keeps-draft")
+    draft_compact = String.duplicate("d", 340)
+    structured = "A short structured compact."
+    writeup = Drafts.format("Mostly True?", draft_compact) <> "\n\nThorough markdown writeup."
+
+    Process.put(
+      :runner_client_results,
+      two_phase_results(
+        Jason.encode!(message_body(writeup)),
+        Jason.encode!(message_body(structured_json(structured, title: "Mostly True?")))
+      )
+    )
+
+    assert {:ok, result} = Runner.run(invocation, options())
+    assert result.text == structured
+    assert result.compact_source == draft_compact
+    refute result.text == draft_compact
+    assert {:ok, %{compact_reply: ^draft_compact}} = Drafts.parse(result.full_response)
     refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
   end
 
@@ -1917,8 +1952,12 @@ defmodule ContextBot.Research.RunnerTest do
     ])
 
     assert {:ok, result} = Runner.run(invocation, options())
-    assert result.text == Drafts.truncate_to_cap(draft_compact)
+    assert result.compact_source == draft_compact
+    assert String.ends_with?(result.text, ReplyLimits.continuation_ellipsis())
+    refute result.text == draft_compact
     assert result.document_title == "Mostly True?"
+    assert result.full_response == Citations.publishable_writeup(writeup, [])
+    assert {:ok, %{compact_reply: ^draft_compact}} = Drafts.parse(result.full_response)
     assert result.validation["draft_fallback"] == true
     assert result.validation["repair_used"] == false
     refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
@@ -1942,7 +1981,9 @@ defmodule ContextBot.Research.RunnerTest do
     assert {:ok, result} = Runner.run(invocation, options())
     assert result.text == split1
     assert result.text_part2 == split2
+    assert result.compact_source == draft_compact
     assert result.document_title == "Mostly True?"
+    assert {:ok, %{compact_reply: ^draft_compact}} = Drafts.parse(result.full_response)
     assert result.validation["draft_fallback"] == true
     assert result.validation["result"] == "split"
     assert_received {:anthropic_call, repair, %{kind: :repair}, false}

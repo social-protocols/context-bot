@@ -108,9 +108,19 @@ defmodule ContextBot.Research.Drafts do
   """
   @spec truncate_to_cap(String.t()) :: String.t()
   def truncate_to_cap(text) when is_binary(text) do
+    truncate_to(text, ReplyLimits.hard_max_graphemes(), ReplyLimits.max_bytes())
+  end
+
+  @doc """
+  Hard-slices text to the supplied grapheme and UTF-8 byte ceilings.
+  """
+  @spec truncate_to(String.t(), non_neg_integer(), non_neg_integer()) :: String.t()
+  def truncate_to(text, max_graphemes, max_bytes)
+      when is_binary(text) and is_integer(max_graphemes) and max_graphemes >= 0 and
+             is_integer(max_bytes) and max_bytes >= 0 do
     text
-    |> take_graphemes(ReplyLimits.hard_max_graphemes())
-    |> take_bytes(ReplyLimits.max_bytes())
+    |> take_graphemes(max_graphemes)
+    |> take_bytes(max_bytes)
   end
 
   @doc """

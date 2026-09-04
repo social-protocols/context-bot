@@ -7,11 +7,14 @@ defmodule ContextBot.Research.Runner do
   from the budget ledger rather than inferring attempt identity from response count.
 
   Empty structured compact, structure-phase `max_tokens`, or overlong compact
-  that cannot be packed into ≤2 posts or locally shortened, starts at most
-  one compact-repair call from the stored writeup. Prefer local pack-first
-  split or truncate before that paid repair. If structure or repair
-  hard-fails and a research `CONTEXT_BOT_DRAFT` compact is already under cap
-  or truncatable / packable into ≤2 posts, publish that draft instead of
+  that cannot be packed into ≤2 posts (including the full-response link) or
+  locally shortened, starts at most one compact-repair call from the stored
+  writeup. Prefer local pack-first split, then a hard truncate that still
+  fits in ≤2 posts with a continuation ellipsis immediately before the
+  link. Truncation is Bluesky-only; the writeup / Reader Summary keeps the
+  research-draft or pre-truncate compact. If structure or repair hard-fails
+  and a research `CONTEXT_BOT_DRAFT` compact is already under cap or
+  truncatable / packable into ≤2 posts, publish that draft instead of
   failing closed. Research-phase `max_tokens` stays terminal.
   Structure-from-writeup resume does not replay a latest 2xx structure or
   repair envelope that classified as a hard-fail; it starts a live
@@ -763,6 +766,7 @@ defmodule ContextBot.Research.Runner do
         |> maybe_put_draft_fallback(Keyword.get(opts, :draft_fallback, false))
     }
     |> maybe_put_part2(part2)
+    |> maybe_put_compact_source(writeup_compact_source(invocation, selected))
     |> attach_full_response(invocation)
     |> attach_document_title(invocation)
   end
@@ -771,6 +775,30 @@ defmodule ContextBot.Research.Runner do
     do: Map.put(result, :text_part2, part2)
 
   defp maybe_put_part2(result, _part2), do: result
+
+  defp maybe_put_compact_source(result, source) when is_binary(source) and source != "",
+    do: Map.put(result, :compact_source, source)
+
+  defp maybe_put_compact_source(result, _source), do: result
+
+  # Reader Summary prefers the research-draft compact, then the pre-truncate
+  # structured compact. Published Bluesky `text` may be a local pack/shorten.
+  defp writeup_compact_source(invocation, selected) do
+    case parsed_draft_compact(invocation) do
+      compact when is_binary(compact) and compact != "" -> compact
+      _missing -> Map.get(selected, :compact_source)
+    end
+  end
+
+  defp parsed_draft_compact(%Invocation{full_response: writeup})
+       when is_binary(writeup) and writeup != "" do
+    case Drafts.parse(writeup) do
+      {:ok, drafts} -> drafts.compact_reply
+      :error -> nil
+    end
+  end
+
+  defp parsed_draft_compact(_invocation), do: nil
 
   defp maybe_put_draft_fallback(validation, true), do: Map.put(validation, "draft_fallback", true)
   defp maybe_put_draft_fallback(validation, _false), do: validation
@@ -806,13 +834,22 @@ defmodule ContextBot.Research.Runner do
         disposition: :reply
       }
 
-      {:ok, if(is_binary(part2), do: Map.put(selected, :text_part2, part2), else: selected)}
+      {:ok, attach_draft_publication(selected, drafts.compact_reply, text, part2)}
     else
       _miss -> :error
     end
   end
 
   defp publishable_research_draft(_invocation, _structured_selected), do: :error
+
+  defp attach_draft_publication(selected, original, text, part2) do
+    selected
+    |> maybe_put_part2(part2)
+    |> maybe_put_compact_source(draft_source(original, text, part2))
+  end
+
+  defp draft_source(original, original, nil), do: nil
+  defp draft_source(original, _text, _part2), do: original
 
   defp structured_title(%{document_title: title}) when is_binary(title), do: String.trim(title)
   defp structured_title(_selected), do: ""

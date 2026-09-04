@@ -109,7 +109,9 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       ]
 
       assert {:ok, selected} = Reply.select(content, :end_turn)
-      assert selected.text == String.duplicate("a", 300)
+      assert selected.compact_source == long_compact
+      assert String.ends_with?(selected.text, "…")
+      refute selected.text == long_compact
     end
 
     test "fails closed when the model returns prose instead of JSON" do
@@ -180,7 +182,8 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       ]
 
       assert {:title_rewrite, selected} = Reply.select(content, :end_turn)
-      assert selected.text == String.duplicate("a", 300)
+      assert selected.compact_source == long_compact
+      assert String.ends_with?(selected.text, "…")
       assert selected.document_title == ""
     end
 
@@ -253,7 +256,9 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       ]
 
       assert {:ok, selected} = Reply.select(content, :end_turn)
-      assert selected.text == String.duplicate("a", 300)
+      assert selected.compact_source == long_compact
+      assert String.ends_with?(selected.text, "…")
+      refute selected.text == long_compact
     end
 
     test "decodes leftover JSON unicode escapes in compact_reply and title" do

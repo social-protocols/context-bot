@@ -54,7 +54,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
 
   alias ContextBot.ATProto.TID
   alias ContextBot.LimitNoticeRecorder
-  alias ContextBot.Research.{ReplyLimits, Request}
+  alias ContextBot.Research.{Drafts, ReplyLimits, Request}
   alias ContextBot.Settings
   alias ContextBot.Workers.ResearchWorker
   alias ContextBot.Workers.ResearchWorkerTest.{AnthropicClient, Runner}
@@ -332,6 +332,45 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
 
     assert hd(facet["features"])["uri"] ==
              "https://standard-reader.app/a/#{@bot_did}/#{doc_rkey}"
+  end
+
+  test "Reader Summary keeps the untruncated compact_source when Bluesky text is shortened" do
+    original = String.duplicate("a", 340)
+    shortened = String.duplicate("a", 280) <> ReplyLimits.continuation_ellipsis()
+    writeup = Drafts.format("Mostly True?", original) <> "\n\nThorough markdown writeup."
+
+    invocation = invocation("compact-source-writeup", :thread_ready)
+
+    configure_runner(
+      {:ok,
+       runner_result()
+       |> Map.put(:text, shortened)
+       |> Map.put(:compact_source, original)
+       |> Map.put(:full_response, writeup)
+       |> Map.put(:document_title, "Mostly True?")}
+    )
+
+    configure_worker(atproto_client: FakeStandardSiteTrackingClient)
+
+    assert :ok = perform(invocation)
+    persisted = Repo.reload!(invocation)
+    assert persisted.selected_reply == shortened
+    assert persisted.full_response == writeup
+    assert {:ok, %{compact_reply: ^original}} = Drafts.parse(persisted.full_response)
+
+    prompt_rkey = Request.system_prompt_rkey()
+    structure_rkey = Request.structure_prompt_rkey()
+    assert_received {:standard_site_put, "site.standard.publication", "context-bot", _pub}
+    assert_received {:standard_site_put, "site.standard.document", ^prompt_rkey, _prompt}
+    assert_received {:standard_site_put, "site.standard.document", ^structure_rkey, _structure}
+    assert_received {:standard_site_put, "site.standard.document", _doc_rkey, doc_record}
+
+    markdown = doc_record["content"]["text"]["markdown"]
+    [_, summary_and_rest] = String.split(markdown, "## Summary\n\n", parts: 2)
+    [summary, _rest] = String.split(summary_and_rest, "\n\n---", parts: 2)
+    assert summary == original
+    refute String.contains?(summary, ReplyLimits.continuation_ellipsis())
+    assert persisted.reply_record["text"] == shortened <> " (full response)"
   end
 
   test "fails closed without freezing a reply when publication create fails" do
