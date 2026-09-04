@@ -1586,6 +1586,98 @@ defmodule ContextBot.Research.RunnerTest do
     refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
   end
 
+  test "a structure max_tokens envelope starts one compact-repair call from the stored writeup" do
+    invocation = invocation("structure-max-tokens-repair")
+    writeup = "Thorough markdown writeup that must stay on the Standard.site page."
+    compact = "Mostly true. Public reporting matches the claim."
+    truncated = ~s({"disposition":"reply","title":"Mostly True?","compact_reply":"Mostly true. )
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(message_body(writeup)))},
+      {:ok, envelope(200, Jason.encode!(message_body(truncated, nil, "max_tokens")))},
+      {:ok,
+       envelope(
+         200,
+         Jason.encode!(message_body(structured_json(compact, title: "Mostly True?")))
+       )}
+    ])
+
+    repair_settings =
+      settings()
+      |> Map.put(:anthropic_structure_max_tokens, 4_096)
+      |> Map.put(:anthropic_length_repair_max_tokens, 256)
+
+    assert {:ok, result} = Runner.run(invocation, options(settings: repair_settings))
+    assert result.text == compact
+    assert result.full_response == writeup
+    assert result.document_title == "Mostly True?"
+    refute Map.has_key?(result, :text_part2)
+    assert result.validation["result"] == "valid"
+    assert result.validation["repair_used"] == true
+    assert result.validation["phase"] == "structure"
+
+    assert_received {:anthropic_call, research, %{kind: :research}, false}
+    assert research["max_tokens"] == 1_024
+    assert_received {:anthropic_call, structure, %{kind: :structure}, false}
+    assert structure["max_tokens"] == 4_096
+    refute Request.structure_repair_request?(structure)
+    assert_received {:anthropic_call, repair, %{kind: :repair}, false}
+    assert repair["max_tokens"] == 256
+    assert Request.structure_repair_request?(repair)
+    assert Request.structure_request?(repair)
+    refute Map.has_key?(repair, "tools")
+    assert hd(repair["messages"])["content"] =~ writeup
+    assert hd(repair["messages"])["content"] =~ "COMPACT_REPAIR"
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+
+    assert Enum.map(Repo.all(from entry in BudgetEntry, order_by: entry.id), & &1.kind) == [
+             :research,
+             :structure,
+             :repair
+           ]
+
+    assert length(responses(invocation)) == 3
+  end
+
+  test "a compact-repair that still hits max_tokens fails closed without another recovery" do
+    invocation = invocation("structure-max-tokens-repair-failed")
+    writeup = "Thorough markdown writeup."
+    truncated = ~s({"disposition":"reply","title":"Mostly True?","compact_reply":"Mostly true. )
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(message_body(writeup)))},
+      {:ok, envelope(200, Jason.encode!(message_body(truncated, nil, "max_tokens")))},
+      {:ok, envelope(200, Jason.encode!(message_body(truncated, nil, "max_tokens")))}
+    ])
+
+    assert {:error, :max_tokens} = Runner.run(invocation, options())
+    assert_received {:anthropic_call, _research, %{kind: :research}, false}
+    assert_received {:anthropic_call, _structure, %{kind: :structure}, false}
+    assert_received {:anthropic_call, repair, %{kind: :repair}, false}
+    assert Request.structure_repair_request?(repair)
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+
+    assert Enum.map(Repo.all(from entry in BudgetEntry, order_by: entry.id), & &1.kind) == [
+             :research,
+             :structure,
+             :repair
+           ]
+  end
+
+  test "research max_tokens still fails closed without a compact repair" do
+    invocation = invocation("research-max-tokens-no-repair")
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(message_body("Partial writeup.", nil, "max_tokens")))}
+    ])
+
+    assert {:error, :max_tokens} = Runner.run(invocation, options())
+    assert_received {:anthropic_call, research, %{kind: :research}, false}
+    assert research["max_tokens"] == 1_024
+    refute_received {:anthropic_call, _request, %{kind: :structure}, _in_transaction}
+    refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
+  end
+
   test "a no_reply structure object still uses the cheap second call" do
     invocation = invocation("no-reply-structured")
 
@@ -1950,7 +2042,7 @@ defmodule ContextBot.Research.RunnerTest do
 
   defp writeup_text(text) when is_binary(text), do: %{"type" => "text", "text" => text}
 
-  defp message_body(text, citations \\ nil) do
+  defp message_body(text, citations \\ nil, stop_reason \\ "end_turn") do
     text_block =
       if is_list(citations) do
         %{"type" => "text", "text" => text, "citations" => citations}
@@ -1963,7 +2055,7 @@ defmodule ContextBot.Research.RunnerTest do
       "type" => "message",
       "role" => "assistant",
       "content" => [text_block],
-      "stop_reason" => "end_turn",
+      "stop_reason" => stop_reason,
       "usage" => usage()
     }
   end

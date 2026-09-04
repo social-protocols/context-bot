@@ -5,6 +5,10 @@ defmodule ContextBot.Research.Runner do
   Every POST is preceded by a committed reservation and sent marker. Every returned HTTP
   envelope is committed before decoding, pricing, or reply selection. Recovery always starts
   from the budget ledger rather than inferring attempt identity from response count.
+
+  A structure-phase `max_tokens` stop (truncated JSON) starts at most one compact-repair
+  call from the stored writeup using the length-repair token cap. Research-phase
+  `max_tokens` stays terminal.
   """
 
   import Ecto.Query
@@ -389,14 +393,19 @@ defmodule ContextBot.Research.Runner do
   end
 
   defp classify_stop_reason(invocation, %BudgetEntry{kind: :repair}, decoded, config) do
-    classify_title_rewrite(invocation, decoded, config)
+    classify_repair_response(invocation, decoded, config)
   end
 
   defp classify_stop_reason(invocation, %BudgetEntry{kind: :retry}, decoded, config) do
-    if title_rewrite_pending?(invocation, config) and Reply.title_only_response?(decoded) do
-      classify_title_rewrite(invocation, decoded, config)
-    else
-      classify_research_stop_reason(invocation, decoded, config)
+    cond do
+      title_rewrite_pending?(invocation, config) and Reply.title_only_response?(decoded) ->
+        classify_title_rewrite(invocation, decoded, config)
+
+      compact_repair_needed?(invocation, config) ->
+        classify_compact_repair(invocation, decoded, config)
+
+      true ->
+        classify_research_stop_reason(invocation, decoded, config)
     end
   end
 
@@ -445,8 +454,100 @@ defmodule ContextBot.Research.Runner do
       {:repairable, text, _reasons} ->
         split_over_limit(invocation, text, decoded, config)
 
+      {:error, :max_tokens} ->
+        start_compact_repair(invocation, config)
+
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp classify_repair_response(invocation, decoded, config) do
+    if Reply.title_only_response?(decoded) do
+      classify_title_rewrite(invocation, decoded, config)
+    else
+      classify_compact_repair(invocation, decoded, config)
+    end
+  end
+
+  defp classify_compact_repair(invocation, decoded, config) do
+    case select_reply(decoded, invocation) do
+      {:ok, selected} ->
+        {:ok, finish_selected(invocation, selected, config, repair_used: true)}
+
+      {:title_rewrite, _selected} ->
+        start_attempt(Repo.reload!(invocation), :repair, config)
+
+      {:repairable, text, _reasons} ->
+        split_over_limit(invocation, text, decoded, config)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp start_compact_repair(invocation, config) do
+    cond do
+      not structure_from_writeup?(invocation) ->
+        {:error, :max_tokens}
+
+      compact_repair_already_attempted?(invocation) ->
+        {:error, :max_tokens}
+
+      true ->
+        start_attempt(Repo.reload!(invocation), :repair, config)
+    end
+  end
+
+  defp compact_repair_already_attempted?(%Invocation{id: id}) do
+    latest_structure_id =
+      BudgetEntry
+      |> where([entry], entry.invocation_id == ^id and entry.kind == :structure)
+      |> select([entry], max(entry.id))
+      |> Repo.one()
+
+    is_integer(latest_structure_id) and
+      Repo.exists?(
+        from entry in BudgetEntry,
+          where:
+            entry.invocation_id == ^id and entry.kind == :repair and
+              entry.id > ^latest_structure_id
+      )
+  end
+
+  defp compact_repair_needed?(invocation, config) do
+    structure_from_writeup?(invocation) and
+      latest_unrepaired_structure_max_tokens?(invocation, config)
+  end
+
+  defp latest_unrepaired_structure_max_tokens?(invocation, config) do
+    invocation
+    |> config.store.anthropic_responses()
+    |> Enum.reverse()
+    |> Enum.reduce_while(false, fn response, _acc ->
+      case successful_body(response, config) do
+        {:ok, decoded} ->
+          classify_compact_repair_need(decoded, invocation)
+
+        :error ->
+          {:cont, false}
+      end
+    end)
+  end
+
+  defp classify_compact_repair_need(decoded, invocation) do
+    cond do
+      Reply.title_only_response?(decoded) ->
+        {:halt, false}
+
+      match?({:error, :max_tokens}, select_reply(decoded, invocation)) ->
+        {:halt, true}
+
+      match?({:error, _reason}, select_reply(decoded, invocation)) ->
+        {:cont, false}
+
+      true ->
+        {:halt, false}
     end
   end
 
@@ -522,17 +623,23 @@ defmodule ContextBot.Research.Runner do
       settings.anthropic_length_repair_max_tokens
   end
 
-  defp finish_selected(invocation, %{disposition: :no_reply}, config) do
+  defp finish_selected(invocation, selected, config, opts \\ [])
+
+  defp finish_selected(invocation, %{disposition: :no_reply}, config, opts) do
     %{
       messages: invocation.anthropic_messages,
       text: "",
       disposition: :no_reply,
       usage: usage_evidence(invocation, config),
-      validation: %{"result" => "no_reply", "repair_used" => false, "phase" => "structure"}
+      validation: %{
+        "result" => "no_reply",
+        "repair_used" => Keyword.get(opts, :repair_used, false),
+        "phase" => "structure"
+      }
     }
   end
 
-  defp finish_selected(invocation, selected, config) do
+  defp finish_selected(invocation, selected, config, opts) do
     %{
       messages: invocation.anthropic_messages,
       text: selected.text,
@@ -540,7 +647,11 @@ defmodule ContextBot.Research.Runner do
       document_title: selected.document_title,
       disposition: Map.get(selected, :disposition, :reply),
       usage: usage_evidence(invocation, config),
-      validation: %{"result" => "valid", "repair_used" => false, "phase" => "structure"}
+      validation: %{
+        "result" => "valid",
+        "repair_used" => Keyword.get(opts, :repair_used, false),
+        "phase" => "structure"
+      }
     }
     |> attach_full_response(invocation)
     |> attach_document_title(invocation)
@@ -812,18 +923,49 @@ defmodule ContextBot.Research.Runner do
 
   defp select_reply(_response, _invocation), do: {:error, :malformed_provider_response}
 
-  defp request_for_entry(invocation, %BudgetEntry{kind: :repair}, config),
-    do: title_rewrite_request(invocation, config)
+  defp request_for_entry(invocation, %BudgetEntry{kind: :repair}, config) do
+    cond do
+      title_rewrite_pending?(invocation, config) ->
+        title_rewrite_request(invocation, config)
+
+      compact_repair_needed?(invocation, config) ->
+        compact_repair_request(invocation, config)
+
+      true ->
+        title_rewrite_request(invocation, config)
+    end
+  end
 
   defp request_for_entry(invocation, %BudgetEntry{kind: :retry}, config) do
-    if title_rewrite_pending?(invocation, config) do
-      title_rewrite_request(invocation, config)
-    else
-      invocation.anthropic_messages
+    cond do
+      title_rewrite_pending?(invocation, config) ->
+        title_rewrite_request(invocation, config)
+
+      compact_repair_needed?(invocation, config) ->
+        compact_repair_request(invocation, config)
+
+      true ->
+        invocation.anthropic_messages
     end
   end
 
   defp request_for_entry(invocation, _entry, _config), do: invocation.anthropic_messages
+
+  defp compact_repair_request(invocation, config) do
+    Request.structure_repair(%{
+      model_id: structure_model_id(config.settings),
+      max_tokens: config.settings.anthropic_length_repair_max_tokens,
+      writeup: invocation.full_response,
+      citations: invocation.citation_sources || [],
+      canonical_thread: canonical_text_or_empty(invocation)
+    })
+  end
+
+  defp canonical_text_or_empty(%Invocation{canonical_thread: text})
+       when is_binary(text),
+       do: text
+
+  defp canonical_text_or_empty(_invocation), do: ""
 
   defp title_rewrite_pending?(invocation, config),
     do: match?({:title_rewrite, _selected}, latest_research_selection(invocation, config))
