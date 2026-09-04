@@ -22,17 +22,21 @@ end
 defmodule ContextBot.Research.RunnerTest do
   use ContextBot.DataCase, async: false
 
+  alias ContextBot.ATProto.Post
+
   alias ContextBot.Research.{
     Budget,
     BudgetEntry,
     Citations,
     Drafts,
+    Reply,
     ReplyLimits,
     Request,
     ResponseEnvelope,
     Runner
   }
 
+  alias ContextBot.Reply.PublicationPlan
   alias ContextBot.Research.StructuredFixtures
   alias ContextBot.Workflow.{Invocation, Store}
   alias Ecto.Adapters.SQL
@@ -76,7 +80,7 @@ defmodule ContextBot.Research.RunnerTest do
     assert Enum.at(request["tools"], 1)["citations"] == %{"enabled" => true}
 
     refute Map.has_key?(structure, "tools")
-    refute Map.has_key?(structure, "thinking")
+    assert structure["thinking"] == %{"type" => "disabled"}
     refute Map.has_key?(structure, "effort")
     refute Map.has_key?(structure["output_config"], "effort")
     refute get_in(structure, ["thinking", "type"]) == "adaptive"
@@ -621,10 +625,10 @@ defmodule ContextBot.Research.RunnerTest do
              ]
   end
 
-  test "a retained dynamic-filtering over-limit response resumes into compact-repair" do
+  test "a retained dynamic-filtering empty compact resumes into compact-repair" do
     invocation = invocation("retained-code-execution-repair")
     fixture = decoded_fixture("repair_success.json")
-    over_text = String.duplicate("a", 312)
+    empty = ~s({"disposition":"reply","title":"Mostly True?","compact_reply":""})
     compact = "Mostly true. Public reporting matches the claim."
 
     tool_blocks =
@@ -654,7 +658,7 @@ defmodule ContextBot.Research.RunnerTest do
       )["primary"]
 
     primary_raw = Jason.encode!(primary)
-    structure_raw = Jason.encode!(message_body(structured_json(over_text)))
+    structure_raw = Jason.encode!(message_body(empty))
     repair_raw = Jason.encode!(message_body(structured_json(compact, title: "Mostly True?")))
 
     Process.put(:runner_client_results, [
@@ -1306,7 +1310,7 @@ defmodule ContextBot.Research.RunnerTest do
     assert result.full_response == writeup
     assert_received {:anthropic_call, structure, %{kind: :structure}, false}
     assert Request.structure_request?(structure)
-    refute Map.has_key?(structure, "thinking")
+    assert structure["thinking"] == %{"type" => "disabled"}
     refute Map.has_key?(structure["output_config"], "effort")
     assert structure["output_config"]["format"]["type"] == "json_schema"
     assert structure["messages"] |> hd() |> Map.get("content") =~ writeup
@@ -1355,7 +1359,7 @@ defmodule ContextBot.Research.RunnerTest do
     assert_received {:anthropic_call, structure, %{kind: :structure}, false}
     assert Request.structure_request?(structure)
     refute Request.structure_repair_request?(structure)
-    refute Map.has_key?(structure, "thinking")
+    assert structure["thinking"] == %{"type" => "disabled"}
     refute Map.has_key?(structure["output_config"], "effort")
     assert structure["messages"] |> hd() |> Map.get("content") =~ writeup
     refute_received {:anthropic_call, _request, %{kind: :research}, _in_transaction}
@@ -1553,33 +1557,29 @@ defmodule ContextBot.Research.RunnerTest do
     assert length(responses(invocation)) == 3
   end
 
-  test "a blank title plus over-long compact starts compact-repair instead of title rewrite" do
+  test "a blank title plus over-long compact locally shortens then title-rewrites" do
     invocation = invocation("blank-title-over-limit")
     over_text = String.duplicate("a", 312)
-    compact = "A Himalayan Monal."
     full = "Thorough markdown writeup."
 
     Process.put(:runner_client_results, [
       {:ok, envelope(200, Jason.encode!(message_body(full)))},
       {:ok, envelope(200, Jason.encode!(message_body(structured_json(over_text, title: ""))))},
-      {:ok,
-       envelope(
-         200,
-         Jason.encode!(message_body(structured_json(compact, title: "What Is That Bird?")))
-       )}
+      {:ok, envelope(200, Jason.encode!(message_body(title_json("What Is That Bird?"))))}
     ])
 
     assert {:ok, result} = Runner.run(invocation, options())
-    assert result.text == compact
-    refute Map.has_key?(result, :text_part2)
+    assert result.compact_source == over_text
+    assert String.ends_with?(result.text, ReplyLimits.continuation_ellipsis())
     assert result.full_response == full
     assert result.document_title == "What Is That Bird?"
-    assert result.validation["repair_used"] == true
+    assert result.validation["repair_used"] == false
 
     assert_received {:anthropic_call, _research, %{kind: :research}, false}
     assert_received {:anthropic_call, _structure, %{kind: :structure}, false}
-    assert_received {:anthropic_call, repair, %{kind: :repair}, false}
-    assert Request.structure_repair_request?(repair)
+    assert_received {:anthropic_call, title_request, %{kind: :repair}, false}
+    refute Request.structure_repair_request?(title_request)
+    assert title_request["model"] == "claude-haiku-4-5"
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
   end
 
@@ -1806,10 +1806,9 @@ defmodule ContextBot.Research.RunnerTest do
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
   end
 
-  test "an overlong structured compact_reply starts one compact-repair call instead of a split" do
-    invocation = invocation("overlong-compact-repair")
+  test "an unsplittable overlong structured compact is locally shortened without compact-repair" do
+    invocation = invocation("overlong-compact-local-shorten")
     writeup = "Thorough markdown writeup that must stay on the Standard.site page."
-    compact = "Mostly true. Public reporting matches the claim."
     overlong = String.duplicate("a", 301)
 
     Process.put(:runner_client_results, [
@@ -1818,51 +1817,78 @@ defmodule ContextBot.Research.RunnerTest do
        envelope(
          200,
          Jason.encode!(message_body(structured_json(overlong, title: "Mostly True?")))
-       )},
-      {:ok,
-       envelope(
-         200,
-         Jason.encode!(message_body(structured_json(compact, title: "Mostly True?")))
        )}
     ])
 
     assert {:ok, result} = Runner.run(invocation, options())
-    assert result.text == compact
+    assert result.compact_source == overlong
+    assert String.ends_with?(result.text, ReplyLimits.continuation_ellipsis())
+    refute result.text == overlong
     assert result.full_response == writeup
-    assert result.validation["repair_used"] == true
-    refute Map.has_key?(result, :text_part2)
+    assert result.validation["repair_used"] == false
+
+    plan = PublicationPlan.preview(result.text, Map.get(result, :text_part2), writeup)
+    assert length(plan.posts) in 1..2
+    last = List.last(plan.posts)
+    assert String.contains?(last, "full response")
+    assert String.contains?(last, ReplyLimits.continuation_ellipsis())
+    assert String.ends_with?(last, Post.link_suffix())
 
     assert_received {:anthropic_call, _research, %{kind: :research}, false}
     assert_received {:anthropic_call, _structure, %{kind: :structure}, false}
-    assert_received {:anthropic_call, repair, %{kind: :repair}, false}
-    assert Request.structure_repair_request?(repair)
-    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+    refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
   end
 
-  test "an overlong compact-repair fails closed without another recovery or split" do
-    invocation = invocation("overlong-compact-repair-failed")
-    writeup = "Thorough markdown writeup."
-    overlong = String.duplicate("b", 301)
+  test "a splittable overlong structured compact publishes in two posts without compact-repair" do
+    invocation = invocation("overlong-compact-two-post-pack")
+    writeup = "Thorough markdown writeup that must stay on the Standard.site page."
+    part1 = String.duplicate("a", 200)
+    part2 = String.duplicate("b", 177)
+    overlong = part1 <> "\n\n" <> part2
+    {:ok, split1, split2} = Reply.split_text(overlong)
 
     Process.put(:runner_client_results, [
       {:ok, envelope(200, Jason.encode!(message_body(writeup)))},
       {:ok,
-       envelope(200, Jason.encode!(message_body(structured_json(overlong, title: "Essay"))))},
-      {:ok, envelope(200, Jason.encode!(message_body(structured_json(overlong, title: "Essay"))))}
+       envelope(
+         200,
+         Jason.encode!(message_body(structured_json(overlong, title: "Mostly True?")))
+       )}
     ])
 
-    assert {:error, :overlong_compact} = Runner.run(invocation, options())
+    assert {:ok, result} = Runner.run(invocation, options())
+    assert result.text == split1
+    assert result.text_part2 == split2
+    assert result.compact_source == overlong
+    assert result.full_response == writeup
+    assert result.validation["repair_used"] == false
+    assert result.validation["result"] == "split"
+
     assert_received {:anthropic_call, _research, %{kind: :research}, false}
     assert_received {:anthropic_call, _structure, %{kind: :structure}, false}
-    assert_received {:anthropic_call, repair, %{kind: :repair}, false}
-    assert Request.structure_repair_request?(repair)
-    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+    refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
+  end
 
-    assert Enum.map(Repo.all(from entry in BudgetEntry, order_by: entry.id), & &1.kind) == [
-             :research,
-             :structure,
-             :repair
-           ]
+  test "a shortened structured compact still keeps the research-draft compact in the writeup" do
+    invocation = invocation("structure-shortened-keeps-draft")
+    draft_compact = String.duplicate("d", 340)
+    structured = "A short structured compact."
+    writeup = Drafts.format("Mostly True?", draft_compact) <> "\n\nThorough markdown writeup."
+
+    Process.put(
+      :runner_client_results,
+      two_phase_results(
+        Jason.encode!(message_body(writeup)),
+        Jason.encode!(message_body(structured_json(structured, title: "Mostly True?")))
+      )
+    )
+
+    assert {:ok, result} = Runner.run(invocation, options())
+    assert result.text == structured
+    assert result.compact_source == draft_compact
+    refute result.text == draft_compact
+    assert {:ok, %{compact_reply: ^draft_compact}} = Drafts.parse(result.full_response)
+    refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
   end
 
   test "an empty compact-repair fails closed without another recovery" do
@@ -1881,7 +1907,86 @@ defmodule ContextBot.Research.RunnerTest do
     assert_received {:anthropic_call, _structure, %{kind: :structure}, false}
     assert_received {:anthropic_call, repair, %{kind: :repair}, false}
     assert Request.structure_repair_request?(repair)
+    assert repair["thinking"] == %{"type" => "disabled"}
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+  end
+
+  test "empty structure plus failed repair publishes a research draft instead of failing closed" do
+    invocation = invocation("empty-compact-draft-fallback")
+    draft_compact = "A Himalayan Monal from primary sources."
+
+    writeup =
+      Drafts.format("What Is That Bird?", draft_compact) <> "\n\nThorough markdown writeup."
+
+    empty = ~s({"disposition":"reply","title":"Mostly True?","compact_reply":""})
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(message_body(writeup)))},
+      {:ok, envelope(200, Jason.encode!(message_body(empty)))},
+      {:ok, envelope(200, Jason.encode!(message_body(empty)))}
+    ])
+
+    assert {:ok, result} = Runner.run(invocation, options())
+    assert result.text == draft_compact
+    assert result.document_title == "What Is That Bird?"
+    assert result.full_response == Citations.publishable_writeup(writeup, [])
+    assert result.validation["draft_fallback"] == true
+    assert result.validation["repair_used"] == true
+    refute Map.has_key?(result, :text_part2)
+
+    assert_received {:anthropic_call, _research, %{kind: :research}, false}
+    assert_received {:anthropic_call, _structure, %{kind: :structure}, false}
+    assert_received {:anthropic_call, _repair, %{kind: :repair}, false}
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+  end
+
+  test "invalid structured output publishes a truncatable research draft instead of failing closed" do
+    invocation = invocation("invalid-structure-draft-fallback")
+    draft_compact = String.duplicate("c", 340)
+    writeup = Drafts.format("Mostly True?", draft_compact) <> "\n\nThorough markdown writeup."
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(message_body(writeup)))},
+      {:ok, envelope(200, Jason.encode!(message_body("Just prose, not JSON.")))}
+    ])
+
+    assert {:ok, result} = Runner.run(invocation, options())
+    assert result.compact_source == draft_compact
+    assert String.ends_with?(result.text, ReplyLimits.continuation_ellipsis())
+    refute result.text == draft_compact
+    assert result.document_title == "Mostly True?"
+    assert result.full_response == Citations.publishable_writeup(writeup, [])
+    assert {:ok, %{compact_reply: ^draft_compact}} = Drafts.parse(result.full_response)
+    assert result.validation["draft_fallback"] == true
+    assert result.validation["repair_used"] == false
+    refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
+  end
+
+  test "structure max_tokens plus failed repair publishes a two-post research draft" do
+    invocation = invocation("max-tokens-draft-fallback")
+    part1 = String.duplicate("a", 200)
+    part2 = String.duplicate("b", 177)
+    draft_compact = part1 <> "\n\n" <> part2
+    {:ok, split1, split2} = Reply.split_text(draft_compact)
+    writeup = Drafts.format("Mostly True?", draft_compact) <> "\n\nThorough markdown writeup."
+    truncated = ~s({"disposition":"reply","title":"Mostly True?","compact_reply":"Mostly true. )
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(message_body(writeup)))},
+      {:ok, envelope(200, Jason.encode!(message_body(truncated, nil, "max_tokens")))},
+      {:ok, envelope(200, Jason.encode!(message_body(truncated, nil, "max_tokens")))}
+    ])
+
+    assert {:ok, result} = Runner.run(invocation, options())
+    assert result.text == split1
+    assert result.text_part2 == split2
+    assert result.compact_source == draft_compact
+    assert result.document_title == "Mostly True?"
+    assert {:ok, %{compact_reply: ^draft_compact}} = Drafts.parse(result.full_response)
+    assert result.validation["draft_fallback"] == true
+    assert result.validation["result"] == "split"
+    assert_received {:anthropic_call, repair, %{kind: :repair}, false}
+    assert Request.structure_repair_request?(repair)
   end
 
   test "research max_tokens still fails closed without a compact repair" do

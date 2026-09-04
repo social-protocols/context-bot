@@ -6,11 +6,19 @@ defmodule ContextBot.Research.Runner do
   envelope is committed before decoding, pricing, or reply selection. Recovery always starts
   from the budget ledger rather than inferring attempt identity from response count.
 
-  Empty or over-cap structured title/compact, or a structure-phase
-  `max_tokens` stop, starts at most one compact-repair call from the stored
-  writeup. Research-phase `max_tokens` stays terminal. Structure-from-writeup
-  resume does not replay a latest 2xx structure or repair envelope that
-  classified as a hard-fail; it starts a live `:structure` call instead.
+  Empty structured compact, structure-phase `max_tokens`, or overlong compact
+  that cannot be packed into ≤2 posts (including the full-response link) or
+  locally shortened, starts at most one compact-repair call from the stored
+  writeup. Prefer local pack-first split, then a hard truncate that still
+  fits in ≤2 posts with a continuation ellipsis immediately before the
+  link. Truncation is Bluesky-only; the writeup / Reader Summary keeps the
+  research-draft or pre-truncate compact. If structure or repair hard-fails
+  and a research `CONTEXT_BOT_DRAFT` compact is already under cap or
+  truncatable / packable into ≤2 posts, publish that draft instead of
+  failing closed. Research-phase `max_tokens` stays terminal.
+  Structure-from-writeup resume does not replay a latest 2xx structure or
+  repair envelope that classified as a hard-fail; it starts a live
+  `:structure` call instead.
   """
 
   import Ecto.Query
@@ -25,6 +33,7 @@ defmodule ContextBot.Research.Runner do
     Budget,
     BudgetEntry,
     Citations,
+    Drafts,
     InterruptRecovery,
     Pricing,
     Reply,
@@ -534,14 +543,14 @@ defmodule ContextBot.Research.Runner do
       {:title_rewrite, _selected} ->
         start_attempt(Repo.reload!(invocation), :repair, config)
 
-      {:compact_repair, _selected, reason} ->
-        start_compact_repair(invocation, config, reason)
+      {:compact_repair, selected, reason} ->
+        start_compact_repair_or_draft(invocation, config, reason, selected)
 
       {:error, :max_tokens} ->
-        start_compact_repair(invocation, config, :max_tokens)
+        start_compact_repair_or_draft(invocation, config, :max_tokens, nil)
 
       {:error, reason} ->
-        {:error, reason}
+        finish_with_draft_or_error(invocation, config, reason, nil, repair_used: false)
     end
   end
 
@@ -561,11 +570,21 @@ defmodule ContextBot.Research.Runner do
       {:title_rewrite, _selected} ->
         start_attempt(Repo.reload!(invocation), :repair, config)
 
-      {:compact_repair, _selected, reason} ->
-        {:error, reason}
+      {:compact_repair, selected, reason} ->
+        finish_with_draft_or_error(invocation, config, reason, selected, repair_used: true)
 
       {:error, reason} ->
-        {:error, reason}
+        finish_with_draft_or_error(invocation, config, reason, nil, repair_used: true)
+    end
+  end
+
+  defp start_compact_repair_or_draft(invocation, config, reason, selected) do
+    case start_compact_repair(invocation, config, reason) do
+      {:error, ^reason} ->
+        finish_with_draft_or_error(invocation, config, reason, selected, repair_used: false)
+
+      other ->
+        other
     end
   end
 
@@ -650,8 +669,10 @@ defmodule ContextBot.Research.Runner do
         {:ok, selected} ->
           {:ok, finish_selected(invocation, selected, config)}
 
-        {:compact_repair, _selected, _reason} ->
-          {:error, :overlong_compact}
+        {:compact_repair, selected, _reason} ->
+          finish_with_draft_or_error(invocation, config, :overlong_compact, selected,
+            repair_used: true
+          )
       end
     else
       _failed ->
@@ -726,6 +747,9 @@ defmodule ContextBot.Research.Runner do
   end
 
   defp finish_selected(invocation, selected, config, opts) do
+    part2 = Map.get(selected, :text_part2)
+    split? = is_binary(part2) and part2 != ""
+
     %{
       messages: invocation.anthropic_messages,
       text: selected.text,
@@ -733,15 +757,102 @@ defmodule ContextBot.Research.Runner do
       document_title: selected.document_title,
       disposition: Map.get(selected, :disposition, :reply),
       usage: usage_evidence(invocation, config),
-      validation: %{
-        "result" => "valid",
-        "repair_used" => Keyword.get(opts, :repair_used, false),
-        "phase" => "structure"
-      }
+      validation:
+        %{
+          "result" => if(split?, do: "split", else: "valid"),
+          "repair_used" => Keyword.get(opts, :repair_used, false),
+          "phase" => "structure"
+        }
+        |> maybe_put_draft_fallback(Keyword.get(opts, :draft_fallback, false))
     }
+    |> maybe_put_part2(part2)
+    |> maybe_put_compact_source(writeup_compact_source(invocation, selected))
     |> attach_full_response(invocation)
     |> attach_document_title(invocation)
   end
+
+  defp maybe_put_part2(result, part2) when is_binary(part2) and part2 != "",
+    do: Map.put(result, :text_part2, part2)
+
+  defp maybe_put_part2(result, _part2), do: result
+
+  defp maybe_put_compact_source(result, source) when is_binary(source) and source != "",
+    do: Map.put(result, :compact_source, source)
+
+  defp maybe_put_compact_source(result, _source), do: result
+
+  # Reader Summary prefers the research-draft compact, then the pre-truncate
+  # structured compact. Published Bluesky `text` may be a local pack/shorten.
+  defp writeup_compact_source(invocation, selected) do
+    case parsed_draft_compact(invocation) do
+      compact when is_binary(compact) and compact != "" -> compact
+      _missing -> Map.get(selected, :compact_source)
+    end
+  end
+
+  defp parsed_draft_compact(%Invocation{full_response: writeup})
+       when is_binary(writeup) and writeup != "" do
+    case Drafts.parse(writeup) do
+      {:ok, drafts} -> drafts.compact_reply
+      :error -> nil
+    end
+  end
+
+  defp parsed_draft_compact(_invocation), do: nil
+
+  defp maybe_put_draft_fallback(validation, true), do: Map.put(validation, "draft_fallback", true)
+  defp maybe_put_draft_fallback(validation, _false), do: validation
+
+  defp finish_with_draft_or_error(invocation, config, reason, structured_selected, opts) do
+    case publishable_research_draft(invocation, structured_selected) do
+      {:ok, selected} ->
+        {:ok,
+         finish_selected(invocation, selected, config,
+           repair_used: Keyword.get(opts, :repair_used, false),
+           draft_fallback: true
+         )}
+
+      :error ->
+        {:error, reason}
+    end
+  end
+
+  defp publishable_research_draft(%Invocation{full_response: writeup}, structured_selected)
+       when is_binary(writeup) and writeup != "" do
+    with {:ok, drafts} <- Drafts.parse(writeup),
+         {:ok, text, part2} <- Reply.publishable_compact(drafts.compact_reply) do
+      title =
+        case String.trim(drafts.title) do
+          "" -> structured_title(structured_selected)
+          nonempty -> nonempty
+        end
+
+      selected = %{
+        text: text,
+        full_response: writeup,
+        document_title: title,
+        disposition: :reply
+      }
+
+      {:ok, attach_draft_publication(selected, drafts.compact_reply, text, part2)}
+    else
+      _miss -> :error
+    end
+  end
+
+  defp publishable_research_draft(_invocation, _structured_selected), do: :error
+
+  defp attach_draft_publication(selected, original, text, part2) do
+    selected
+    |> maybe_put_part2(part2)
+    |> maybe_put_compact_source(draft_source(original, text, part2))
+  end
+
+  defp draft_source(original, original, nil), do: nil
+  defp draft_source(original, _text, _part2), do: original
+
+  defp structured_title(%{document_title: title}) when is_binary(title), do: String.trim(title)
+  defp structured_title(_selected), do: ""
 
   defp writeup_from(%Invocation{full_response: writeup}, _selected)
        when is_binary(writeup) and writeup != "",

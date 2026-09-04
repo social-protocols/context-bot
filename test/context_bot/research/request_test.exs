@@ -588,7 +588,7 @@ defmodule ContextBot.Research.RequestTest do
     refute Jason.encode!(research) =~ "json_schema"
 
     refute Map.has_key?(structure, "tools")
-    refute Map.has_key?(structure, "thinking")
+    assert structure["thinking"] == %{"type" => "disabled"}
     refute Map.has_key?(structure, "effort")
     refute Map.has_key?(structure["output_config"], "effort")
     refute Jason.encode!(structure) =~ "adaptive"
@@ -663,7 +663,7 @@ defmodule ContextBot.Research.RequestTest do
     assert request["model"] == "claude-sonnet-5"
     assert request["max_tokens"] == 256
     refute Map.has_key?(request, "tools")
-    refute Map.has_key?(request, "thinking")
+    assert request["thinking"] == %{"type" => "disabled"}
     refute Map.has_key?(request["output_config"], "effort")
     assert request["output_config"]["format"]["schema"] == Request.structure_schema()
     assert Request.structure_request?(request)
@@ -712,9 +712,9 @@ defmodule ContextBot.Research.RequestTest do
     assert banner =~ "Research drafts (starting point"
     assert banner =~ "Do not self-count"
     assert banner =~ "title: Mostly True?"
-    refute banner =~ compact
-    refute banner =~ "compact_reply: #{compact}"
-    assert banner =~ "compact_reply: (omitted; over cap"
+    assert banner =~ "compact_reply: #{compact}"
+    refute banner =~ "(omitted; over cap"
+    assert banner =~ "compact_reply_seed: #{String.duplicate("c", 300)}"
     assert banner =~ "compact_length: 340 graphemes / 340 bytes"
     assert banner =~ "hard_cap: 300 graphemes / #{ReplyLimits.max_bytes()} bytes"
     assert banner =~ "over_cap: compact is 40 graphemes over; shorten by about 40 graphemes"
@@ -751,7 +751,7 @@ defmodule ContextBot.Research.RequestTest do
         effort: :low
       })
 
-    refute Map.has_key?(structure, "thinking")
+    assert structure["thinking"] == %{"type" => "disabled"}
     refute Map.has_key?(structure, "effort")
     refute Map.has_key?(structure["output_config"], "effort")
     assert structure["output_config"]["format"]["type"] == "json_schema"

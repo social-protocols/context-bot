@@ -2,6 +2,7 @@ defmodule ContextBot.Research.ReplyTest do
   use ExUnit.Case, async: true
 
   alias ContextBot.ATProto.Post
+  alias ContextBot.Reply.PublicationPlan
   alias ContextBot.Research.Reply
   alias ContextBot.Research.ReplyLimits
   alias ContextBot.Research.StructuredFixtures
@@ -550,7 +551,7 @@ defmodule ContextBot.Research.ReplyTest do
              StructuredFixtures.selected(at_300)
   end
 
-  test "classifies over-cap structured compact as compact_repair without truncating" do
+  test "hard-truncates unsplittable over-cap compact into ≤2 posts with ellipsis before the link" do
     over_graphemes = String.duplicate("a", 301)
     over_bytes = String.duplicate("👩‍💻", 272) <> String.duplicate("a", 9)
     over_both = String.duplicate("👩‍💻", 301)
@@ -560,25 +561,56 @@ defmodule ContextBot.Research.ReplyTest do
     assert byte_size(over_bytes) == 3_001
     assert String.length(over_bytes) == 281
 
-    assert {:compact_repair, selected_graphemes, :overlong_compact} =
-             Reply.select([structured_text(over_graphemes)], "end_turn")
+    assert {:ok, selected_graphemes} = Reply.select([structured_text(over_graphemes)], "end_turn")
+    assert_two_post_link_truncate(selected_graphemes, over_graphemes)
+    assert Map.get(selected_graphemes, :text_part2) != nil
 
-    assert selected_graphemes.text == over_graphemes
+    grapheme_plan =
+      PublicationPlan.preview(
+        selected_graphemes.text,
+        selected_graphemes.text_part2,
+        over_graphemes
+      )
 
-    assert {:compact_repair, selected_bytes, :overlong_compact} =
-             Reply.select([structured_text(over_bytes)], "end_turn")
+    assert length(grapheme_plan.posts) == 2
 
-    assert selected_bytes.text == over_bytes
+    assert List.last(grapheme_plan.posts) ==
+             ReplyLimits.continuation_ellipsis() <> "aa" <> Post.link_suffix()
 
-    assert {:compact_repair, selected_both, :overlong_compact} =
-             Reply.select([structured_text(over_both)], "end_turn")
+    assert {:ok, selected_bytes} = Reply.select([structured_text(over_bytes)], "end_turn")
+    assert_two_post_link_truncate(selected_bytes, over_bytes)
 
-    assert selected_both.text == over_both
+    assert {:ok, selected_both} = Reply.select([structured_text(over_both)], "end_turn")
+    assert_two_post_link_truncate(selected_both, over_both)
 
-    assert {:compact_repair, selected_essay, :overlong_compact} =
-             Reply.select([structured_text(essay)], "end_turn")
+    assert {:ok, selected_essay} = Reply.select([structured_text(essay)], "end_turn")
+    assert_two_post_link_truncate(selected_essay, essay)
+    assert selected_essay.compact_source == essay
+    refute selected_essay.text == essay
 
-    assert selected_essay.text == essay
+    essay_plan =
+      PublicationPlan.preview(selected_essay.text, selected_essay.text_part2, essay)
+
+    assert length(essay_plan.posts) == 2
+
+    assert String.ends_with?(
+             List.last(essay_plan.posts),
+             ReplyLimits.continuation_ellipsis() <> Post.link_suffix()
+           )
+  end
+
+  test "accepts a splittable overlong compact as a two-post pack without compact_repair" do
+    part1 = String.duplicate("a", 200)
+    part2 = String.duplicate("b", 177)
+    compact = part1 <> "\n\n" <> part2
+
+    assert String.length(compact) == 379
+    assert {:ok, split1, split2} = Reply.split_text(compact)
+    assert ReplyLimits.fits_one_post?(split2 <> Post.link_suffix())
+
+    assert {:ok, selected} = Reply.select([structured_text(compact)], "end_turn")
+    assert selected.text == split1
+    assert selected.text_part2 == split2
   end
 
   test "rejects empty or whitespace-only normal completions as terminal" do
@@ -1219,4 +1251,20 @@ defmodule ContextBot.Research.ReplyTest do
   end
 
   defp text(value), do: %{"type" => "text", "text" => value}
+
+  defp assert_two_post_link_truncate(selected, original) do
+    assert selected.compact_source == original
+    assert String.ends_with?(selected.text, ReplyLimits.continuation_ellipsis())
+    refute selected.text == original
+
+    plan = PublicationPlan.preview(selected.text, Map.get(selected, :text_part2), original)
+    assert length(plan.posts) in 1..2
+    last = List.last(plan.posts)
+    assert String.contains?(last, "full response")
+    assert String.contains?(last, ReplyLimits.continuation_ellipsis())
+
+    Enum.each(plan.posts, fn post ->
+      assert ReplyLimits.fits_one_post?(post)
+    end)
+  end
 end

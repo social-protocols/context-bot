@@ -12,10 +12,9 @@ defmodule ContextBot.Research.Reply do
   """
 
   alias ContextBot.ATProto.Post
-  alias ContextBot.Research.{Citations, ReplyLimits}
+  alias ContextBot.Research.{Citations, Drafts, ReplyLimits}
 
   @hard_max_graphemes ReplyLimits.hard_max_graphemes()
-  @max_bytes ReplyLimits.max_bytes()
   @web_server_tools ~w(web_search web_fetch)
   # Dated web_search/web_fetch default `allowed_callers` to auto-provisioned code execution.
   # Requests pin `allowed_callers: ["direct"]` so searches are native `server_tool_use` only.
@@ -41,10 +40,12 @@ defmodule ContextBot.Research.Reply do
           optional(:seen_server_tool_ids) => MapSet.t(String.t())
         }
   @type selected :: %{
-          text: String.t(),
-          full_response: String.t(),
-          document_title: String.t(),
-          disposition: :reply | :no_reply
+          required(:text) => String.t(),
+          required(:full_response) => String.t(),
+          required(:document_title) => String.t(),
+          required(:disposition) => :reply | :no_reply,
+          optional(:text_part2) => String.t(),
+          optional(:compact_source) => String.t()
         }
   @type result ::
           {:ok, selected()}
@@ -181,6 +182,118 @@ defmodule ContextBot.Research.Reply do
           {:ok, selected()} | {:compact_repair, selected(), reason()} | {:error, reason()}
   def classify_selected(%{text: text} = selected) when is_binary(text),
     do: classify_structured(selected)
+
+  @doc """
+  Turns a compact into a locally publishable one- or two-post pack.
+
+  Prefers an in-cap body, then a pack-first split that still leaves room
+  for the full-response link on post 2, then a hard truncate whose
+  published body still fits in ≤2 posts including the link. Hard
+  truncation adds the continuation ellipsis so the cut sits immediately
+  before `Post.link_suffix/0`. Returns `:error` only when the compact is
+  empty.
+  """
+  @spec publishable_compact(String.t()) :: {:ok, String.t(), String.t() | nil} | :error
+  def publishable_compact(text) when is_binary(text) do
+    cond do
+      String.trim(text) == "" ->
+        :error
+
+      ReplyLimits.fits_one_post?(text) ->
+        {:ok, text, nil}
+
+      true ->
+        pack_or_shorten(text)
+    end
+  end
+
+  defp pack_or_shorten(text) do
+    case two_post_pack(text) do
+      {:ok, part1, part2} -> {:ok, part1, part2}
+      :error -> shorten_to_two_posts(text)
+    end
+  end
+
+  defp shorten_to_two_posts(text) do
+    left = slice_for_post1(text)
+
+    case leftover_after(text, left) do
+      "" -> one_post_ellipsis_and_link(left)
+      rest -> two_post_or_linked_one(left, rest)
+    end
+  end
+
+  defp two_post_or_linked_one(left, rest) do
+    case two_post_hard_truncate(left, rest) do
+      {:ok, _part1, _part2} = ok -> ok
+      :error -> one_post_ellipsis_and_link(left)
+    end
+  end
+
+  defp two_post_hard_truncate(left, rest) do
+    right = post2_right(rest)
+    {part1, part2} = with_continuation_ellipses(left, right)
+
+    if part1 != "" and part2 != "" and
+         ReplyLimits.fits_one_post?(part1) and
+         ReplyLimits.fits_one_post?(part2 <> Post.link_suffix()) do
+      {:ok, part1, part2}
+    else
+      :error
+    end
+  end
+
+  defp post2_right(rest) do
+    if post2_with_link?(rest) do
+      rest
+    else
+      rest
+      |> slice_for_post2_cut()
+      |> with_trailing_ellipsis()
+    end
+  end
+
+  defp post2_with_link?(rest) do
+    ReplyLimits.fits_one_post?(with_leading_ellipsis(rest) <> Post.link_suffix())
+  end
+
+  defp one_post_ellipsis_and_link(text) do
+    marked = text |> slice_for_one_post_with_link() |> with_trailing_ellipsis()
+
+    if marked != "" and ReplyLimits.fits_one_post?(marked <> Post.link_suffix()) do
+      {:ok, marked, nil}
+    else
+      :error
+    end
+  end
+
+  defp slice_for_post1(text) do
+    reserve_then_slice(text, ReplyLimits.continuation_ellipsis())
+  end
+
+  defp slice_for_one_post_with_link(text) do
+    reserve_then_slice(text, ReplyLimits.continuation_ellipsis() <> Post.link_suffix())
+  end
+
+  defp slice_for_post2_cut(rest) do
+    ellipsis = ReplyLimits.continuation_ellipsis()
+    reserved = ellipsis <> ellipsis <> Post.link_suffix()
+    reserve_then_slice(rest, reserved)
+  end
+
+  defp reserve_then_slice(text, reserved) do
+    max_g = max(ReplyLimits.hard_max_graphemes() - ReplyLimits.graphemes(reserved), 0)
+    max_b = max(ReplyLimits.max_bytes() - ReplyLimits.bytes(reserved), 0)
+    Drafts.truncate_to(text, max_g, max_b)
+  end
+
+  defp leftover_after(text, prefix) do
+    if String.starts_with?(text, prefix) do
+      String.replace_prefix(text, prefix, "")
+    else
+      ""
+    end
+  end
 
   @doc """
   Reads a nonempty title from a title-only JSON envelope.
@@ -917,8 +1030,12 @@ defmodule ContextBot.Research.Reply do
 
       {:title_rewrite, selected} ->
         case classify_structured(Map.put(selected, :disposition, :reply)) do
-          {:ok, _selected} -> {:title_rewrite, selected}
-          {:compact_repair, repaired, reason} -> {:compact_repair, repaired, reason}
+          {:ok, fixed} ->
+            {:title_rewrite,
+             Map.merge(selected, Map.take(fixed, [:text, :text_part2, :compact_source]))}
+
+          {:compact_repair, repaired, reason} ->
+            {:compact_repair, repaired, reason}
         end
 
       {:compact_repair, selected, reason} ->
@@ -1029,23 +1146,47 @@ defmodule ContextBot.Research.Reply do
   defp classify_structured(%{disposition: :no_reply} = selected), do: {:ok, selected}
 
   defp classify_structured(%{text: compact_reply} = selected) do
-    case limit_reasons(compact_reply) do
-      [] ->
-        {:ok, Map.put_new(selected, :disposition, :reply)}
+    selected = Map.put_new(selected, :disposition, :reply)
 
-      _reasons ->
-        {:compact_repair, Map.put_new(selected, :disposition, :reply), :overlong_compact}
+    case publishable_compact(compact_reply) do
+      {:ok, text, part2} ->
+        {:ok, attach_published_compact(selected, compact_reply, text, part2)}
+
+      :error ->
+        {:compact_repair, selected, :overlong_compact}
     end
   end
 
-  defp limit_reasons(text) do
-    measure = ReplyLimits.measure(text)
-
-    []
-    |> maybe_add_reason(measure.graphemes > @hard_max_graphemes, :too_many_graphemes)
-    |> maybe_add_reason(measure.bytes > @max_bytes, :too_many_bytes)
+  defp attach_published_compact(selected, original, text, nil) do
+    selected
+    |> Map.put(:text, text)
+    |> maybe_put_compact_source(original, text)
   end
 
-  defp maybe_add_reason(reasons, true, reason), do: reasons ++ [reason]
-  defp maybe_add_reason(reasons, false, _reason), do: reasons
+  defp attach_published_compact(selected, original, text, part2) do
+    selected
+    |> Map.put(:text, text)
+    |> Map.put(:text_part2, part2)
+    |> Map.put(:compact_source, original)
+  end
+
+  defp maybe_put_compact_source(selected, original, original), do: selected
+
+  defp maybe_put_compact_source(selected, original, _published) do
+    Map.put(selected, :compact_source, original)
+  end
+
+  defp two_post_pack(text) do
+    case split_text(text) do
+      {:ok, part1, part2} ->
+        if ReplyLimits.fits_one_post?(part2 <> Post.link_suffix()) do
+          {:ok, part1, part2}
+        else
+          :error
+        end
+
+      :error ->
+        :error
+    end
+  end
 end
