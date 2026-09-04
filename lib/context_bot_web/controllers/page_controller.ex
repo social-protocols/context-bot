@@ -26,6 +26,10 @@ defmodule ContextBotWeb.PageController do
       <title>Context Bot</title>
       <meta name="description" content="#{@og_description}">
       <link rel="canonical" href="#{@public_url}">
+      <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
+      <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32x32.png">
+      <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16x16.png">
+      <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon.png">
       <meta property="og:title" content="Context Bot">
       <meta property="og:description" content="#{@og_description}">
       <meta property="og:image" content="#{@og_image_url}">

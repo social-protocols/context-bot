@@ -9,6 +9,21 @@ defmodule ContextBotWeb.InvocationsControllerTest do
   alias ContextBot.Workflow.Invocation
 
   describe "GET /invocations" do
+    test "links favicon and apple-touch-icon assets in the document head", %{conn: conn} do
+      body = conn |> get(~p"/invocations") |> html_response(200)
+
+      assert body =~ ~s(<link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">)
+
+      assert body =~
+               ~s(<link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32x32.png">)
+
+      assert body =~
+               ~s(<link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16x16.png">)
+
+      assert body =~
+               ~s(<link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon.png">)
+    end
+
     test "displays summary statistics for last day, week, and month", %{conn: conn} do
       now = DateTime.utc_now()
       yesterday = DateTime.add(now, -1, :day)
