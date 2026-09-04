@@ -207,7 +207,7 @@ defmodule ContextBot.Workflow.RecoveryTest do
     assert persisted.full_response == writeup
     assert persisted.citation_sources == citations
     assert persisted.anthropic_messages == expected
-    refute Map.has_key?(persisted.anthropic_messages, "thinking")
+    assert persisted.anthropic_messages["thinking"] == %{"type" => "disabled"}
     refute Map.has_key?(persisted.anthropic_messages["output_config"], "effort")
     assert persisted.anthropic_messages["output_config"]["format"]["type"] == "json_schema"
     assert Repo.reload!(entry).state == :sent

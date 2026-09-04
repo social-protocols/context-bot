@@ -40,34 +40,59 @@ defmodule ContextBot.Research.DraftsTest do
     assert Drafts.parse("CONTEXT_BOT_DRAFT\nmissing labels\nCONTEXT_BOT_DRAFT_END") == :error
   end
 
-  test "structure banner omits the raw over-cap compact and keeps measured counts" do
+  test "truncate_to_cap/1 keeps in-cap text and slices over-cap text to the hard caps" do
+    in_cap = String.duplicate("a", 300)
+    assert Drafts.truncate_to_cap(in_cap) == in_cap
+    assert Drafts.truncate_to_cap("short") == "short"
+
+    over_graphemes = String.duplicate("b", 350)
+    truncated = Drafts.truncate_to_cap(over_graphemes)
+    assert truncated == String.duplicate("b", 300)
+    assert ReplyLimits.fits_one_post?(truncated)
+    refute ReplyLimits.fits_one_post?(over_graphemes)
+
+    # 273 ZWJ emoji sequences are 273 graphemes / 3,003 bytes — over the byte cap.
+    over_bytes = String.duplicate("👩‍💻", 273)
+    refute ReplyLimits.fits_one_post?(over_bytes)
+    truncated_bytes = Drafts.truncate_to_cap(over_bytes)
+    assert ReplyLimits.fits_one_post?(truncated_bytes)
+    assert ReplyLimits.graphemes(truncated_bytes) < ReplyLimits.graphemes(over_bytes)
+    assert String.starts_with?(over_bytes, truncated_bytes)
+  end
+
+  test "structure banner includes the full over-cap compact plus a truncated seed and measured counts" do
     compact = String.duplicate("b", 350)
     writeup = Drafts.format("Mostly True?", compact) <> "\n\nWriteup."
     banner = Drafts.structure_banner(writeup)
+    seed = Drafts.truncate_to_cap(compact)
 
     assert banner =~ "Research drafts (starting point"
     assert banner =~ "Do not self-count"
     assert banner =~ "title: Mostly True?"
     assert banner =~ "title_length: #{ReplyLimits.graphemes("Mostly True?")} graphemes"
-    refute banner =~ compact
-    refute banner =~ "compact_reply: #{compact}"
-    assert banner =~ "compact_reply: (omitted; over cap"
+    assert banner =~ "compact_reply: #{compact}"
+    refute banner =~ "(omitted; over cap"
+    assert banner =~ "compact_reply_seed: #{seed}"
+    assert ReplyLimits.graphemes(seed) == 300
     assert banner =~ "compact_length: 350 graphemes / 350 bytes"
     assert banner =~ "hard_cap: 300 graphemes / 3000 bytes"
     assert banner =~ "over_cap: compact is 50 graphemes over; shorten by about 50 graphemes"
   end
 
-  test "structure banner omits a similarly huge title and keeps title_length" do
+  test "structure banner includes the full over-cap title plus a truncated seed and title_length" do
     title = String.duplicate("T", 400)
     compact = "A Himalayan Monal."
     writeup = Drafts.format(title, compact) <> "\n\nWriteup."
     banner = Drafts.structure_banner(writeup)
+    seed = Drafts.truncate_to_cap(title)
 
-    refute banner =~ title
-    refute banner =~ "title: #{title}"
-    assert banner =~ "title: (omitted; over cap"
+    assert banner =~ "title: #{title}"
+    refute banner =~ "(omitted; over cap"
+    assert banner =~ "title_seed: #{seed}"
+    assert ReplyLimits.graphemes(seed) == 300
     assert banner =~ "title_length: 400 graphemes / 400 bytes"
     assert banner =~ "compact_reply: #{compact}"
+    refute banner =~ "compact_reply_seed:"
   end
 
   test "structure banner includes in-cap draft text and reports over_cap none" do
@@ -80,6 +105,8 @@ defmodule ContextBot.Research.DraftsTest do
     assert banner =~ "over_cap: none"
     refute banner =~ "shorten by"
     refute banner =~ "(omitted; over cap"
+    refute banner =~ "compact_reply_seed:"
+    refute banner =~ "title_seed:"
   end
 
   test "publishable_writeup keeps the draft block parseable" do

@@ -550,7 +550,7 @@ defmodule ContextBot.Research.ReplyTest do
              StructuredFixtures.selected(at_300)
   end
 
-  test "classifies over-cap structured compact as compact_repair without truncating" do
+  test "locally shortens unsplittable over-cap structured compact instead of compact_repair" do
     over_graphemes = String.duplicate("a", 301)
     over_bytes = String.duplicate("👩‍💻", 272) <> String.duplicate("a", 9)
     over_both = String.duplicate("👩‍💻", 301)
@@ -560,25 +560,33 @@ defmodule ContextBot.Research.ReplyTest do
     assert byte_size(over_bytes) == 3_001
     assert String.length(over_bytes) == 281
 
-    assert {:compact_repair, selected_graphemes, :overlong_compact} =
-             Reply.select([structured_text(over_graphemes)], "end_turn")
+    assert {:ok, selected_graphemes} = Reply.select([structured_text(over_graphemes)], "end_turn")
+    assert selected_graphemes.text == String.duplicate("a", 300)
+    refute Map.has_key?(selected_graphemes, :text_part2)
 
-    assert selected_graphemes.text == over_graphemes
+    assert {:ok, selected_bytes} = Reply.select([structured_text(over_bytes)], "end_turn")
+    assert ReplyLimits.fits_one_post?(selected_bytes.text)
+    assert String.starts_with?(over_bytes, selected_bytes.text)
 
-    assert {:compact_repair, selected_bytes, :overlong_compact} =
-             Reply.select([structured_text(over_bytes)], "end_turn")
+    assert {:ok, selected_both} = Reply.select([structured_text(over_both)], "end_turn")
+    assert ReplyLimits.fits_one_post?(selected_both.text)
 
-    assert selected_bytes.text == over_bytes
+    assert {:ok, selected_essay} = Reply.select([structured_text(essay)], "end_turn")
+    assert selected_essay.text == String.duplicate("a", 300)
+  end
 
-    assert {:compact_repair, selected_both, :overlong_compact} =
-             Reply.select([structured_text(over_both)], "end_turn")
+  test "accepts a splittable overlong compact as a two-post pack without compact_repair" do
+    part1 = String.duplicate("a", 200)
+    part2 = String.duplicate("b", 177)
+    compact = part1 <> "\n\n" <> part2
 
-    assert selected_both.text == over_both
+    assert String.length(compact) == 379
+    assert {:ok, split1, split2} = Reply.split_text(compact)
+    assert ReplyLimits.fits_one_post?(split2 <> Post.link_suffix())
 
-    assert {:compact_repair, selected_essay, :overlong_compact} =
-             Reply.select([structured_text(essay)], "end_turn")
-
-    assert selected_essay.text == essay
+    assert {:ok, selected} = Reply.select([structured_text(compact)], "end_turn")
+    assert selected.text == split1
+    assert selected.text_part2 == split2
   end
 
   test "rejects empty or whitespace-only normal completions as terminal" do

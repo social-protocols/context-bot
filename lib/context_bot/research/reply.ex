@@ -12,10 +12,9 @@ defmodule ContextBot.Research.Reply do
   """
 
   alias ContextBot.ATProto.Post
-  alias ContextBot.Research.{Citations, ReplyLimits}
+  alias ContextBot.Research.{Citations, Drafts, ReplyLimits}
 
   @hard_max_graphemes ReplyLimits.hard_max_graphemes()
-  @max_bytes ReplyLimits.max_bytes()
   @web_server_tools ~w(web_search web_fetch)
   # Dated web_search/web_fetch default `allowed_callers` to auto-provisioned code execution.
   # Requests pin `allowed_callers: ["direct"]` so searches are native `server_tool_use` only.
@@ -41,10 +40,11 @@ defmodule ContextBot.Research.Reply do
           optional(:seen_server_tool_ids) => MapSet.t(String.t())
         }
   @type selected :: %{
-          text: String.t(),
-          full_response: String.t(),
-          document_title: String.t(),
-          disposition: :reply | :no_reply
+          required(:text) => String.t(),
+          required(:full_response) => String.t(),
+          required(:document_title) => String.t(),
+          required(:disposition) => :reply | :no_reply,
+          optional(:text_part2) => String.t()
         }
   @type result ::
           {:ok, selected()}
@@ -181,6 +181,39 @@ defmodule ContextBot.Research.Reply do
           {:ok, selected()} | {:compact_repair, selected(), reason()} | {:error, reason()}
   def classify_selected(%{text: text} = selected) when is_binary(text),
     do: classify_structured(selected)
+
+  @doc """
+  Turns a compact into a locally publishable one- or two-post pack.
+
+  Prefers an in-cap body, then a pack-first split that still leaves room
+  for the full-response link on post 2, then a hard truncate to the
+  publication caps. Returns `:error` only when the compact is empty.
+  """
+  @spec publishable_compact(String.t()) :: {:ok, String.t(), String.t() | nil} | :error
+  def publishable_compact(text) when is_binary(text) do
+    cond do
+      String.trim(text) == "" ->
+        :error
+
+      ReplyLimits.fits_one_post?(text) ->
+        {:ok, text, nil}
+
+      true ->
+        case two_post_pack(text) do
+          {:ok, part1, part2} ->
+            {:ok, part1, part2}
+
+          :error ->
+            case Drafts.truncate_to_cap(text) do
+              truncated when is_binary(truncated) and truncated != "" ->
+                {:ok, truncated, nil}
+
+              _empty ->
+                :error
+            end
+        end
+    end
+  end
 
   @doc """
   Reads a nonempty title from a title-only JSON envelope.
@@ -917,8 +950,11 @@ defmodule ContextBot.Research.Reply do
 
       {:title_rewrite, selected} ->
         case classify_structured(Map.put(selected, :disposition, :reply)) do
-          {:ok, _selected} -> {:title_rewrite, selected}
-          {:compact_repair, repaired, reason} -> {:compact_repair, repaired, reason}
+          {:ok, fixed} ->
+            {:title_rewrite, Map.merge(selected, Map.take(fixed, [:text, :text_part2]))}
+
+          {:compact_repair, repaired, reason} ->
+            {:compact_repair, repaired, reason}
         end
 
       {:compact_repair, selected, reason} ->
@@ -1029,23 +1065,31 @@ defmodule ContextBot.Research.Reply do
   defp classify_structured(%{disposition: :no_reply} = selected), do: {:ok, selected}
 
   defp classify_structured(%{text: compact_reply} = selected) do
-    case limit_reasons(compact_reply) do
-      [] ->
-        {:ok, Map.put_new(selected, :disposition, :reply)}
+    selected = Map.put_new(selected, :disposition, :reply)
 
-      _reasons ->
-        {:compact_repair, Map.put_new(selected, :disposition, :reply), :overlong_compact}
+    case publishable_compact(compact_reply) do
+      {:ok, text, nil} ->
+        {:ok, %{selected | text: text}}
+
+      {:ok, part1, part2} ->
+        {:ok, Map.put(%{selected | text: part1}, :text_part2, part2)}
+
+      :error ->
+        {:compact_repair, selected, :overlong_compact}
     end
   end
 
-  defp limit_reasons(text) do
-    measure = ReplyLimits.measure(text)
+  defp two_post_pack(text) do
+    case split_text(text) do
+      {:ok, part1, part2} ->
+        if ReplyLimits.fits_one_post?(part2 <> Post.link_suffix()) do
+          {:ok, part1, part2}
+        else
+          :error
+        end
 
-    []
-    |> maybe_add_reason(measure.graphemes > @hard_max_graphemes, :too_many_graphemes)
-    |> maybe_add_reason(measure.bytes > @max_bytes, :too_many_bytes)
+      :error ->
+        :error
+    end
   end
-
-  defp maybe_add_reason(reasons, true, reason), do: reasons ++ [reason]
-  defp maybe_add_reason(reasons, false, _reason), do: reasons
 end

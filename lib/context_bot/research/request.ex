@@ -453,7 +453,9 @@ defmodule ContextBot.Research.Request do
   Builds the small structured-output request from a completed research writeup.
 
   No web tools. JSON schema is disposition/title/compact_reply only.
-  Haiku-safe: no `thinking` and no `output_config.effort`.
+  Sonnet 5 turns adaptive thinking on when `thinking` is omitted, so
+  structure sends `thinking.type=disabled`. No `output_config.effort`.
+  Title rewrite stays on Haiku and still omits `thinking`.
   """
   @spec structure(structure_config()) :: map()
   def structure(%{
@@ -470,6 +472,7 @@ defmodule ContextBot.Research.Request do
       "max_tokens" => max_tokens,
       "stream" => false,
       "cache_control" => %{"type" => "ephemeral"},
+      "thinking" => %{"type" => "disabled"},
       "output_config" => %{
         "format" => %{
           "type" => "json_schema",
@@ -506,6 +509,7 @@ defmodule ContextBot.Research.Request do
       "max_tokens" => max_tokens,
       "stream" => false,
       "cache_control" => %{"type" => "ephemeral"},
+      "thinking" => %{"type" => "disabled"},
       "output_config" => %{
         "format" => %{
           "type" => "json_schema",

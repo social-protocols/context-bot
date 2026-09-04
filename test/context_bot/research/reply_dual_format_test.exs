@@ -93,7 +93,7 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       assert selected.disposition == :reply
     end
 
-    test "an over-cap compact after a placeholder is compact_repair" do
+    test "an over-cap compact after a placeholder is locally shortened, not compact_repair" do
       long_compact = String.duplicate("a", 301)
 
       content = [
@@ -108,8 +108,8 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
         }
       ]
 
-      assert {:compact_repair, selected, :overlong_compact} = Reply.select(content, :end_turn)
-      assert selected.text == long_compact
+      assert {:ok, selected} = Reply.select(content, :end_turn)
+      assert selected.text == String.duplicate("a", 300)
     end
 
     test "fails closed when the model returns prose instead of JSON" do
@@ -165,7 +165,7 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       end
     end
 
-    test "an over-long compact with a blank title is compact_repair, not title rewrite" do
+    test "an over-long compact with a blank title is title rewrite after local shorten" do
       long_compact = String.duplicate("a", 301)
 
       content = [
@@ -179,8 +179,8 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
         }
       ]
 
-      assert {:compact_repair, selected, :overlong_compact} = Reply.select(content, :end_turn)
-      assert selected.text == long_compact
+      assert {:title_rewrite, selected} = Reply.select(content, :end_turn)
+      assert selected.text == String.duplicate("a", 300)
       assert selected.document_title == ""
     end
 
@@ -238,7 +238,7 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       assert selected.text == "Short summary for Bluesky"
     end
 
-    test "handles an over-cap compact reply inside JSON as compact_repair" do
+    test "handles an over-cap compact reply inside JSON by locally shortening" do
       long_compact = String.duplicate("a", 301)
 
       content = [
@@ -252,8 +252,8 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
         }
       ]
 
-      assert {:compact_repair, selected, :overlong_compact} = Reply.select(content, :end_turn)
-      assert selected.text == long_compact
+      assert {:ok, selected} = Reply.select(content, :end_turn)
+      assert selected.text == String.duplicate("a", 300)
     end
 
     test "decodes leftover JSON unicode escapes in compact_reply and title" do
