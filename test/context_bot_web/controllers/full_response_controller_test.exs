@@ -53,8 +53,9 @@ defmodule ContextBotWeb.FullResponseControllerTest do
     conn = get(conn, "/r/3kfullresp")
     body = html_response(conn, 200)
 
-    assert body =~ @writeup
+    assert body =~ "Detailed analysis of the claim"
     assert body =~ @compact
+    assert body =~ ~s(href="https://example.test/source")
   end
 
   test "GET /r/:id stays on the mirror when the index probe is ambiguous", %{conn: conn} do
@@ -64,7 +65,7 @@ defmodule ContextBotWeb.FullResponseControllerTest do
     conn = get(conn, ~p"/r/#{invocation.id}")
 
     assert conn.status == 200
-    assert html_response(conn, 200) =~ @writeup
+    assert html_response(conn, 200) =~ "Detailed analysis of the claim"
   end
 
   test "GET /r/:id redirects to Standard Reader once indexed", %{conn: conn} do

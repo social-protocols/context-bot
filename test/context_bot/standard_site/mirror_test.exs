@@ -12,6 +12,7 @@ defmodule ContextBot.StandardSite.MirrorTest do
   test "public_url/1 is the stable getcontext.bot mirror path" do
     assert Mirror.public_url(31) == "https://getcontext.bot/r/31"
     assert Mirror.public_url(%Invocation{id: 31}) == "https://getcontext.bot/r/31"
+    assert Mirror.public_url(%{id: 31}) == "https://getcontext.bot/r/31"
     assert Mirror.public_url(nil) == nil
   end
 
@@ -27,7 +28,7 @@ defmodule ContextBot.StandardSite.MirrorTest do
     assert markdown =~ @writeup
     assert markdown =~ "# Research Analysis"
     assert markdown =~ "How this response was produced"
-    assert markdown =~ "https://getcontext.bot/r/#{invocation.id}"
+    assert markdown =~ "https%3A%2F%2Fgetcontext.bot%2Fr%2F#{invocation.id}"
 
     persisted = Repo.reload!(invocation)
     assert persisted.reader_ready_at == nil

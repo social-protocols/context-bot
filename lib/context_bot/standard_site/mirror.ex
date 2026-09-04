@@ -35,8 +35,8 @@ defmodule ContextBot.StandardSite.Mirror do
           | :not_found
 
   @doc "Stable public mirror URL for a persisted invocation, or nil."
-  @spec public_url(Invocation.t() | pos_integer() | nil) :: String.t() | nil
-  def public_url(%Invocation{id: id}) when is_integer(id) and id > 0, do: public_url(id)
+  @spec public_url(Invocation.t() | map() | pos_integer() | nil) :: String.t() | nil
+  def public_url(%{id: id}) when is_integer(id) and id > 0, do: public_url(id)
   def public_url(id) when is_integer(id) and id > 0, do: "#{@public_base_url}/r/#{id}"
   def public_url(_id), do: nil
 
