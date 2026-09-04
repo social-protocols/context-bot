@@ -40,7 +40,7 @@ defmodule ContextBot.Research.CitationsTest do
     assert Citations.urls(Citations.from_content(blocks)) == ["https://primary.example/report"]
   end
 
-  test "inserts fragment-link markers after the cited span and reuses numbers for the same URL" do
+  test "inserts URL-link markers after the cited span and reuses numbers for the same URL" do
     writeup = "SERVIR-HKH built regional capacity. Later reporting confirmed the same finding."
 
     citations = [
@@ -68,16 +68,18 @@ defmodule ContextBot.Research.CitationsTest do
 
     assert result ==
              """
-             SERVIR-HKH built regional capacity.[[1]](#source-1) Later reporting confirmed the same finding.[[2]](#source-2)[[1]](#source-1)
+             SERVIR-HKH built regional capacity.[[1]](https://edition.cnn.com/nepal) Later reporting confirmed the same finding.[[2]](https://reliefweb.int/report)[[1]](https://edition.cnn.com/nepal)
 
              ## Sources
 
-             1. <a id="source-1"></a>[CNN title](https://edition.cnn.com/nepal)
-             2. <a id="source-2"></a>[ReliefWeb report](https://reliefweb.int/report)
+             1. [CNN title](https://edition.cnn.com/nepal)
+             2. [ReliefWeb report](https://reliefweb.int/report)
              """
              |> String.trim()
 
     refute String.contains?(result, "[^")
+    refute String.contains?(result, "#source-")
+    refute String.contains?(result, "<a id=")
     refute result =~ ~r/(?<!\[)\[\d+\](?!\])/
   end
 
@@ -96,11 +98,11 @@ defmodule ContextBot.Research.CitationsTest do
 
     assert result ==
              """
-             The cited primary source resolves the disputed date.[[1]](#source-1)
+             The cited primary source resolves the disputed date.[[1]](https://primary.example/report)
 
              ## Sources
 
-             1. <a id="source-1"></a>[Primary report](https://primary.example/report)
+             1. [Primary report](https://primary.example/report)
              """
              |> String.trim()
 
@@ -129,11 +131,11 @@ defmodule ContextBot.Research.CitationsTest do
 
     assert result ==
              """
-             Floods hit Nepal.[[1]](#source-1)
+             Floods hit Nepal.[[1]](https://edition.cnn.com/real)
 
              ## Sources
 
-             1. <a id="source-1"></a>[CNN title](https://edition.cnn.com/real)
+             1. [CNN title](https://edition.cnn.com/real)
              """
              |> String.trim()
 
@@ -165,11 +167,11 @@ defmodule ContextBot.Research.CitationsTest do
 
     assert result ==
              """
-             SERVIR-HKH built regional capacity.[[1]](#source-1)
+             SERVIR-HKH built regional capacity.[[1]](https://edition.cnn.com/real)
 
              ## Sources
 
-             1. <a id="source-1"></a>[CNN title](https://edition.cnn.com/real)
+             1. [CNN title](https://edition.cnn.com/real)
              """
              |> String.trim()
 
@@ -209,11 +211,11 @@ defmodule ContextBot.Research.CitationsTest do
 
     expected =
       """
-      The cited finding stands.[[1]](#source-1)
+      The cited finding stands.[[1]](https://primary.example/report)
 
       ## Sources
 
-      1. <a id="source-1"></a>[Primary report](https://primary.example/report)
+      1. [Primary report](https://primary.example/report)
       """
       |> String.trim()
 
@@ -248,11 +250,11 @@ defmodule ContextBot.Research.CitationsTest do
 
              Sources confirm the finding independently.
 
-             The cited finding stands.[[1]](#source-1)
+             The cited finding stands.[[1]](https://primary.example/report)
 
              ## Sources
 
-             1. <a id="source-1"></a>[Primary report](https://primary.example/report)
+             1. [Primary report](https://primary.example/report)
              """
              |> String.trim()
   end
@@ -279,7 +281,7 @@ defmodule ContextBot.Research.CitationsTest do
 
     assert result ==
              """
-             The cited finding stands.[[1]](#source-1)
+             The cited finding stands.[[1]](https://primary.example/report)
 
              **Sources**: Andrew Lilley Brinker.
 
@@ -287,7 +289,7 @@ defmodule ContextBot.Research.CitationsTest do
 
              ## Sources
 
-             1. <a id="source-1"></a>[Primary report](https://primary.example/report)
+             1. [Primary report](https://primary.example/report)
              """
              |> String.trim()
   end
@@ -313,12 +315,12 @@ defmodule ContextBot.Research.CitationsTest do
 
     assert result ==
              """
-             No links yet.[[1]](#source-1) See also later confirmation.[[2]](#source-2)
+             No links yet.[[1]](https://primary.example/report) See also later confirmation.[[2]](https://second.example/page)
 
              ## Sources
 
-             1. <a id="source-1"></a>[exact excerpt](https://primary.example/report)
-             2. <a id="source-2"></a>[second.example](https://second.example/page)
+             1. [exact excerpt](https://primary.example/report)
+             2. [second.example](https://second.example/page)
              """
              |> String.trim()
 
@@ -343,16 +345,61 @@ defmodule ContextBot.Research.CitationsTest do
 
     assert result ==
              """
-             See https://already.example/page for background.[[1]](#source-1)
+             See https://already.example/page for background.[[1]](https://primary.example/report)
 
              ## Sources
 
-             1. <a id="source-1"></a>[Primary report](https://primary.example/report)
+             1. [Primary report](https://primary.example/report)
              """
              |> String.trim()
 
     refute String.contains?(result, "](https://already.example/page)")
     refute String.contains?(result, "- https://")
+  end
+
+  test "does not duplicate already-present URL, fragment, or plain markers" do
+    citations = [
+      %{
+        "url" => "https://primary.example/report",
+        "title" => "Primary report",
+        "cited_text" => "The cited finding stands.",
+        "span" => "The cited finding stands."
+      }
+    ]
+
+    already_url = "The cited finding stands.[[1]](https://primary.example/report)"
+    already_fragment = "The cited finding stands.[[1]](#source-1)"
+    already_plain = "The cited finding stands.[1]"
+
+    assert Citations.publishable_writeup(already_url, citations) ==
+             """
+             The cited finding stands.[[1]](https://primary.example/report)
+
+             ## Sources
+
+             1. [Primary report](https://primary.example/report)
+             """
+             |> String.trim()
+
+    assert Citations.publishable_writeup(already_fragment, citations) ==
+             """
+             The cited finding stands.[[1]](#source-1)
+
+             ## Sources
+
+             1. [Primary report](https://primary.example/report)
+             """
+             |> String.trim()
+
+    assert Citations.publishable_writeup(already_plain, citations) ==
+             """
+             The cited finding stands.[1]
+
+             ## Sources
+
+             1. [Primary report](https://primary.example/report)
+             """
+             |> String.trim()
   end
 
   test "returns the writeup unchanged when there are no allowlisted citation URLs" do

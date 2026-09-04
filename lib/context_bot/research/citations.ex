@@ -16,8 +16,8 @@ defmodule ContextBot.Research.Citations do
   @bold_sources_label ~r/\A[ \t]*\*\*Sources:?\*\*:?[ \t]*/i
   @plain_sources_label ~r/\A[ \t]*Sources:[ \t]*/i
   @plain_sources_heading ~r/\A[ \t]*Sources[ \t]*\z/i
-  @leading_markers ~r/\A((?:\[\[\d+\]\]\(#source-\d+\)|\[\d+\])+)/u
-  @marker_number ~r/\[\[(\d+)\]\]\(#source-\d+\)|\[(\d+)\]/u
+  @leading_markers ~r/\A((?:\[\[\d+\]\]\((?:#source-\d+|https?:\/\/[^)\s]+)\)|\[\d+\])+)/u
+  @marker_number ~r/\[\[(\d+)\]\]\((?:#source-\d+|https?:\/\/[^)\s]+)\)|\[(\d+)\]/u
   @max_title_graphemes 80
 
   @spec from_content([map()]) :: [citation()]
@@ -40,7 +40,7 @@ defmodule ContextBot.Research.Citations do
   def urls(_records), do: []
 
   @doc """
-  Returns the research writeup with inline `[[n]](#source-n)` markers after each
+  Returns the research writeup with inline `[[n]](https://…)` markers after each
   cited span or `cited_text` match, and exactly one titled Sources list.
 
   Same allowlisted URL reuses the same number. A model-written ATX Sources
@@ -55,10 +55,13 @@ defmodule ContextBot.Research.Citations do
     if numbered == [] do
       strip_model_written_sources(trimmed)
     else
+      sources = unique_sources(numbered)
+      urls_by_number = Map.new(sources, fn {number, url, _title} -> {number, url} end)
+
       trimmed
       |> strip_model_written_sources()
-      |> insert_markers(numbered)
-      |> append_sources(unique_sources(numbered))
+      |> insert_markers(numbered, urls_by_number)
+      |> append_sources(sources)
     end
   end
 
@@ -194,10 +197,10 @@ defmodule ContextBot.Research.Citations do
     end
   end
 
-  defp insert_markers(text, numbered) do
+  defp insert_markers(text, numbered, urls_by_number) do
     numbered
     |> Enum.chunk_by(&chunk_key/1)
-    |> Enum.reduce({text, 0}, &insert_chunk/2)
+    |> Enum.reduce({text, 0}, &insert_chunk(&1, &2, urls_by_number))
     |> elem(0)
   end
 
@@ -208,13 +211,13 @@ defmodule ContextBot.Research.Citations do
     end
   end
 
-  defp insert_chunk(chunk, {text, cursor}) do
+  defp insert_chunk(chunk, {text, cursor}, urls_by_number) do
     {_number, record} = hd(chunk)
     numbers = chunk |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
 
     case find_match(text, record, cursor) do
       {:ok, end_idx} ->
-        {updated, consumed} = put_markers(text, end_idx, numbers)
+        {updated, consumed} = put_markers(text, end_idx, numbers, urls_by_number)
         {updated, end_idx + consumed}
 
       :error ->
@@ -255,11 +258,11 @@ defmodule ContextBot.Research.Citations do
     end
   end
 
-  defp put_markers(text, idx, numbers) do
+  defp put_markers(text, idx, numbers, urls_by_number) do
     {left, right} = String.split_at(text, idx)
     {existing, existing_len} = leading_marker_numbers(right)
     missing = Enum.reject(numbers, &(&1 in existing))
-    markers = Enum.map_join(missing, &source_marker/1)
+    markers = Enum.map_join(missing, &source_marker(&1, urls_by_number))
     {before, after_existing} = String.split_at(right, existing_len)
 
     {left <> before <> markers <> after_existing, existing_len + String.length(markers)}
@@ -286,9 +289,8 @@ defmodule ContextBot.Research.Citations do
     |> String.to_integer()
   end
 
-  defp source_marker(number), do: "[[#{number}]](#source-#{number})"
-
-  defp source_anchor_id(number), do: "source-#{number}"
+  defp source_marker(number, urls_by_number),
+    do: "[[#{number}]](#{Map.fetch!(urls_by_number, number)})"
 
   defp strip_model_written_sources(text) when is_binary(text) do
     text
@@ -397,7 +399,7 @@ defmodule ContextBot.Research.Citations do
   end
 
   defp source_list_item({number, url, title}) do
-    "#{number}. <a id=\"#{source_anchor_id(number)}\"></a>[#{escape_link_text(title)}](#{url})"
+    "#{number}. [#{escape_link_text(title)}](#{url})"
   end
 
   defp escape_link_text(title) do
