@@ -855,38 +855,43 @@ defmodule ContextBot.Workers.ReplyWorker do
   defp put_follower_record(invocation, token, dependencies) do
     case Store.renew_publication_claim(invocation, token, dependencies.now.()) do
       {:ok, current} ->
-        case dependencies.client.put_record(
-               current.reply_repo,
-               @collection,
-               current.follower_post_rkey,
-               current.follower_post_record
-             ) do
-          {:ok, status, _headers, _body} when status in 200..299 ->
-            case get_follower_record(current, token, dependencies) do
-              {:match, uri, cid} ->
-                {:ok, %{follower_post_uri: uri, follower_post_cid: cid}}
-
-              :missing ->
-                {:retry, :reconciliation_pending}
-
-              other ->
-                other
-            end
-
-          {:error, reason} when reason in [:unauthorized, :session_unavailable] ->
-            {:retry, reason}
-
-          {:error, reason} ->
-            follower_put_outcome(reason)
-
-          _invalid ->
-            :skip
-        end
+        current
+        |> put_frozen_follower_record(dependencies)
+        |> reconcile_follower_after_put(current, token, dependencies)
 
       {:error, :stale_claim} ->
         :stale_claim
     end
   end
+
+  defp put_frozen_follower_record(current, dependencies) do
+    dependencies.client.put_record(
+      current.reply_repo,
+      @collection,
+      current.follower_post_rkey,
+      current.follower_post_record
+    )
+  end
+
+  defp reconcile_follower_after_put({:ok, status, _headers, _body}, current, token, dependencies)
+       when status in 200..299 do
+    follower_get_after_put(get_follower_record(current, token, dependencies))
+  end
+
+  defp reconcile_follower_after_put({:error, reason}, _current, _token, _dependencies)
+       when reason in [:unauthorized, :session_unavailable],
+       do: {:retry, reason}
+
+  defp reconcile_follower_after_put({:error, reason}, _current, _token, _dependencies),
+    do: follower_put_outcome(reason)
+
+  defp reconcile_follower_after_put(_invalid, _current, _token, _dependencies), do: :skip
+
+  defp follower_get_after_put({:match, uri, cid}),
+    do: {:ok, %{follower_post_uri: uri, follower_post_cid: cid}}
+
+  defp follower_get_after_put(:missing), do: {:retry, :reconciliation_pending}
+  defp follower_get_after_put(other), do: other
 
   defp follower_put_outcome(reason) do
     case Client.permanent_status(reason) do
@@ -930,30 +935,32 @@ defmodule ContextBot.Workers.ReplyWorker do
   end
 
   defp ensure_follower_intent(invocation, token, dependencies) do
-    cond do
-      valid_intent?(
-        invocation.reply_repo,
-        invocation.follower_post_rkey,
-        invocation.follower_post_record
-      ) ->
-        {:ok, invocation}
+    if valid_intent?(
+         invocation.reply_repo,
+         invocation.follower_post_rkey,
+         invocation.follower_post_record
+       ) do
+      {:ok, invocation}
+    else
+      freeze_follower_intent(invocation, token, dependencies)
+    end
+  end
 
-      true ->
-        created_at = dependencies.now.()
+  defp freeze_follower_intent(invocation, token, dependencies) do
+    created_at = dependencies.now.()
 
-        case FollowerPost.build(invocation, created_at) do
-          {:ok, record} ->
-            persist_follower_intent(
-              invocation,
-              token,
-              TID.generate(DateTime.to_unix(created_at, :microsecond)),
-              record,
-              dependencies
-            )
+    case FollowerPost.build(invocation, created_at) do
+      {:ok, record} ->
+        persist_follower_intent(
+          invocation,
+          token,
+          TID.generate(DateTime.to_unix(created_at, :microsecond)),
+          record,
+          dependencies
+        )
 
-          {:error, _reason} ->
-            :skip
-        end
+      {:error, _reason} ->
+        :skip
     end
   end
 

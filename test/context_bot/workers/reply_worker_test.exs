@@ -103,6 +103,7 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
 
   import ExUnit.CaptureLog
 
+  alias ContextBot.Reply.FollowerPost
   alias ContextBot.Settings
   alias ContextBot.Workers.ReplyWorker
   alias ContextBot.Workers.ReplyWorkerTest.{PDS, Remote}
@@ -708,7 +709,7 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
     created_at = ~U[2026-07-29 13:00:00.123456Z]
     invocation = follower_invocation("follower-create")
 
-    {:ok, follower_record} = ContextBot.Reply.FollowerPost.build(invocation, created_at)
+    {:ok, follower_record} = FollowerPost.build(invocation, created_at)
 
     invocation =
       invocation
@@ -799,7 +800,7 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
     follower_uri = "at://#{@bot_did}/#{@collection}/#{follower_rkey}"
     created_at = ~U[2026-07-29 13:00:00.123456Z]
     invocation = follower_invocation("follower-idempotent")
-    {:ok, follower_record} = ContextBot.Reply.FollowerPost.build(invocation, created_at)
+    {:ok, follower_record} = FollowerPost.build(invocation, created_at)
 
     invocation =
       invocation
