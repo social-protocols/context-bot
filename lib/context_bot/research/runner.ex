@@ -6,9 +6,9 @@ defmodule ContextBot.Research.Runner do
   envelope is committed before decoding, pricing, or reply selection. Recovery always starts
   from the budget ledger rather than inferring attempt identity from response count.
 
-  A structure-phase `max_tokens` stop (truncated JSON) starts at most one compact-repair
-  call from the stored writeup using the length-repair token cap. Research-phase
-  `max_tokens` stays terminal.
+  Empty or over-cap structured title/compact, or a structure-phase
+  `max_tokens` stop, starts at most one compact-repair call from the stored
+  writeup. Research-phase `max_tokens` stays terminal.
   """
 
   import Ecto.Query
@@ -451,11 +451,11 @@ defmodule ContextBot.Research.Runner do
       {:title_rewrite, _selected} ->
         start_attempt(Repo.reload!(invocation), :repair, config)
 
-      {:repairable, text, _reasons} ->
-        split_over_limit(invocation, text, decoded, config)
+      {:compact_repair, _selected, reason} ->
+        start_compact_repair(invocation, config, reason)
 
       {:error, :max_tokens} ->
-        start_compact_repair(invocation, config)
+        start_compact_repair(invocation, config, :max_tokens)
 
       {:error, reason} ->
         {:error, reason}
@@ -478,21 +478,21 @@ defmodule ContextBot.Research.Runner do
       {:title_rewrite, _selected} ->
         start_attempt(Repo.reload!(invocation), :repair, config)
 
-      {:repairable, text, _reasons} ->
-        split_over_limit(invocation, text, decoded, config)
+      {:compact_repair, _selected, reason} ->
+        {:error, reason}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp start_compact_repair(invocation, config) do
+  defp start_compact_repair(invocation, config, reason) do
     cond do
       not structure_from_writeup?(invocation) ->
-        {:error, :max_tokens}
+        {:error, reason}
 
       compact_repair_already_attempted?(invocation) ->
-        {:error, :max_tokens}
+        {:error, reason}
 
       true ->
         start_attempt(Repo.reload!(invocation), :repair, config)
@@ -540,6 +540,9 @@ defmodule ContextBot.Research.Runner do
       Reply.title_only_response?(decoded) ->
         {:halt, false}
 
+      match?({:compact_repair, _selected, _reason}, select_reply(decoded, invocation)) ->
+        {:halt, true}
+
       match?({:error, :max_tokens}, select_reply(decoded, invocation)) ->
         {:halt, true}
 
@@ -564,8 +567,8 @@ defmodule ContextBot.Research.Runner do
         {:ok, selected} ->
           {:ok, finish_selected(invocation, selected, config)}
 
-        {:repairable, text, _reasons} ->
-          split_over_limit(invocation, text, decoded, config, titled)
+        {:compact_repair, _selected, _reason} ->
+          {:error, :overlong_compact}
       end
     else
       _failed ->
@@ -666,41 +669,6 @@ defmodule ContextBot.Research.Runner do
        do: writeup
 
   defp writeup_from(_invocation, _selected), do: ""
-
-  defp split_over_limit(invocation, text, decoded, config, selected \\ nil) do
-    case Reply.split_text(text) do
-      {:ok, part1, part2} ->
-        {:ok,
-         %{
-           messages: invocation.anthropic_messages,
-           text: part1,
-           text_part2: part2,
-           compact_source: text,
-           usage: usage_evidence(invocation, config),
-           validation: %{
-             "result" => "split",
-             "repair_used" => false,
-             "part1_graphemes" => String.length(part1),
-             "part2_graphemes" => String.length(part2)
-           }
-         }
-         |> put_selected_fields(selected)
-         |> attach_full_response(invocation, decoded)
-         |> attach_document_title(invocation, decoded)}
-
-      :error ->
-        {:error, :invalid_repair}
-    end
-  end
-
-  defp put_selected_fields(result, %{full_response: full, document_title: title})
-       when is_binary(full) and is_binary(title) do
-    result
-    |> Map.put(:full_response, full)
-    |> Map.put(:document_title, title)
-  end
-
-  defp put_selected_fields(result, _selected), do: result
 
   defp continue_pause(invocation, %{"content" => content}, config) when is_list(content) do
     if continuation_count(invocation, config) > config.settings.max_tool_continuations do
@@ -868,19 +836,17 @@ defmodule ContextBot.Research.Runner do
     end
   end
 
-  defp attach_full_response(result, invocation, decoded \\ nil)
-
-  defp attach_full_response(%{full_response: full} = result, _invocation, _decoded)
+  defp attach_full_response(%{full_response: full} = result, _invocation)
        when is_binary(full) and byte_size(full) > 0,
        do: result
 
-  defp attach_full_response(result, %Invocation{full_response: writeup}, _decoded)
+  defp attach_full_response(result, %Invocation{full_response: writeup})
        when is_binary(writeup) and byte_size(writeup) > 0 do
     Map.put(result, :full_response, writeup)
   end
 
-  defp attach_full_response(result, invocation, decoded) do
-    case current_or_stored_field(invocation, decoded, &Reply.full_response_from_messages/1) do
+  defp attach_full_response(result, invocation) do
+    case stored_field(invocation, &Reply.full_response_from_messages/1) do
       full when is_binary(full) and byte_size(full) > 0 ->
         Map.put(result, :full_response, full)
 
@@ -889,14 +855,12 @@ defmodule ContextBot.Research.Runner do
     end
   end
 
-  defp attach_document_title(result, invocation, decoded \\ nil)
-
-  defp attach_document_title(%{document_title: title} = result, _invocation, _decoded)
+  defp attach_document_title(%{document_title: title} = result, _invocation)
        when is_binary(title) and byte_size(title) > 0,
        do: result
 
-  defp attach_document_title(result, invocation, decoded) do
-    case current_or_stored_field(invocation, decoded, &Reply.document_title_from_messages/1) do
+  defp attach_document_title(result, invocation) do
+    case stored_field(invocation, &Reply.document_title_from_messages/1) do
       title when is_binary(title) and byte_size(title) > 0 ->
         Map.put(result, :document_title, title)
 
@@ -905,15 +869,7 @@ defmodule ContextBot.Research.Runner do
     end
   end
 
-  defp current_or_stored_field(invocation, decoded, extractor) do
-    extractor.(from_current_envelope(decoded)) || extractor.(invocation.anthropic_messages)
-  end
-
-  defp from_current_envelope(%{"content" => content}) when is_list(content) do
-    %{"messages" => [%{"role" => "assistant", "content" => content}]}
-  end
-
-  defp from_current_envelope(_decoded), do: nil
+  defp stored_field(invocation, extractor), do: extractor.(invocation.anthropic_messages)
 
   defp select_reply(%{"content" => content, "stop_reason" => stop_reason}, invocation) do
     with {:ok, tool_context} <- Reply.server_tool_context(invocation.anthropic_messages) do

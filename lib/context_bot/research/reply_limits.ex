@@ -30,9 +30,24 @@ defmodule ContextBot.Research.ReplyLimits do
   @spec continuation_ellipsis() :: String.t()
   def continuation_ellipsis, do: @continuation_ellipsis
 
+  @doc "Unicode grapheme-cluster count used for Bluesky publication."
+  @spec graphemes(String.t()) :: non_neg_integer()
+  def graphemes(text) when is_binary(text), do: String.length(text)
+
+  @doc "UTF-8 byte size used for Bluesky publication."
+  @spec bytes(String.t()) :: non_neg_integer()
+  def bytes(text) when is_binary(text), do: byte_size(text)
+
+  @doc "Publication counters for one string: graphemes and UTF-8 bytes."
+  @spec measure(String.t()) :: %{graphemes: non_neg_integer(), bytes: non_neg_integer()}
+  def measure(text) when is_binary(text) do
+    %{graphemes: graphemes(text), bytes: bytes(text)}
+  end
+
   @doc "True when the text fits in a single Bluesky post."
   @spec fits_one_post?(String.t()) :: boolean()
   def fits_one_post?(text) when is_binary(text) do
-    String.length(text) <= @hard_max_graphemes and byte_size(text) <= @max_bytes
+    measure = measure(text)
+    measure.graphemes <= @hard_max_graphemes and measure.bytes <= @max_bytes
   end
 end

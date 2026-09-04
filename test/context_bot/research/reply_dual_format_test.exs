@@ -42,7 +42,7 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       assert selected.disposition == :reply
     end
 
-    test "fails closed when every text block is a placeholder or otherwise invalid" do
+    test "treats a json_schema placeholder with empty compact as compact_repair" do
       for content <- [
             [%{"type" => "text", "text" => json_schema_placeholder()}],
             [
@@ -50,7 +50,9 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
               %{"type" => "text", "text" => "Just a regular reply without JSON"}
             ]
           ] do
-        assert Reply.select(content, :end_turn) == {:error, :invalid_structured_output}
+        assert {:compact_repair, selected, :empty_compact} = Reply.select(content, :end_turn)
+        assert selected.text == ""
+        assert selected.document_title == "placeholder"
       end
     end
 
@@ -91,7 +93,7 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       assert selected.disposition == :reply
     end
 
-    test "an over-cap compact after a placeholder still pack-first splits" do
+    test "an over-cap compact after a placeholder is compact_repair" do
       long_compact = String.duplicate("a", 301)
 
       content = [
@@ -106,8 +108,8 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
         }
       ]
 
-      assert {:repairable, ^long_compact, [:too_many_graphemes]} =
-               Reply.select(content, :end_turn)
+      assert {:compact_repair, selected, :overlong_compact} = Reply.select(content, :end_turn)
+      assert selected.text == long_compact
     end
 
     test "fails closed when the model returns prose instead of JSON" do
@@ -121,12 +123,9 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       assert Reply.select(content, :end_turn) == {:error, :invalid_structured_output}
     end
 
-    test "fails closed when required JSON fields are missing or blank" do
+    test "fails closed when required JSON fields are missing or invalid" do
       for text <- [
-            ~s({"title":"Bird","compact_reply":""}),
-            ~s({"title":"Bird","compact_reply":"","full_response":"Writeup."}),
             ~s({"title":1,"compact_reply":"Short"}),
-            ~s({"disposition":"reply","title":"Bird","compact_reply":""}),
             ~s({"disposition":"maybe","title":"Bird","compact_reply":"Short"}),
             ~s({"disposition":true,"title":"Bird","compact_reply":"Short"}),
             "---COMPACT_REPLY---\nlegacy delimiter"
@@ -136,12 +135,19 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       end
     end
 
-    test "fails closed when disposition is reply and compact_reply is empty (inv 28)" do
-      text =
-        ~s({"disposition":"reply","title":"The stuffed Bluesky answer that belongs in compact_reply","compact_reply":""})
+    test "an empty compact_reply after structure is compact_repair, not a hard parse fail" do
+      for text <- [
+            ~s({"title":"Bird","compact_reply":""}),
+            ~s({"title":"Bird","compact_reply":"","full_response":"Writeup."}),
+            ~s({"disposition":"reply","title":"Bird","compact_reply":""}),
+            ~s({"disposition":"reply","title":"The stuffed Bluesky answer that belongs in compact_reply","compact_reply":""})
+          ] do
+        assert {:compact_repair, selected, :empty_compact} =
+                 Reply.select([%{"type" => "text", "text" => text}], :end_turn)
 
-      assert Reply.select([%{"type" => "text", "text" => text}], :end_turn) ==
-               {:error, :invalid_structured_output}
+        assert selected.text == ""
+        assert selected.disposition == :reply
+      end
     end
 
     test "signals title rewrite when disposition is reply and title is blank" do
@@ -159,7 +165,7 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       end
     end
 
-    test "an over-long compact with a blank title still asks for title rewrite before split" do
+    test "an over-long compact with a blank title is compact_repair, not title rewrite" do
       long_compact = String.duplicate("a", 301)
 
       content = [
@@ -173,7 +179,7 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
         }
       ]
 
-      assert {:title_rewrite, selected} = Reply.select(content, :end_turn)
+      assert {:compact_repair, selected, :overlong_compact} = Reply.select(content, :end_turn)
       assert selected.text == long_compact
       assert selected.document_title == ""
     end
@@ -232,7 +238,7 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       assert selected.text == "Short summary for Bluesky"
     end
 
-    test "handles a repairable compact reply inside JSON" do
+    test "handles an over-cap compact reply inside JSON as compact_repair" do
       long_compact = String.duplicate("a", 301)
 
       content = [
@@ -246,8 +252,8 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
         }
       ]
 
-      assert {:repairable, ^long_compact, [:too_many_graphemes]} =
-               Reply.select(content, :end_turn)
+      assert {:compact_repair, selected, :overlong_compact} = Reply.select(content, :end_turn)
+      assert selected.text == long_compact
     end
 
     test "decodes leftover JSON unicode escapes in compact_reply and title" do

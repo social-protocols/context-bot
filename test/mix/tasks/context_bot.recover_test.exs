@@ -102,7 +102,10 @@ defmodule Mix.Tasks.ContextBot.RecoverTest do
     assert :ok = run(["22"])
 
     assert_received :application_started
-    assert_received {:recover_invocation, 22, [now: ~U[2026-09-03 01:30:00.000000Z]]}
+
+    assert_received {:recover_invocation, 22,
+                     [now: ~U[2026-09-03 01:30:00.000000Z], operator?: true]}
+
     assert shell_output() == "status=resumed\ninvocation_id=22\n"
   end
 

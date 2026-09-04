@@ -550,23 +550,35 @@ defmodule ContextBot.Research.ReplyTest do
              StructuredFixtures.selected(at_300)
   end
 
-  test "classifies over-limit normal completions as repairable without truncating" do
+  test "classifies over-cap structured compact as compact_repair without truncating" do
     over_graphemes = String.duplicate("a", 301)
     over_bytes = String.duplicate("👩‍💻", 272) <> String.duplicate("a", 9)
     over_both = String.duplicate("👩‍💻", 301)
+    essay = String.duplicate("a", 8_000)
 
     assert String.length(over_graphemes) == 301
     assert byte_size(over_bytes) == 3_001
     assert String.length(over_bytes) == 281
 
-    assert Reply.select([structured_text(over_graphemes)], "end_turn") ==
-             {:repairable, over_graphemes, [:too_many_graphemes]}
+    assert {:compact_repair, selected_graphemes, :overlong_compact} =
+             Reply.select([structured_text(over_graphemes)], "end_turn")
 
-    assert Reply.select([structured_text(over_bytes)], "end_turn") ==
-             {:repairable, over_bytes, [:too_many_bytes]}
+    assert selected_graphemes.text == over_graphemes
 
-    assert Reply.select([structured_text(over_both)], "end_turn") ==
-             {:repairable, over_both, [:too_many_graphemes, :too_many_bytes]}
+    assert {:compact_repair, selected_bytes, :overlong_compact} =
+             Reply.select([structured_text(over_bytes)], "end_turn")
+
+    assert selected_bytes.text == over_bytes
+
+    assert {:compact_repair, selected_both, :overlong_compact} =
+             Reply.select([structured_text(over_both)], "end_turn")
+
+    assert selected_both.text == over_both
+
+    assert {:compact_repair, selected_essay, :overlong_compact} =
+             Reply.select([structured_text(essay)], "end_turn")
+
+    assert selected_essay.text == essay
   end
 
   test "rejects empty or whitespace-only normal completions as terminal" do

@@ -340,6 +340,67 @@ defmodule ContextBot.Workflow.RecoveryTest do
     assert Repo.aggregate(ResponseEnvelope, :count) == 1
   end
 
+  test "operator recover retries structure-from-writeup after max_tokens without clearing research" do
+    writeup = "Stored writeup from research."
+    citations = [%{"url" => "https://primary.example/report", "cited_text" => "excerpt"}]
+
+    invocation =
+      invocation(:failed, false, "operator-max-tokens-writeup",
+        failure_category: :provider_response,
+        failure_detail: %{"reason" => "max_tokens"},
+        canonical_thread: "thread",
+        canonical_thread_version: "1",
+        anthropic_messages: %{
+          "model" => "claude-sonnet-5",
+          "max_tokens" => 4_096,
+          "messages" => [%{"role" => "user", "content" => "STRUCTURE_OUTPUT\n\nstale"}]
+        },
+        full_response: writeup,
+        citation_sources: citations,
+        completed_at: @now
+      )
+
+    job = executing_job(invocation, "ContextBot.Workers.ResearchWorker", :research)
+
+    job =
+      job |> Ecto.Changeset.change(%{state: "discarded", discarded_at: @now}) |> Repo.update!()
+
+    entry = budget_entry(invocation, :sent, @now, :structure)
+    _envelope = response_envelope(invocation, entry)
+
+    assert :unchanged = recover_invocation(invocation, startup?: true)
+    assert {:ok, %{resumed: 0, unchanged: 1}} = recover(startup?: true)
+
+    assert :resumed = recover_invocation(invocation, startup?: true, operator?: true)
+
+    settings = Settings.load(bot_enabled: false)
+
+    expected =
+      Request.structure(%{
+        model_id: settings.anthropic_structure_model_id,
+        max_tokens: settings.anthropic_structure_max_tokens,
+        writeup: writeup,
+        citations: citations,
+        canonical_thread: "thread"
+      })
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :thread_ready
+    assert persisted.failure_category == nil
+    assert persisted.failure_detail == nil
+    assert persisted.completed_at == nil
+    assert persisted.full_response == writeup
+    assert persisted.citation_sources == citations
+    assert persisted.anthropic_messages == expected
+    assert persisted.anthropic_messages["max_tokens"] == settings.anthropic_structure_max_tokens
+    assert Repo.reload!(entry).state == :sent
+    assert Repo.aggregate(BudgetEntry, :count) == 1
+    assert [replay] = available_research_jobs(invocation)
+    assert replay.id != job.id
+    assert replay.state == "available"
+    refute Map.get(replay.args, "new_attempt")
+  end
+
   test "a failed invalid_structured_output envelope stays failed without automatic replay" do
     invocation =
       invocation(:failed, false, "invalid-structured-output",
@@ -395,6 +456,7 @@ defmodule ContextBot.Workflow.RecoveryTest do
     _envelope = response_envelope(invocation, entry)
 
     assert :unchanged = recover_invocation(invocation, startup?: true)
+    assert :unchanged = recover_invocation(invocation, startup?: true, operator?: true)
     assert {:ok, %{resumed: 0, unchanged: 1}} = recover(startup?: true)
 
     persisted = Repo.reload!(invocation)

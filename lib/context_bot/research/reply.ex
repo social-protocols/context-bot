@@ -49,6 +49,7 @@ defmodule ContextBot.Research.Reply do
   @type result ::
           {:ok, selected()}
           | {:title_rewrite, selected()}
+          | {:compact_repair, selected(), reason()}
           | {:repairable, String.t(), [reason()]}
           | {:split, String.t(), String.t()}
           | {:error, reason()}
@@ -176,7 +177,8 @@ defmodule ContextBot.Research.Reply do
   Used after a title rewrite fills a blank `document_title`. Never starts a
   compact-reply Anthropic call.
   """
-  @spec classify_selected(selected()) :: {:ok, selected()} | {:repairable, String.t(), [reason()]}
+  @spec classify_selected(selected()) ::
+          {:ok, selected()} | {:compact_repair, selected(), reason()} | {:error, reason()}
   def classify_selected(%{text: text} = selected) when is_binary(text),
     do: classify_structured(selected)
 
@@ -914,7 +916,13 @@ defmodule ContextBot.Research.Reply do
         classify_structured(selected)
 
       {:title_rewrite, selected} ->
-        {:title_rewrite, selected}
+        case classify_structured(Map.put(selected, :disposition, :reply)) do
+          {:ok, _selected} -> {:title_rewrite, selected}
+          {:compact_repair, repaired, reason} -> {:compact_repair, repaired, reason}
+        end
+
+      {:compact_repair, selected, reason} ->
+        {:compact_repair, selected, reason}
     end
   end
 
@@ -979,27 +987,22 @@ defmodule ContextBot.Research.Reply do
           ""
       end
 
+    selected = %{
+      text: compact_reply,
+      full_response: full_response,
+      document_title: title,
+      disposition: :reply
+    }
+
     cond do
       compact_reply == "" ->
-        :invalid
+        {:compact_repair, selected, :empty_compact}
 
       title == "" ->
-        {:title_rewrite,
-         %{
-           text: compact_reply,
-           full_response: full_response,
-           document_title: "",
-           disposition: :reply
-         }}
+        {:title_rewrite, selected}
 
       true ->
-        {:ok,
-         %{
-           text: compact_reply,
-           full_response: full_response,
-           document_title: title,
-           disposition: :reply
-         }}
+        {:ok, selected}
     end
   end
 
@@ -1027,15 +1030,20 @@ defmodule ContextBot.Research.Reply do
 
   defp classify_structured(%{text: compact_reply} = selected) do
     case limit_reasons(compact_reply) do
-      [] -> {:ok, Map.put_new(selected, :disposition, :reply)}
-      reasons -> {:repairable, compact_reply, reasons}
+      [] ->
+        {:ok, Map.put_new(selected, :disposition, :reply)}
+
+      _reasons ->
+        {:compact_repair, Map.put_new(selected, :disposition, :reply), :overlong_compact}
     end
   end
 
   defp limit_reasons(text) do
+    measure = ReplyLimits.measure(text)
+
     []
-    |> maybe_add_reason(String.length(text) > @hard_max_graphemes, :too_many_graphemes)
-    |> maybe_add_reason(byte_size(text) > @max_bytes, :too_many_bytes)
+    |> maybe_add_reason(measure.graphemes > @hard_max_graphemes, :too_many_graphemes)
+    |> maybe_add_reason(measure.bytes > @max_bytes, :too_many_bytes)
   end
 
   defp maybe_add_reason(reasons, true, reason), do: reasons ++ [reason]

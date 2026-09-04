@@ -79,7 +79,7 @@ defmodule ContextBot.Research.RequestTest do
   test "sends one versioned prompt with the complete research and reply safety contract" do
     prompt = Request.initial(@canonical_thread, config())["system"]
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V10")
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V11")
     assert prompt =~ "ancestor"
     assert prompt =~ "unstable"
     assert prompt =~ "primary sources"
@@ -94,7 +94,6 @@ defmodule ContextBot.Research.RequestTest do
     assert prompt =~ "prompt injection"
     assert Request.structure_prompt() =~ "275 Unicode grapheme"
     assert Request.structure_prompt() =~ "300"
-    refute prompt =~ "at most 300 Unicode grapheme clusters"
     refute prompt =~ "---COMPACT_REPLY---"
     assert prompt =~ "no published"
     assert prompt =~ "reply is needed"
@@ -102,10 +101,11 @@ defmodule ContextBot.Research.RequestTest do
     assert prompt =~ "great"
     assert prompt =~ "you should ask getcontext.bot"
     assert prompt =~ "When in doubt, research"
-    refute prompt =~ "compact_reply"
+    assert prompt =~ "CONTEXT_BOT_DRAFT"
+    assert prompt =~ "compact_reply"
     refute prompt =~ "full_response"
     assert prompt =~ "native web_fetch citations"
-    assert prompt =~ "Do not return JSON"
+    assert prompt =~ "Do not return a JSON object as the whole"
     assert prompt =~ "images and their alt text"
     assert prompt =~ "directly"
     assert prompt =~ "observe in an image"
@@ -212,29 +212,29 @@ defmodule ContextBot.Research.RequestTest do
   test "exposes a stable hashed identity for the versioned system prompt" do
     prompt = Request.system_prompt()
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V10")
-    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V10"
-    assert Request.system_prompt_semantic_version() == "10.0.0"
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V11")
+    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V11"
+    assert Request.system_prompt_semantic_version() == "11.0.0"
 
     assert Request.system_prompt_sha256() ==
              :sha256 |> :crypto.hash(prompt) |> Base.encode16(case: :lower)
 
     assert Request.system_prompt_rkey() ==
-             "prompt-context-bot-system-v10-#{String.slice(Request.system_prompt_sha256(), 0, 16)}"
+             "prompt-context-bot-system-v11-#{String.slice(Request.system_prompt_sha256(), 0, 16)}"
   end
 
   test "exposes a stable hashed identity for the versioned structure prompt" do
     prompt = Request.structure_prompt()
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_STRUCTURE_V4")
-    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V4"
-    assert Request.structure_prompt_semantic_version() == "4.0.0"
+    assert String.starts_with?(prompt, "CONTEXT_BOT_STRUCTURE_V5")
+    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V5"
+    assert Request.structure_prompt_semantic_version() == "5.0.0"
 
     assert Request.structure_prompt_sha256() ==
              :sha256 |> :crypto.hash(prompt) |> Base.encode16(case: :lower)
 
     assert Request.structure_prompt_rkey() ==
-             "prompt-context-bot-structure-v4-#{String.slice(Request.structure_prompt_sha256(), 0, 16)}"
+             "prompt-context-bot-structure-v5-#{String.slice(Request.structure_prompt_sha256(), 0, 16)}"
   end
 
   test "projects allowlisted Messages parameters and the first user message" do
@@ -246,8 +246,8 @@ defmodule ContextBot.Research.RequestTest do
         research_max_tokens: 4_096
       })
 
-    assert projection.prompt.id == "CONTEXT_BOT_SYSTEM_V10"
-    assert projection.prompt.semantic_version == "10.0.0"
+    assert projection.prompt.id == "CONTEXT_BOT_SYSTEM_V11"
+    assert projection.prompt.semantic_version == "11.0.0"
     assert projection.prompt.sha256 == Request.system_prompt_sha256()
     assert projection.parameters["anthropic-version"] == "2023-06-01"
     assert projection.parameters["model"] == "claude-sonnet-5"
@@ -406,7 +406,7 @@ defmodule ContextBot.Research.RequestTest do
     compact = structure_variant(schema, "reply")["properties"]["compact_reply"]["description"]
     structure = String.replace(Request.structure_prompt(), ~r/\s+/, " ")
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V10")
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V11")
     assert normalized =~ "invoking mention"
     assert normalized =~ "last post in the canonical thread"
     assert normalized =~ "every distinct question"
@@ -440,12 +440,15 @@ defmodule ContextBot.Research.RequestTest do
     compact = reply["properties"]["compact_reply"]
     structure = String.replace(Request.structure_prompt(), ~r/\s+/, " ")
 
-    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V4")
-    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V4"
-    assert Request.structure_prompt_semantic_version() == "4.0.0"
-    assert structure =~ "compact_reply is the short Bluesky"
+    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V5")
+    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V5"
+    assert Request.structure_prompt_semantic_version() == "5.0.0"
+    assert structure =~ "one short Bluesky post"
     assert structure =~ "short Bluesky"
-    assert structure =~ "not a rewrite"
+    assert structure =~ "CONTEXT_BOT_DRAFT"
+    assert structure =~ "rewrite or shorten"
+    assert structure =~ "do not self-count"
+    assert structure =~ "If no research drafts"
     assert structure =~ "title is a short"
     assert structure =~ "Never put the published answer only in title"
 
@@ -490,9 +493,9 @@ defmodule ContextBot.Research.RequestTest do
     schema = Request.output_schema()
     compact = structure_variant(schema, "reply")["properties"]["compact_reply"]["description"]
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V10")
-    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V10"
-    assert Request.system_prompt_semantic_version() == "10.0.0"
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V11")
+    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V11"
+    assert Request.system_prompt_semantic_version() == "11.0.0"
     assert normalized =~ "native web_fetch citations"
     assert normalized =~ "Do not invent URLs"
     refute Map.has_key?(structure_variant(schema, "reply")["properties"], "full_response")
@@ -513,11 +516,11 @@ defmodule ContextBot.Research.RequestTest do
     title = reply["properties"]["title"]["description"]
     compact = reply["properties"]["compact_reply"]["description"]
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V10")
-    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V4")
-    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V4"
-    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V10"
-    assert Request.system_prompt_semantic_version() == "10.0.0"
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V11")
+    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V5")
+    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V5"
+    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V11"
+    assert Request.system_prompt_semantic_version() == "11.0.0"
 
     assert normalized =~ "same language as the invoking mention"
     assert normalized =~ "Do not default to English"
@@ -622,7 +625,7 @@ defmodule ContextBot.Research.RequestTest do
         "description"
       ]
 
-    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V4")
+    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V5")
     assert structure =~ "short Bluesky"
     assert structure =~ "not a rewrite"
     assert structure =~ "Do not dump"
@@ -647,7 +650,7 @@ defmodule ContextBot.Research.RequestTest do
            )
   end
 
-  test "builds a compact-repair structure request with a tight token cap and repair banner" do
+  test "builds a compact-repair structure request with the repair banner" do
     request =
       Request.structure_repair(%{
         model_id: "claude-sonnet-5",
@@ -680,10 +683,61 @@ defmodule ContextBot.Research.RequestTest do
     assert user["content"] =~ "STRUCTURE_OUTPUT"
     assert user["content"] =~ "COMPACT_REPAIR"
     assert user["content"] =~ "300"
-    assert user["content"] =~ "Do not rewrite"
+    assert user["content"] =~ "Rewrite or shorten"
     assert user["content"] =~ "A long cited writeup"
+    refute user["content"] =~ "Research drafts (starting point"
+    refute user["content"] =~ "compact_length:"
     refute Jason.encode!(request) =~ "maxLength"
     refute Jason.encode!(request) =~ "minLength"
+  end
+
+  test "structure user turn includes code-measured draft counts when drafts parse" do
+    alias ContextBot.Research.{Drafts, ReplyLimits}
+
+    compact = String.duplicate("c", 340)
+    writeup = Drafts.format("Mostly True?", compact) <> "\n\nThorough cited writeup."
+
+    request =
+      Request.structure(%{
+        model_id: "claude-sonnet-5",
+        max_tokens: 4_096,
+        writeup: writeup,
+        citations: [],
+        canonical_thread: @canonical_thread.text
+      })
+
+    content = hd(request["messages"])["content"]
+    banner = content |> String.split("Canonical thread:", parts: 2) |> hd()
+
+    assert banner =~ "Research drafts (starting point"
+    assert banner =~ "Do not self-count"
+    assert banner =~ "title: Mostly True?"
+    refute banner =~ compact
+    refute banner =~ "compact_reply: #{compact}"
+    assert banner =~ "compact_reply: (omitted; over cap"
+    assert banner =~ "compact_length: 340 graphemes / 340 bytes"
+    assert banner =~ "hard_cap: 300 graphemes / #{ReplyLimits.max_bytes()} bytes"
+    assert banner =~ "over_cap: compact is 40 graphemes over; shorten by about 40 graphemes"
+    assert content =~ writeup
+  end
+
+  test "structure user turn omits draft counts when parse misses" do
+    request =
+      Request.structure(%{
+        model_id: "claude-sonnet-5",
+        max_tokens: 4_096,
+        writeup: "Thorough writeup with no draft block.",
+        citations: [],
+        canonical_thread: @canonical_thread.text
+      })
+
+    content = hd(request["messages"])["content"]
+    refute content =~ "Research drafts (starting point"
+    refute content =~ "compact_length:"
+    refute content =~ "hard_cap:"
+    refute content =~ "over_cap:"
+    assert content =~ "Thorough writeup with no draft block."
+    assert Request.structure_prompt() =~ "If no research drafts"
   end
 
   test "structure ignores optional effort and stays Haiku-safe" do

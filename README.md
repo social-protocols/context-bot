@@ -128,7 +128,9 @@ just fly-recover
 just fly-recover 22
 ```
 
-`just fly-recover` starts the Fly machine if needed, SSHes into the release, and runs `Recovery.recover_orphans/1` or `Recovery.recover_invocation/2`. It skips published replies and deterministic parser hard-fails, resumes a stored writeup with a live `Request.structure/1` when the last provider call is not a replayable 2xx, and otherwise keeps the existing replay and interrupted-after-send paths. It may publish a Bluesky reply.
+`just fly-recover` starts the Fly machine if needed, SSHes into the release, and runs `Recovery.recover_orphans/1` or `Recovery.recover_invocation/2`. The no-id scan skips published replies and deterministic parser hard-fails, and resumes a stored writeup with a live `Request.structure/1` when the last provider call is not a replayable 2xx. `just fly-recover <id>` (and `just recover <id>`) passes `operator?: true` so a stored writeup can retry structure after `max_tokens` / `invalid_structured_output` / `empty_compact` / `overlong_compact` / `invalid_repair` without `fly-reenqueue` or another research bill. It may publish a Bluesky reply.
+
+Invocation 30 failed when STRUCTURE_V4 dumped the research writeup into `compact_reply` and both structure and compact-repair hit `max_tokens`. After this change is merged and deployed, retry it with `just fly-recover 30` (or `just recover 30` against a local copy of the Fly DB). That issues a live `Request.structure/1` from the stored writeup. Do not `fly-reenqueue` 30. Do not run that recover from this PR.
 
 Every row created this way has `dry_run = 1`. It skips mention eligibility and mention-rate admission, but retains provider budgets, response/tool/token/storage limits, retries, leases, and full bounded provider response envelopes. It never starts the notification poller or ATProto session, never creates a reply record, and cannot acquire a publication lease. A budget deferral remains durable for later operator inspection; rerunning the command creates a new check.
 
@@ -186,10 +188,10 @@ it reports the existing reply URL without another Claude request or Bluesky post
 | `just live-run <invocation-url>` | Process one real direct mention locally and publish its Bluesky reply. Explicit authorization required. |
 | `just reprocess <invocation-id>` | With the bot disabled and workers stopped, reopen a guarded provider-processing failure from its retained response; performs no external I/O. |
 | `just reenqueue <invocation-id>` | With the bot disabled and workers stopped, reset one failed or unpublished-complete invocation and enqueue a fresh two-phase research run. |
-| `just recover [invocation-id]` | With the bot disabled and workers stopped, run the same recovery path as boot; omit the id to scan, or pass one id. May later publish a Bluesky reply. |
+| `just recover [invocation-id]` | With the bot disabled and workers stopped, run the same recovery path as boot; omit the id to scan, or pass one id (`operator?: true` structure-from-writeup retry). May later publish a Bluesky reply. |
 | `just fly-reprocess <id>` | Reprocess one production invocation from its retained response on Fly. May publish a Bluesky reply. External authorization required. |
 | `just fly-reenqueue <id>` | Reenqueue one production invocation as a fresh two-phase research run on Fly. May publish a Bluesky reply. External authorization required. |
-| `just fly-recover [id]` | Recover failed production invocations using the same Recovery path as boot. May publish a Bluesky reply. External authorization required. |
+| `just fly-recover [id]` | Recover failed production invocations. With an id, operator structure-from-writeup retry (no second research bill). May publish a Bluesky reply. External authorization required. |
 | `just fly-invocation <id>` | Query and display production invocation status by ID on Fly. External authorization required. |
 | `just docker-build` | Build `context-bot:local`. |
 | `just secrets` | Validate the allowlisted Bitwarden fields without printing values. |

@@ -5,10 +5,13 @@ defmodule ContextBot.Workflow.Recovery do
   Provider-exposed research is never replayed while its HTTP timeout window is
   still open. After that window, a lost sent-without-envelope attempt stays
   indeterminate and a new reservation may be created. Dry and public invocations
-  always remain on their respective queues. A stored research writeup whose last
+  always remain on their respective queues.   A stored research writeup whose last
   structure or provider call is not a replayable 2xx resumes structure-only from
   a live `Request.structure/1`. Deterministic parser hard-fails stay failed
-  until an explicit operator reprocess; automatic recovery does not loop them.
+  under automatic recovery. An operator `recover_invocation/2` with
+  `operator?: true` retries structure-from-writeup for `max_tokens`,
+  `invalid_structured_output`, `empty_compact`, `overlong_compact`, and
+  `invalid_repair` without clearing research.
   """
 
   import Ecto.Query
@@ -295,31 +298,41 @@ defmodule ContextBot.Workflow.Recovery do
         mark_checked(invocation, config.now)
         :unchanged
 
+      operator_structure_retry?(invocation, config) ->
+        reopen_research_work(invocation, config, &reopen_for_structure/4)
+
       InterruptRecovery.deterministic_parse_hard_fail?(invocation) ->
         mark_checked(invocation, config.now)
         :unchanged
 
+      true ->
+        recover_failed_research(invocation, config)
+    end
+  end
+
+  defp recover_failed_research(invocation, config) do
+    cond do
       InterruptRecovery.replayable_recorded_response?(invocation) and
           InterruptRecovery.can_restart_research?(invocation) ->
-        work = research_work(invocation)
-        job = latest_job(invocation, work.worker)
-        reopen_for_replay(invocation, job, work, config)
+        reopen_research_work(invocation, config, &reopen_for_replay/4)
 
       InterruptRecovery.interrupted_after_send?(invocation) and
           InterruptRecovery.can_restart_research?(invocation) ->
-        work = research_work(invocation)
-        job = latest_job(invocation, work.worker)
-        recover_research(invocation, job, work, config)
+        reopen_research_work(invocation, config, &recover_research/4)
 
       structure_from_writeup?(invocation) ->
-        work = research_work(invocation)
-        job = latest_job(invocation, work.worker)
-        reopen_for_structure(invocation, job, work, config)
+        reopen_research_work(invocation, config, &reopen_for_structure/4)
 
       true ->
         mark_checked(invocation, config.now)
         :unchanged
     end
+  end
+
+  defp reopen_research_work(invocation, config, fun) do
+    work = research_work(invocation)
+    job = latest_job(invocation, work.worker)
+    fun.(invocation, job, work, config)
   end
 
   defp recover_research(invocation, job, work, config) do
@@ -524,6 +537,28 @@ defmodule ContextBot.Workflow.Recovery do
     end
   end
 
+  defp operator_structure_retry?(%Invocation{} = invocation, config) do
+    config.operator? and
+      structure_from_writeup?(invocation) and
+      structure_retryable_failure?(invocation)
+  end
+
+  defp structure_retryable_failure?(%Invocation{failure_category: :invalid_repair}), do: true
+
+  defp structure_retryable_failure?(%Invocation{
+         failure_category: :provider_response,
+         failure_detail: %{"reason" => reason}
+       })
+       when reason in [
+              "max_tokens",
+              "invalid_structured_output",
+              "empty_compact",
+              "overlong_compact"
+            ],
+       do: true
+
+  defp structure_retryable_failure?(_invocation), do: false
+
   defp structure_from_writeup?(%Invocation{} = invocation) do
     InterruptRecovery.stored_writeup?(invocation) and present_thread?(invocation)
   end
@@ -697,6 +732,7 @@ defmodule ContextBot.Workflow.Recovery do
           if(startup?, do: ["executing"], else: @runtime_orphan_states)
         ),
       now: Keyword.get(options, :now, DateTime.utc_now()),
+      operator?: Keyword.get(options, :operator?, false),
       settings: Keyword.get(options, :settings, Application.fetch_env!(:context_bot, :settings)),
       startup?: startup?,
       workflow: Keyword.get(options, :workflow, :all)
