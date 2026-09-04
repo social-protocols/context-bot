@@ -447,7 +447,7 @@ defmodule ContextBot.Research.RequestTest do
     assert structure =~ "short Bluesky"
     assert structure =~ "CONTEXT_BOT_DRAFT"
     assert structure =~ "rewrite or shorten"
-    assert structure =~ "Do not self-count"
+    assert structure =~ "do not self-count"
     assert structure =~ "If no research drafts"
     assert structure =~ "title is a short"
     assert structure =~ "Never put the published answer only in title"

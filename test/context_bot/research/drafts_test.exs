@@ -37,7 +37,7 @@ defmodule ContextBot.Research.DraftsTest do
     assert Drafts.parse("Thorough writeup with no draft block.") == :error
     assert Drafts.parse_measured("Thorough writeup with no draft block.") == :error
     assert Drafts.structure_banner("Thorough writeup with no draft block.") == ""
-    refute Drafts.parse("CONTEXT_BOT_DRAFT\nmissing labels\nCONTEXT_BOT_DRAFT_END") == :ok
+    assert Drafts.parse("CONTEXT_BOT_DRAFT\nmissing labels\nCONTEXT_BOT_DRAFT_END") == :error
   end
 
   test "structure banner includes code-measured counts and over-cap delta" do

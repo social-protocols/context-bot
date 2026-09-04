@@ -1758,6 +1758,7 @@ defmodule ContextBot.Research.RunnerTest do
     assert_received {:anthropic_call, _research, %{kind: :research}, false}
     assert_received {:anthropic_call, _structure, %{kind: :structure}, false}
     assert_received {:anthropic_call, repair, %{kind: :repair}, false}
+    assert Request.structure_repair_request?(repair)
     refute_received {:anthropic_call, _request, _metadata, _in_transaction}
   end
 

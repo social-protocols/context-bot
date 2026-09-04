@@ -42,7 +42,7 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       assert selected.disposition == :reply
     end
 
-    test "fails closed when every text block is a placeholder or otherwise invalid" do
+    test "treats a json_schema placeholder with empty compact as compact_repair" do
       for content <- [
             [%{"type" => "text", "text" => json_schema_placeholder()}],
             [
@@ -50,7 +50,9 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
               %{"type" => "text", "text" => "Just a regular reply without JSON"}
             ]
           ] do
-        assert Reply.select(content, :end_turn) == {:error, :invalid_structured_output}
+        assert {:compact_repair, selected, :empty_compact} = Reply.select(content, :end_turn)
+        assert selected.text == ""
+        assert selected.document_title == "placeholder"
       end
     end
 
