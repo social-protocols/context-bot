@@ -62,6 +62,7 @@ if [[ -n "$recipe_content" ]]; then
 	[[ "$recipe_content" == *"ContextBot.Repo.start_link"* ]] || fail "fly-recover does not start Repo"
 	[[ "$recipe_content" == *"Recovery.recover_orphans"* ]] || fail "fly-recover does not call Recovery.recover_orphans"
 	[[ "$recipe_content" == *"Recovery.recover_invocation"* ]] || fail "fly-recover does not call Recovery.recover_invocation"
+	[[ "$recipe_content" == *"operator?: true"* ]] || fail "fly-recover one-id path does not pass operator?: true"
 	[[ "$recipe_content" == *"job_states"* ]] || fail "fly-recover does not pass live-app job-state options"
 	[[ "$recipe_content" != *"Reprocessor.reprocess"* ]] || fail "fly-recover must not call Reprocessor.reprocess"
 	[[ "$recipe_content" != *"Reenqueuer.reenqueue"* ]] || fail "fly-recover must not call Reenqueuer.reenqueue"

@@ -57,6 +57,21 @@ defmodule ContextBot.Research.InterruptRecoveryTest do
            })
 
     assert InterruptRecovery.deterministic_parse_hard_fail?(%Invocation{
+             failure_category: :provider_response,
+             failure_detail: %{"reason" => "empty_compact"}
+           })
+
+    assert InterruptRecovery.deterministic_parse_hard_fail?(%Invocation{
+             failure_category: :provider_response,
+             failure_detail: %{"reason" => "overlong_compact"}
+           })
+
+    assert InterruptRecovery.deterministic_parse_hard_fail?(%Invocation{
+             failure_category: :provider_response,
+             failure_detail: %{"reason" => "max_tokens"}
+           })
+
+    assert InterruptRecovery.deterministic_parse_hard_fail?(%Invocation{
              failure_category: :invalid_repair,
              failure_detail: %{"reason" => "invalid_repair"}
            })

@@ -4,8 +4,10 @@ defmodule Mix.Tasks.ContextBot.Recover do
 
   With no arguments, scans abandoned and failed invocations via
   `Recovery.recover_orphans/1`. With one id, recovers that row via
-  `Recovery.recover_invocation/2`. May enqueue work that later publishes a
-  Bluesky reply.
+  `Recovery.recover_invocation/2` with `operator?: true`, which retries
+  structure-from-writeup for `max_tokens`, `invalid_structured_output`,
+  `empty_compact`, `overlong_compact`, and `invalid_repair` without
+  clearing research. May enqueue work that later publishes a Bluesky reply.
   """
 
   use Mix.Task
@@ -56,7 +58,7 @@ defmodule Mix.Tasks.ContextBot.Recover do
   end
 
   defp recover_one(recovery, id, now) do
-    case recovery.recover_invocation(id, now: now) do
+    case recovery.recover_invocation(id, now: now, operator?: true) do
       result when result in [:resumed, :terminalized, :unchanged] ->
         Mix.shell().info("status=#{result}")
         Mix.shell().info("invocation_id=#{id}")

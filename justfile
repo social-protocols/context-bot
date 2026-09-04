@@ -127,7 +127,8 @@ fly-reenqueue invocation_id:
     "'
 
 # Recover failed production invocations using the same Recovery path as boot. May publish a Bluesky reply.
-# With no id, scans the same abandoned and failed rows as startup. With one id, recovers that row.
+# With no id, scans the same abandoned and failed rows as startup.
+# With one id, operator structure-from-writeup retry (no second research bill).
 # Uses runtime job-states so discarded parked rows resume on a live app.
 [positional-arguments]
 fly-recover *args:
@@ -153,7 +154,7 @@ fly-recover *args:
     if [[ $# -eq 0 ]]; then
       target='ContextBot.Workflow.Recovery.recover_orphans(now: DateTime.utc_now(), job_states: ~w(executing completed cancelled discarded))'
     else
-      target="ContextBot.Workflow.Recovery.recover_invocation($1, now: DateTime.utc_now())"
+      target="ContextBot.Workflow.Recovery.recover_invocation($1, now: DateTime.utc_now(), operator?: true)"
     fi
 
     fly ssh console -a context-bot-social-protocols --command "/app/bin/context_bot eval \"

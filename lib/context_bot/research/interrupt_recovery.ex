@@ -28,11 +28,13 @@ defmodule ContextBot.Research.InterruptRecovery do
   @parse_hard_fail_reasons MapSet.new([
                              "code_execution_failed",
                              "empty_reply",
+                             "empty_compact",
                              "invalid_content",
                              "invalid_repair",
                              "invalid_structured_output",
                              "malformed_provider_response",
                              "max_tokens",
+                             "overlong_compact",
                              "model_context_window_exceeded",
                              "pause_turn",
                              "pending_tool_use",
