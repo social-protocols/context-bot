@@ -1831,9 +1831,8 @@ defmodule ContextBot.Research.RunnerTest do
     assert length(plan.posts) in 1..2
     last = List.last(plan.posts)
     assert String.contains?(last, "full response")
-
-    assert String.contains?(last, ReplyLimits.continuation_ellipsis() <> Post.link_suffix()) or
-             plan.link_placement == :post_2_link_only
+    assert String.contains?(last, ReplyLimits.continuation_ellipsis())
+    assert String.ends_with?(last, Post.link_suffix())
 
     assert_received {:anthropic_call, _research, %{kind: :research}, false}
     assert_received {:anthropic_call, _structure, %{kind: :structure}, false}

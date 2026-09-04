@@ -573,12 +573,9 @@ defmodule ContextBot.Research.ReplyTest do
       )
 
     assert length(grapheme_plan.posts) == 2
-    assert String.ends_with?(List.last(grapheme_plan.posts), Post.link_suffix())
 
-    assert String.contains?(
-             List.last(grapheme_plan.posts),
-             ReplyLimits.continuation_ellipsis() <> Post.link_suffix()
-           )
+    assert List.last(grapheme_plan.posts) ==
+             ReplyLimits.continuation_ellipsis() <> "aa" <> Post.link_suffix()
 
     assert {:ok, selected_bytes} = Reply.select([structured_text(over_bytes)], "end_turn")
     assert_two_post_link_truncate(selected_bytes, over_bytes)
@@ -590,6 +587,16 @@ defmodule ContextBot.Research.ReplyTest do
     assert_two_post_link_truncate(selected_essay, essay)
     assert selected_essay.compact_source == essay
     refute selected_essay.text == essay
+
+    essay_plan =
+      PublicationPlan.preview(selected_essay.text, selected_essay.text_part2, essay)
+
+    assert length(essay_plan.posts) == 2
+
+    assert String.ends_with?(
+             List.last(essay_plan.posts),
+             ReplyLimits.continuation_ellipsis() <> Post.link_suffix()
+           )
   end
 
   test "accepts a splittable overlong compact as a two-post pack without compact_repair" do
@@ -1254,13 +1261,7 @@ defmodule ContextBot.Research.ReplyTest do
     assert length(plan.posts) in 1..2
     last = List.last(plan.posts)
     assert String.contains?(last, "full response")
-
-    assert String.contains?(last, ReplyLimits.continuation_ellipsis()) or
-             plan.link_placement == :post_2_link_only
-
-    if String.contains?(last, Post.link_suffix()) do
-      assert String.contains?(last, ReplyLimits.continuation_ellipsis() <> Post.link_suffix())
-    end
+    assert String.contains?(last, ReplyLimits.continuation_ellipsis())
 
     Enum.each(plan.posts, fn post ->
       assert ReplyLimits.fits_one_post?(post)
