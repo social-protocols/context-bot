@@ -707,13 +707,17 @@ defmodule ContextBot.Research.RequestTest do
       })
 
     content = hd(request["messages"])["content"]
-    assert content =~ "Research drafts (starting point"
-    assert content =~ "Do not self-count"
-    assert content =~ "title: Mostly True?"
-    assert content =~ "compact_reply: #{compact}"
-    assert content =~ "compact_length: 340 graphemes / 340 bytes"
-    assert content =~ "hard_cap: 300 graphemes / #{ReplyLimits.max_bytes()} bytes"
-    assert content =~ "over_cap: compact is 40 graphemes over; shorten by about 40 graphemes"
+    banner = content |> String.split("Canonical thread:", parts: 2) |> hd()
+
+    assert banner =~ "Research drafts (starting point"
+    assert banner =~ "Do not self-count"
+    assert banner =~ "title: Mostly True?"
+    refute banner =~ compact
+    refute banner =~ "compact_reply: #{compact}"
+    assert banner =~ "compact_reply: (omitted; over cap"
+    assert banner =~ "compact_length: 340 graphemes / 340 bytes"
+    assert banner =~ "hard_cap: 300 graphemes / #{ReplyLimits.max_bytes()} bytes"
+    assert banner =~ "over_cap: compact is 40 graphemes over; shorten by about 40 graphemes"
     assert content =~ writeup
   end
 

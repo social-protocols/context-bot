@@ -101,8 +101,10 @@ defmodule ContextBot.Research.Drafts do
   @doc """
   Structure-turn banner with parsed drafts and code-measured lengths.
 
-  Returns `""` when drafts cannot be parsed so the structure call does not
-  invent a draft that was not in the writeup.
+  In-cap title and compact_reply text are included. Over-cap fields are
+  omitted so the banner does not re-inject an essay already present in the
+  writeup. Returns `""` when drafts cannot be parsed so the structure call
+  does not invent a draft that was not in the writeup.
   """
   @spec structure_banner(String.t()) :: String.t()
   def structure_banner(writeup) when is_binary(writeup) do
@@ -117,13 +119,23 @@ defmodule ContextBot.Research.Drafts do
   defp structure_banner_text(measured) do
     """
     Research drafts (starting point; shorten or lightly rewrite only as needed to meet the hard cap. Do not self-count; use the measured lengths below):
-    title: #{measured.title}
+    title: #{banner_field(measured.title)}
     title_length: #{measured.title_graphemes} graphemes / #{measured.title_bytes} bytes
-    compact_reply: #{measured.compact_reply}
+    compact_reply: #{banner_field(measured.compact_reply)}
     compact_length: #{measured.compact_graphemes} graphemes / #{measured.compact_bytes} bytes
     hard_cap: #{ReplyLimits.hard_max_graphemes()} graphemes / #{ReplyLimits.max_bytes()} bytes
     #{over_cap_line(measured)}
     """
+  end
+
+  # Over-cap draft text already lives in the writeup. Re-injecting it into the
+  # structure banner re-bloats the exact max_tokens failure this path avoids.
+  defp banner_field(text) do
+    if ReplyLimits.fits_one_post?(text) do
+      text
+    else
+      "(omitted; over cap — see measured length below)"
+    end
   end
 
   defp over_cap_line(%{compact_over_graphemes: 0, compact_over_bytes: 0}),

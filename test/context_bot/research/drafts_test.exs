@@ -40,7 +40,7 @@ defmodule ContextBot.Research.DraftsTest do
     assert Drafts.parse("CONTEXT_BOT_DRAFT\nmissing labels\nCONTEXT_BOT_DRAFT_END") == :error
   end
 
-  test "structure banner includes code-measured counts and over-cap delta" do
+  test "structure banner omits the raw over-cap compact and keeps measured counts" do
     compact = String.duplicate("b", 350)
     writeup = Drafts.format("Mostly True?", compact) <> "\n\nWriteup."
     banner = Drafts.structure_banner(writeup)
@@ -49,18 +49,37 @@ defmodule ContextBot.Research.DraftsTest do
     assert banner =~ "Do not self-count"
     assert banner =~ "title: Mostly True?"
     assert banner =~ "title_length: #{ReplyLimits.graphemes("Mostly True?")} graphemes"
-    assert banner =~ "compact_reply: #{compact}"
+    refute banner =~ compact
+    refute banner =~ "compact_reply: #{compact}"
+    assert banner =~ "compact_reply: (omitted; over cap"
     assert banner =~ "compact_length: 350 graphemes / 350 bytes"
     assert banner =~ "hard_cap: 300 graphemes / 3000 bytes"
     assert banner =~ "over_cap: compact is 50 graphemes over; shorten by about 50 graphemes"
   end
 
-  test "structure banner reports over_cap none when the compact fits" do
-    writeup = Drafts.format("Bird", "A Himalayan Monal.") <> "\n\nWriteup."
+  test "structure banner omits a similarly huge title and keeps title_length" do
+    title = String.duplicate("T", 400)
+    compact = "A Himalayan Monal."
+    writeup = Drafts.format(title, compact) <> "\n\nWriteup."
     banner = Drafts.structure_banner(writeup)
 
+    refute banner =~ title
+    refute banner =~ "title: #{title}"
+    assert banner =~ "title: (omitted; over cap"
+    assert banner =~ "title_length: 400 graphemes / 400 bytes"
+    assert banner =~ "compact_reply: #{compact}"
+  end
+
+  test "structure banner includes in-cap draft text and reports over_cap none" do
+    compact = "A Himalayan Monal."
+    writeup = Drafts.format("Bird", compact) <> "\n\nWriteup."
+    banner = Drafts.structure_banner(writeup)
+
+    assert banner =~ "title: Bird"
+    assert banner =~ "compact_reply: #{compact}"
     assert banner =~ "over_cap: none"
     refute banner =~ "shorten by"
+    refute banner =~ "(omitted; over cap"
   end
 
   test "publishable_writeup keeps the draft block parseable" do
