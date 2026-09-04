@@ -372,6 +372,44 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert persisted.reply_record["text"] == shortened <> " (full response)"
   end
 
+  test "published Standard.site writeup strips CONTEXT_BOT_DRAFT while sqlite keeps it" do
+    essay = "Thorough markdown writeup."
+    writeup = Drafts.format("Mostly True?", "A Himalayan Monal.") <> "\n\n" <> essay
+    invocation = invocation("published-writeup-strips-draft", :thread_ready)
+
+    configure_runner(
+      {:ok,
+       runner_result()
+       |> Map.put(:full_response, writeup)
+       |> Map.put(:document_title, "Mostly True?")}
+    )
+
+    configure_worker(atproto_client: FakeStandardSiteTrackingClient)
+
+    assert :ok = perform(invocation)
+    persisted = Repo.reload!(invocation)
+    assert persisted.full_response == writeup
+
+    assert {:ok, %{title: "Mostly True?", compact_reply: "A Himalayan Monal."}} =
+             Drafts.parse(persisted.full_response)
+
+    prompt_rkey = Request.system_prompt_rkey()
+    structure_rkey = Request.structure_prompt_rkey()
+    assert_received {:standard_site_put, "site.standard.publication", "context-bot", _pub}
+    assert_received {:standard_site_put, "site.standard.document", ^prompt_rkey, _prompt}
+    assert_received {:standard_site_put, "site.standard.document", ^structure_rkey, _structure}
+    assert_received {:standard_site_put, "site.standard.document", _doc_rkey, doc_record}
+
+    markdown = doc_record["content"]["text"]["markdown"]
+    assert doc_record["textContent"] == essay
+    refute doc_record["textContent"] =~ Drafts.open_marker()
+    assert markdown =~ essay
+    refute markdown =~ Drafts.open_marker()
+    refute markdown =~ Drafts.close_marker()
+    refute markdown =~ "title: Mostly True?"
+    refute markdown =~ "compact_reply: A Himalayan Monal."
+  end
+
   test "fails closed without freezing a reply when publication create fails" do
     invocation = invocation("publication-lexicon-unknown", :thread_ready)
 

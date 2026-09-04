@@ -1,6 +1,7 @@
 defmodule ContextBot.StandardSite.MirrorTest do
   use ContextBot.DataCase, async: false
 
+  alias ContextBot.Research.Drafts
   alias ContextBot.StandardSite.Mirror
   alias ContextBot.Workflow.Invocation
 
@@ -75,6 +76,22 @@ defmodule ContextBot.StandardSite.MirrorTest do
              Mirror.serve(invocation.id, check: check, now: @now, ttl_ms: 60_000)
 
     assert markdown =~ @writeup
+  end
+
+  test "serve/2 strips CONTEXT_BOT_DRAFT from the mirrored writeup" do
+    essay = @writeup
+    writeup = Drafts.format("What Is That Bird?", "A Himalayan Monal.") <> "\n\n" <> essay
+    invocation = insert_published!(full_response: writeup)
+
+    assert {:mirror, _served, markdown} =
+             Mirror.serve(invocation.id, check: fn _uri -> :not_indexed end, now: @now)
+
+    assert Repo.reload!(invocation).full_response == writeup
+    assert {:ok, %{title: "What Is That Bird?"}} = Drafts.parse(invocation.full_response)
+    assert markdown =~ essay
+    refute markdown =~ Drafts.open_marker()
+    refute markdown =~ Drafts.close_marker()
+    refute markdown =~ "title: What Is That Bird?"
   end
 
   test "serve/2 looks up already-published documents by rkey" do

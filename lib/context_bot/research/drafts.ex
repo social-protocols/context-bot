@@ -6,6 +6,10 @@ defmodule ContextBot.Research.Drafts do
   the starting point and may shorten or lightly rewrite them to fit the
   Bluesky hard cap. Length counts are measured in code with the same
   grapheme and byte counters used for publication.
+
+  The stored research writeup keeps the block so structure and recover can
+  parse it. `strip/1` removes it from published Standard Reader /
+  `site.standard.document` / getcontext.bot writeup bodies.
   """
 
   alias ContextBot.Research.ReplyLimits
@@ -52,19 +56,31 @@ defmodule ContextBot.Research.Drafts do
   """
   @spec parse(String.t()) :: {:ok, t()} | :error
   def parse(writeup) when is_binary(writeup) do
-    case split_once(writeup, @open <> "\n") || split_once(writeup, @open <> "\r\n") do
-      {_before, rest} ->
-        case split_once(rest, "\n" <> @close) || split_once(rest, "\r\n" <> @close) do
-          {body, _after} -> parse_body(body)
-          nil -> :error
-        end
-
-      nil ->
-        :error
+    case split_block(writeup) do
+      {_before, body, _after} -> parse_body(body)
+      nil -> :error
     end
   end
 
   def parse(_writeup), do: :error
+
+  @doc """
+  Removes the first draft block (markers and title/compact_reply lines).
+
+  Uses the same `CONTEXT_BOT_DRAFT` / `CONTEXT_BOT_DRAFT_END` splits as
+  `parse/1`. Leaves the surrounding essay. Returns the input unchanged when
+  the block is absent. Idempotent. A complete marker pair is stripped even
+  when the labels are malformed so published pages never show the markers.
+  """
+  @spec strip(String.t()) :: String.t()
+  def strip(writeup) when is_binary(writeup) do
+    case split_block(writeup) do
+      {before, _body, after_close} -> join_stripped(before, after_close)
+      nil -> writeup
+    end
+  end
+
+  def strip(writeup), do: writeup
 
   @doc """
   Parses drafts and attaches publication grapheme/byte counts.
@@ -221,6 +237,30 @@ defmodule ContextBot.Research.Drafts do
 
       nil ->
         :error
+    end
+  end
+
+  defp split_block(writeup) do
+    case split_once(writeup, @open <> "\n") || split_once(writeup, @open <> "\r\n") do
+      {before, rest} ->
+        case split_once(rest, "\n" <> @close) || split_once(rest, "\r\n" <> @close) do
+          {body, after_close} -> {before, body, after_close}
+          nil -> nil
+        end
+
+      nil ->
+        nil
+    end
+  end
+
+  defp join_stripped(before, after_close) do
+    before = String.trim_trailing(before)
+    after_close = String.trim_leading(after_close)
+
+    cond do
+      before == "" -> after_close
+      after_close == "" -> before
+      true -> before <> "\n\n" <> after_close
     end
   end
 

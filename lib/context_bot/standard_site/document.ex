@@ -10,6 +10,7 @@ defmodule ContextBot.StandardSite.Document do
   """
 
   alias ContextBot.ATProto.{Client, TID}
+  alias ContextBot.Research.Drafts
   alias ContextBot.StandardSite.PageCopy
 
   @collection "site.standard.document"
@@ -161,7 +162,7 @@ defmodule ContextBot.StandardSite.Document do
       "$type" => @collection,
       "site" => publication_uri,
       "title" => PageCopy.title(content),
-      "textContent" => content.full_response,
+      "textContent" => Drafts.strip(content.full_response),
       "content" => %{
         "$type" => "at.markpub.markdown",
         "text" => %{
@@ -179,6 +180,10 @@ defmodule ContextBot.StandardSite.Document do
 
   @doc """
   Markdown published on the Standard Reader full-response page.
+
+  The research writeup is passed through `Drafts.strip/1` so the
+  `CONTEXT_BOT_DRAFT` block never appears in Reader, PDS `textContent`, or
+  the getcontext.bot mirror. Stored sqlite `full_response` is unchanged.
 
   Requires research and structure prompt-document reader URLs, prompt
   identity/hash for both templates, and the allowlisted Messages API parameters.
@@ -215,7 +220,7 @@ defmodule ContextBot.StandardSite.Document do
 
     # Research Analysis
 
-    #{full_response}
+    #{Drafts.strip(full_response)}
 
     #{continue_markdown(content)}
 
