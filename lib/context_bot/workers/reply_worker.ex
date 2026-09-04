@@ -15,8 +15,9 @@ defmodule ContextBot.Workers.ReplyWorker do
 
   import Ecto.Query
 
-  alias ContextBot.ATProto.{Client, ReqClient}
+  alias ContextBot.ATProto.{Client, ReqClient, TID}
   alias ContextBot.{Operations, Repo}
+  alias ContextBot.Reply.FollowerPost
   alias ContextBot.Workflow.{Invocation, Store}
 
   @collection "app.bsky.feed.post"
@@ -112,7 +113,7 @@ defmodule ContextBot.Workers.ReplyWorker do
   defp refuse_unlinked_publication(invocation, token, dependencies) do
     case get_record(invocation, token, dependencies) do
       {:match, uri, cid} ->
-        complete(invocation, token, uri, cid, dependencies.now.())
+        complete(invocation, token, uri, cid, dependencies.now.(), dependencies)
 
       :missing ->
         fail_quality(invocation, token, "missing_reader_url", dependencies.now.())
@@ -159,7 +160,7 @@ defmodule ContextBot.Workers.ReplyWorker do
   defp reconcile_before_put(invocation, token, dependencies) do
     case get_record(invocation, token, dependencies) do
       {:match, uri, cid} ->
-        complete(invocation, token, uri, cid, dependencies.now.())
+        complete(invocation, token, uri, cid, dependencies.now.(), dependencies)
 
       :missing ->
         put_record(invocation, token, dependencies)
@@ -216,7 +217,7 @@ defmodule ContextBot.Workers.ReplyWorker do
   defp reconcile_after_put(invocation, token, dependencies, missing_reason) do
     case get_record(invocation, token, dependencies) do
       {:match, uri, cid} ->
-        complete(invocation, token, uri, cid, dependencies.now.())
+        complete(invocation, token, uri, cid, dependencies.now.(), dependencies)
 
       :missing ->
         retry_or_exhausted(invocation, token, missing_reason, dependencies)
@@ -308,25 +309,21 @@ defmodule ContextBot.Workers.ReplyWorker do
     end
   end
 
-  defp complete(invocation, token, uri, cid, completed_at) do
+  defp complete(invocation, token, uri, cid, completed_at, dependencies) do
     if has_part2?(invocation) do
-      publish_part2(invocation, token, uri, cid, completed_at)
+      publish_part2(invocation, token, uri, cid, completed_at, dependencies)
     else
-      complete_single_part(invocation, token, uri, cid, completed_at)
+      finish_publication(
+        invocation,
+        token,
+        %{reply_uri: uri, reply_cid: cid},
+        completed_at,
+        dependencies
+      )
     end
   end
 
-  defp complete_single_part(invocation, token, uri, cid, completed_at) do
-    transition_terminal(
-      invocation,
-      token,
-      :complete,
-      %{reply_uri: uri, reply_cid: cid},
-      completed_at
-    )
-  end
-
-  defp publish_part2(invocation, token, part1_uri, part1_cid, part1_completed_at) do
+  defp publish_part2(invocation, token, part1_uri, part1_cid, part1_completed_at, dependencies) do
     case reconcile_part2(invocation, token, part1_uri, part1_cid, part1_completed_at) do
       {:ok, part2_uri, part2_cid} ->
         complete_after_part2(
@@ -336,7 +333,8 @@ defmodule ContextBot.Workers.ReplyWorker do
           part1_cid,
           part2_uri,
           part2_cid,
-          part1_completed_at
+          part1_completed_at,
+          dependencies
         )
 
       :stale_claim ->
@@ -354,22 +352,32 @@ defmodule ContextBot.Workers.ReplyWorker do
          part1_cid,
          part2_uri,
          part2_cid,
-         completed_at
+         completed_at,
+         dependencies
        ) do
     if has_part3?(invocation) do
-      publish_part3(invocation, token, part1_uri, part1_cid, part2_uri, part2_cid, completed_at)
-    else
-      transition_terminal(
+      publish_part3(
         invocation,
         token,
-        :complete,
+        part1_uri,
+        part1_cid,
+        part2_uri,
+        part2_cid,
+        completed_at,
+        dependencies
+      )
+    else
+      finish_publication(
+        invocation,
+        token,
         %{
           reply_uri: part1_uri,
           reply_cid: part1_cid,
           reply_part2_uri: part2_uri,
           reply_part2_cid: part2_cid
         },
-        completed_at
+        completed_at,
+        dependencies
       )
     end
   end
@@ -381,14 +389,14 @@ defmodule ContextBot.Workers.ReplyWorker do
          part1_cid,
          part2_uri,
          part2_cid,
-         completed_at
+         completed_at,
+         dependencies
        ) do
     case reconcile_later_part(invocation, token, :part3, part2_uri, part2_cid) do
       {:ok, part3_uri, part3_cid} ->
-        transition_terminal(
+        finish_publication(
           invocation,
           token,
-          :complete,
           %{
             reply_uri: part1_uri,
             reply_cid: part1_cid,
@@ -397,7 +405,8 @@ defmodule ContextBot.Workers.ReplyWorker do
             reply_part3_uri: part3_uri,
             reply_part3_cid: part3_cid
           },
-          completed_at
+          completed_at,
+          dependencies
         )
 
       :stale_claim ->
@@ -767,6 +776,212 @@ defmodule ContextBot.Workers.ReplyWorker do
   end
 
   defp retry_or_exhausted(_invocation, _token, reason, _dependencies), do: {:error, reason}
+
+  defp finish_publication(invocation, token, reply_attrs, completed_at, dependencies) do
+    case publish_follower_post(invocation, token, dependencies) do
+      {:ok, follower_attrs} ->
+        transition_terminal(
+          invocation,
+          token,
+          :complete,
+          Map.merge(reply_attrs, follower_attrs),
+          completed_at
+        )
+
+      :skip ->
+        transition_terminal(invocation, token, :complete, reply_attrs, completed_at)
+
+      :stale_claim ->
+        :ok
+
+      {:retry, reason} ->
+        retry_or_exhausted(invocation, token, reason, dependencies)
+    end
+  end
+
+  defp publish_follower_post(invocation, token, dependencies) do
+    current = Repo.reload!(invocation)
+
+    cond do
+      published_follower_post?(current) ->
+        {:ok, follower_attrs(current)}
+
+      not FollowerPost.eligible?(current) ->
+        :skip
+
+      true ->
+        reconcile_follower_post(current, token, dependencies)
+    end
+  end
+
+  defp reconcile_follower_post(invocation, token, dependencies) do
+    case ensure_follower_intent(invocation, token, dependencies) do
+      {:ok, prepared} ->
+        reconcile_prepared_follower_post(prepared, token, dependencies)
+
+      :skip ->
+        :skip
+
+      :stale_claim ->
+        :stale_claim
+    end
+  end
+
+  defp reconcile_prepared_follower_post(invocation, token, dependencies) do
+    case get_follower_record(invocation, token, dependencies) do
+      {:match, uri, cid} ->
+        {:ok, %{follower_post_uri: uri, follower_post_cid: cid}}
+
+      :missing ->
+        put_follower_record(invocation, token, dependencies)
+
+      :conflict ->
+        :skip
+
+      :auth ->
+        {:retry, :unauthorized}
+
+      {:retry, reason} ->
+        {:retry, reason}
+
+      :invalid ->
+        :skip
+
+      :stale_claim ->
+        :stale_claim
+    end
+  end
+
+  defp put_follower_record(invocation, token, dependencies) do
+    case Store.renew_publication_claim(invocation, token, dependencies.now.()) do
+      {:ok, current} ->
+        case dependencies.client.put_record(
+               current.reply_repo,
+               @collection,
+               current.follower_post_rkey,
+               current.follower_post_record
+             ) do
+          {:ok, status, _headers, _body} when status in 200..299 ->
+            case get_follower_record(current, token, dependencies) do
+              {:match, uri, cid} ->
+                {:ok, %{follower_post_uri: uri, follower_post_cid: cid}}
+
+              :missing ->
+                {:retry, :reconciliation_pending}
+
+              other ->
+                other
+            end
+
+          {:error, reason} when reason in [:unauthorized, :session_unavailable] ->
+            {:retry, reason}
+
+          {:error, reason} ->
+            follower_put_outcome(reason)
+
+          _invalid ->
+            :skip
+        end
+
+      {:error, :stale_claim} ->
+        :stale_claim
+    end
+  end
+
+  defp follower_put_outcome(reason) do
+    case Client.permanent_status(reason) do
+      status when is_integer(status) -> :skip
+      nil -> {:retry, reason}
+    end
+  end
+
+  defp get_follower_record(invocation, token, dependencies) do
+    case Store.renew_publication_claim(invocation, token, dependencies.now.()) do
+      {:ok, current} ->
+        case dependencies.client.get_record(
+               current.reply_repo,
+               @collection,
+               current.follower_post_rkey
+             ) do
+          {:ok, status, _headers, body} when status in 200..299 ->
+            compare_record(
+              body,
+              current.reply_repo,
+              current.follower_post_rkey,
+              current.follower_post_record
+            )
+
+          {:error, :record_not_found} ->
+            :missing
+
+          {:error, reason} when reason in [:unauthorized, :session_unavailable] ->
+            :auth
+
+          {:error, reason} ->
+            classify_get_error(reason)
+
+          _invalid ->
+            :invalid
+        end
+
+      {:error, :stale_claim} ->
+        :stale_claim
+    end
+  end
+
+  defp ensure_follower_intent(invocation, token, dependencies) do
+    cond do
+      valid_intent?(
+        invocation.reply_repo,
+        invocation.follower_post_rkey,
+        invocation.follower_post_record
+      ) ->
+        {:ok, invocation}
+
+      true ->
+        created_at = dependencies.now.()
+
+        case FollowerPost.build(invocation, created_at) do
+          {:ok, record} ->
+            persist_follower_intent(
+              invocation,
+              token,
+              TID.generate(DateTime.to_unix(created_at, :microsecond)),
+              record,
+              dependencies
+            )
+
+          {:error, _reason} ->
+            :skip
+        end
+    end
+  end
+
+  defp persist_follower_intent(invocation, token, rkey, record, dependencies) do
+    case Store.renew_publication_claim(invocation, token, dependencies.now.()) do
+      {:ok, current} ->
+        {:ok,
+         current
+         |> Invocation.changeset(%{
+           follower_post_rkey: rkey,
+           follower_post_record: record
+         })
+         |> Repo.update!()}
+
+      {:error, :stale_claim} ->
+        :stale_claim
+    end
+  end
+
+  defp published_follower_post?(%Invocation{follower_post_uri: uri, follower_post_cid: cid})
+       when is_binary(uri) and uri != "" and is_binary(cid) and cid != "",
+       do: true
+
+  defp published_follower_post?(_invocation), do: false
+
+  defp follower_attrs(%Invocation{follower_post_uri: uri, follower_post_cid: cid}) do
+    %{follower_post_uri: uri, follower_post_cid: cid}
+  end
 
   defp transition_terminal(invocation, token, stage, attrs, completed_at) do
     case Store.transition_publication(invocation, token, stage, attrs, completed_at) do

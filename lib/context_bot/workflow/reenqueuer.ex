@@ -59,7 +59,8 @@ defmodule ContextBot.Workflow.Reenqueuer do
   defp already_published?(%Invocation{} = invocation) do
     published_uri?(invocation.reply_uri) or
       published_uri?(invocation.reply_part2_uri) or
-      published_uri?(invocation.reply_part3_uri)
+      published_uri?(invocation.reply_part3_uri) or
+      published_uri?(invocation.follower_post_uri)
   end
 
   defp published_uri?(uri) when is_binary(uri) and uri != "", do: true
@@ -146,6 +147,10 @@ defmodule ContextBot.Workflow.Reenqueuer do
       reply_part2_cid: nil,
       reply_part3_uri: nil,
       reply_part3_cid: nil,
+      follower_post_rkey: nil,
+      follower_post_record: nil,
+      follower_post_uri: nil,
+      follower_post_cid: nil,
       publication_claim_token: nil,
       publication_claimed_at: nil,
       research_claim_token: nil,

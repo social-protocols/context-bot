@@ -57,6 +57,10 @@ defmodule ContextBot.Workflow.ReenqueuerTest do
     assert reopened.reply_part2_cid == nil
     assert reopened.reply_part3_uri == nil
     assert reopened.reply_part3_cid == nil
+    assert reopened.follower_post_rkey == nil
+    assert reopened.follower_post_record == nil
+    assert reopened.follower_post_uri == nil
+    assert reopened.follower_post_cid == nil
     assert reopened.publication_claim_token == nil
     assert reopened.publication_claimed_at == nil
     assert reopened.research_claim_token == nil
@@ -205,6 +209,15 @@ defmodule ContextBot.Workflow.ReenqueuerTest do
 
     assert {:error, :already_published} = Reenqueuer.reenqueue(part3.id, now: @now)
     assert research_jobs(part3) == []
+
+    follower = failed_invocation(false, "published-follower")
+
+    follower
+    |> Invocation.transition_changeset(%{follower_post_uri: public_uri("follower")})
+    |> Repo.update!()
+
+    assert {:error, :already_published} = Reenqueuer.reenqueue(follower.id, now: @now)
+    assert research_jobs(follower) == []
   end
 
   test "rejects a complete invocation that already has a published reply" do
