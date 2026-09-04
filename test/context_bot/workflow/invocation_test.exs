@@ -97,6 +97,34 @@ defmodule ContextBot.Workflow.InvocationTest do
     assert persisted.reader_ready_at == ready
   end
 
+  test "persists follower-feed post coordinates on the invocation" do
+    invocation =
+      %Invocation{}
+      |> Invocation.changeset(public_attrs())
+      |> Repo.insert!()
+
+    record = %{
+      "$type" => "app.bsky.feed.post",
+      "text" => "getcontext.bot/r/33",
+      "embed" => %{"$type" => "app.bsky.embed.recordWithMedia"}
+    }
+
+    invocation
+    |> Invocation.transition_changeset(%{
+      follower_post_rkey: "3mfollower1abc",
+      follower_post_record: record,
+      follower_post_uri: "at://did:plc:bot/app.bsky.feed.post/3mfollower1abc",
+      follower_post_cid: "bafy-follower"
+    })
+    |> Repo.update!()
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.follower_post_rkey == "3mfollower1abc"
+    assert persisted.follower_post_record == record
+    assert persisted.follower_post_uri == "at://did:plc:bot/app.bsky.feed.post/3mfollower1abc"
+    assert persisted.follower_post_cid == "bafy-follower"
+  end
+
   test "persists a completed no-reply decision" do
     invocation =
       %Invocation{}

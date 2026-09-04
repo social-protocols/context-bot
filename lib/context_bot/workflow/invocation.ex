@@ -99,6 +99,10 @@ defmodule ContextBot.Workflow.Invocation do
     :reply_part2_cid,
     :reply_part3_uri,
     :reply_part3_cid,
+    :follower_post_rkey,
+    :follower_post_record,
+    :follower_post_uri,
+    :follower_post_cid,
     :failure_category,
     :failure_detail,
     :completed_at,
@@ -184,6 +188,10 @@ defmodule ContextBot.Workflow.Invocation do
     field :reply_part2_cid, :string
     field :reply_part3_uri, :string
     field :reply_part3_cid, :string
+    field :follower_post_rkey, :string
+    field :follower_post_record, :map
+    field :follower_post_uri, :string
+    field :follower_post_cid, :string
     field :failure_category, Ecto.Enum, values: @failure_categories
     field :failure_detail, :map
     field :completed_at, :utc_datetime_usec
@@ -217,6 +225,7 @@ defmodule ContextBot.Workflow.Invocation do
     |> validate_dry_run_inputs()
     |> unique_constraint([:invocation_uri, :notification_cid])
     |> unique_constraint(:reply_rkey)
+    |> unique_constraint(:follower_post_rkey)
     |> validate_format(:reply_repo, @did_regex)
     |> check_constraint(:status, name: :invocations_status_check)
     |> check_constraint(:stage, name: :invocations_stage_check)
@@ -230,6 +239,7 @@ defmodule ContextBot.Workflow.Invocation do
     |> cast(attrs, @transition_fields)
     |> validate_required([:status, :stage])
     |> unique_constraint(:reply_rkey)
+    |> unique_constraint(:follower_post_rkey)
     |> validate_format(:reply_repo, @did_regex)
     |> check_constraint(:status, name: :invocations_status_check)
     |> check_constraint(:stage, name: :invocations_stage_check)

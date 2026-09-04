@@ -103,6 +103,7 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
 
   import ExUnit.CaptureLog
 
+  alias ContextBot.Reply.FollowerPost
   alias ContextBot.Settings
   alias ContextBot.Workers.ReplyWorker
   alias ContextBot.Workers.ReplyWorkerTest.{PDS, Remote}
@@ -702,6 +703,138 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
     assert ReplyWorker.backoff(rate_limited_job("-0")) == 15
   end
 
+  test "after a successful reply, publishes one top-level follower post quoting the root" do
+    follower_rkey = "3mfollowerpost1"
+    follower_cid = "bafy-follower-created"
+    created_at = ~U[2026-07-29 13:00:00.123456Z]
+    invocation = follower_invocation("follower-create")
+
+    {:ok, follower_record} = FollowerPost.build(invocation, created_at)
+
+    invocation =
+      invocation
+      |> Invocation.changeset(%{
+        follower_post_rkey: follower_rkey,
+        follower_post_record: follower_record
+      })
+      |> Repo.update!()
+
+    reply_remote = remote_record(invocation, "bafy-created")
+
+    follower_remote = %{
+      "uri" => "at://#{@bot_did}/#{@collection}/#{follower_rkey}",
+      "cid" => follower_cid,
+      "value" => follower_record
+    }
+
+    remote =
+      configure_remote(
+        get_results: [
+          {:error, :record_not_found},
+          {:ok, 200, %{}, reply_remote},
+          {:error, :record_not_found},
+          {:ok, 200, %{}, follower_remote}
+        ],
+        put_results: [
+          {:ok, 200, %{}, %{"uri" => reply_remote["uri"], "cid" => "untrusted-put-cid"}},
+          {:ok, 200, %{}, %{"uri" => follower_remote["uri"], "cid" => follower_cid}}
+        ]
+      )
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert persisted.reply_uri == reply_remote["uri"]
+    assert persisted.follower_post_rkey == follower_rkey
+    assert persisted.follower_post_uri == follower_remote["uri"]
+    assert persisted.follower_post_cid == follower_cid
+    refute Map.has_key?(persisted.follower_post_record, "reply")
+
+    assert persisted.follower_post_record["embed"]["record"]["record"]["uri"] ==
+             invocation.root_uri
+
+    refute persisted.follower_post_record["embed"]["record"]["record"]["uri"] ==
+             invocation.invocation_uri
+
+    refute persisted.follower_post_record["embed"]["record"]["record"]["uri"] ==
+             persisted.reply_uri
+
+    snapshot = Remote.snapshot(remote)
+
+    assert Enum.member?(
+             snapshot.calls,
+             {:put, @bot_did, @collection, follower_rkey, follower_record}
+           )
+  end
+
+  test "skips the follower post when the invocation has no quoteable parent" do
+    invocation = invocation("follower-skip-root")
+    remote_record = remote_record(invocation, "bafy-created")
+
+    remote =
+      configure_remote(
+        get_results: [{:error, :record_not_found}, {:ok, 200, %{}, remote_record}],
+        put_results: [
+          {:ok, 200, %{}, %{"uri" => remote_record["uri"], "cid" => "untrusted-put-cid"}}
+        ]
+      )
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert persisted.follower_post_uri == nil
+    assert persisted.follower_post_rkey == nil
+
+    snapshot = Remote.snapshot(remote)
+
+    refute Enum.any?(snapshot.calls, fn
+             {:put, _repo, _collection, rkey, _record} -> rkey != @rkey
+             _other -> false
+           end)
+  end
+
+  test "does not put a second follower post when the invocation already stored one" do
+    follower_rkey = "3mfollowerstored"
+    follower_uri = "at://#{@bot_did}/#{@collection}/#{follower_rkey}"
+    created_at = ~U[2026-07-29 13:00:00.123456Z]
+    invocation = follower_invocation("follower-idempotent")
+    {:ok, follower_record} = FollowerPost.build(invocation, created_at)
+
+    invocation =
+      invocation
+      |> Invocation.changeset(%{
+        follower_post_rkey: follower_rkey,
+        follower_post_record: follower_record,
+        follower_post_uri: follower_uri,
+        follower_post_cid: "bafy-follower-existing"
+      })
+      |> Repo.update!()
+
+    reply_remote = remote_record(invocation, "bafy-created")
+
+    remote =
+      configure_remote(
+        get_results: [{:error, :record_not_found}, {:ok, 200, %{}, reply_remote}],
+        put_results: [
+          {:ok, 200, %{}, %{"uri" => reply_remote["uri"], "cid" => "untrusted-put-cid"}}
+        ]
+      )
+
+    assert :ok = perform(invocation)
+    assert :ok = perform(Repo.reload!(invocation))
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert persisted.follower_post_uri == follower_uri
+    assert persisted.follower_post_cid == "bafy-follower-existing"
+
+    snapshot = Remote.snapshot(remote)
+    refute Enum.any?(snapshot.calls, &match?({:put, _, _, ^follower_rkey, _}, &1))
+    assert Enum.count(snapshot.calls, &match?({:put, _, _, _, _}, &1)) == 1
+  end
+
   test "repeated completed jobs never issue another PDS request" do
     invocation = invocation("repeated")
     remote = configure_remote()
@@ -1039,6 +1172,50 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
         stacktrace: []
       }
     }
+  end
+
+  defp follower_invocation(suffix, overrides \\ %{}) do
+    root_uri = "at://did:plc:root/app.bsky.feed.post/root-#{suffix}"
+    reader_url = "https://getcontext.bot/r/99"
+
+    invocation(
+      suffix,
+      :reply_ready,
+      Map.merge(
+        %{
+          root_uri: root_uri,
+          root_cid: "bafy-root-#{suffix}",
+          raw_notification: %{
+            "uri" => "at://did:plc:actor/app.bsky.feed.post/#{suffix}",
+            "cid" => "bafy-#{suffix}",
+            "record" => %{"text" => "@getcontext.bot what is the evidence?"}
+          },
+          reply_validation: %{"document_title" => "What Is The Evidence?"},
+          standard_site_document_uri: "at://#{@bot_did}/site.standard.document/doc-#{suffix}",
+          reply_record: %{
+            "$type" => "app.bsky.feed.post",
+            "text" => "Frozen context for #{suffix}. (full response)",
+            "createdAt" => "2026-07-29T12:59:00.123456Z",
+            "facets" => [
+              %{
+                "index" => %{"byteStart" => 0, "byteEnd" => 14},
+                "features" => [
+                  %{"$type" => "app.bsky.richtext.facet#link", "uri" => reader_url}
+                ]
+              }
+            ],
+            "reply" => %{
+              "parent" => %{
+                "uri" => "at://did:plc:actor/app.bsky.feed.post/#{suffix}",
+                "cid" => "bafy-current-#{suffix}"
+              },
+              "root" => %{"uri" => root_uri, "cid" => "bafy-root-#{suffix}"}
+            }
+          }
+        },
+        overrides
+      )
+    )
   end
 
   defp invocation(suffix, stage \\ :reply_ready, overrides \\ %{}) do
