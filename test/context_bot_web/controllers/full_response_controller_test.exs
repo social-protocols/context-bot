@@ -118,6 +118,19 @@ defmodule ContextBotWeb.FullResponseControllerTest do
     assert body =~ "alert"
   end
 
+  test "GET /r/:id does not let a quoted href break out of the attribute", %{conn: conn} do
+    invocation =
+      insert_published!(
+        full_response: ~S|See [x](https://example.com/" onmouseover="alert(1)) for context.|
+      )
+
+    body = conn |> get(~p"/r/#{invocation.id}") |> html_response(200)
+
+    refute body =~ ~S|onmouseover="alert|
+    refute body =~ ~S|href="https://example.com/" |
+    assert body =~ ~S|href="https://example.com/&quot; onmouseover=&quot;alert(1"|
+  end
+
   defp insert_published!(overrides \\ []) do
     attrs =
       %{

@@ -102,7 +102,7 @@ defmodule ContextBotWeb.MarkdownHTML do
           escape_html(label)
 
         url ->
-          "\u0001LINK\u0001#{Base.encode64(url)}\u0001#{Base.encode64(escape_html(label))}\u0001"
+          "\u0001LINK\u0001#{Base.encode64(escape_html(url))}\u0001#{Base.encode64(escape_html(label))}\u0001"
       end
     end)
   end
@@ -128,6 +128,7 @@ defmodule ContextBotWeb.MarkdownHTML do
             match
           )
 
+        # href was escape_html/1-encoded so quotes cannot break the attribute.
         ~s(<a href="#{Base.decode64!(href)}">#{Base.decode64!(label)}</a>)
       end
     )
