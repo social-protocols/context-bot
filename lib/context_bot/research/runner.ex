@@ -8,7 +8,9 @@ defmodule ContextBot.Research.Runner do
 
   Empty or over-cap structured title/compact, or a structure-phase
   `max_tokens` stop, starts at most one compact-repair call from the stored
-  writeup. Research-phase `max_tokens` stays terminal.
+  writeup. Research-phase `max_tokens` stays terminal. Structure-from-writeup
+  resume does not replay a latest 2xx structure or repair envelope that
+  classified as a hard-fail; it starts a live `:structure` call instead.
   """
 
   import Ecto.Query
@@ -34,6 +36,12 @@ defmodule ContextBot.Research.Runner do
   alias ContextBot.Workflow.{Invocation, Store}
 
   @http_date_regex ~r/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (?<day>\d{2}) (?<month>Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (?<year>\d{4}) (?<hour>\d{2}):(?<minute>\d{2}):(?<second>\d{2}) GMT$/
+  @structure_hard_fail_reasons MapSet.new([
+                                 :max_tokens,
+                                 :invalid_structured_output,
+                                 :empty_compact,
+                                 :overlong_compact
+                               ])
 
   @type result :: %{
           required(:messages) => map(),
@@ -135,19 +143,94 @@ defmodule ContextBot.Research.Runner do
   end
 
   defp resume_recorded_response(invocation, entry, response, config) do
-    if structure_from_writeup_resume?(invocation, response) do
+    if structure_from_writeup_resume?(invocation, entry, response) do
       start_structure_from_writeup(invocation, config)
     else
       process_recorded(invocation, entry, response, config)
     end
   end
 
-  defp structure_from_writeup_resume?(invocation, response) do
+  defp structure_from_writeup_resume?(invocation, entry, response) do
+    structure_from_writeup?(invocation) and
+      skip_recorded_structure_envelope?(invocation, entry, response)
+  end
+
+  defp skip_recorded_structure_envelope?(invocation, entry, response) do
     status = response_value(response, :status)
 
-    structure_from_writeup?(invocation) and
-      not (is_integer(status) and status in 200..299)
+    cond do
+      not (is_integer(status) and status in 200..299) ->
+        true
+
+      entry.kind in [:structure, :repair] and structure_request?(invocation) ->
+        recorded_structure_hard_fail?(invocation, entry, response)
+
+      true ->
+        false
+    end
   end
+
+  defp recorded_structure_hard_fail?(invocation, entry, response) do
+    case decode_recorded_body(response) do
+      {:ok, decoded} ->
+        recorded_structure_fail_closed?(invocation, entry, decoded)
+
+      :error ->
+        false
+    end
+  end
+
+  defp decode_recorded_body(response) do
+    case response_value(response, :raw_body) do
+      body when is_binary(body) and body != "" ->
+        case Jason.decode(body) do
+          {:ok, decoded} when is_map(decoded) -> {:ok, decoded}
+          _invalid -> :error
+        end
+
+      _missing ->
+        :error
+    end
+  end
+
+  defp recorded_structure_fail_closed?(invocation, %BudgetEntry{kind: :repair}, decoded) do
+    if Reply.title_only_response?(decoded) do
+      false
+    else
+      structure_hard_fail_outcome?(select_reply(decoded, invocation))
+    end
+  end
+
+  defp recorded_structure_fail_closed?(invocation, _structure_entry, decoded) do
+    case select_reply(decoded, invocation) do
+      {:ok, _selected} ->
+        false
+
+      {:title_rewrite, _selected} ->
+        false
+
+      {:compact_repair, _selected, reason} ->
+        compact_repair_already_attempted?(invocation) and structure_hard_fail_reason?(reason)
+
+      {:error, :max_tokens} ->
+        compact_repair_already_attempted?(invocation)
+
+      {:error, reason} ->
+        structure_hard_fail_reason?(reason)
+    end
+  end
+
+  defp structure_hard_fail_outcome?({:error, reason}), do: structure_hard_fail_reason?(reason)
+
+  defp structure_hard_fail_outcome?({:compact_repair, _selected, reason}),
+    do: structure_hard_fail_reason?(reason)
+
+  defp structure_hard_fail_outcome?(_outcome), do: false
+
+  defp structure_hard_fail_reason?(reason) when is_atom(reason),
+    do: MapSet.member?(@structure_hard_fail_reasons, reason)
+
+  defp structure_hard_fail_reason?(_reason), do: false
 
   defp structure_from_writeup?(%Invocation{} = invocation) do
     InterruptRecovery.stored_writeup?(invocation) and
