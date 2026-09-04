@@ -10,6 +10,7 @@ defmodule ContextBotWeb.InvocationsController do
   alias ContextBot.Research.BudgetEntry
   alias ContextBot.StandardSite.Document
   alias ContextBot.Workflow.Invocation
+  alias ContextBotWeb.PublicData
 
   defmacrop billed_microdollars_sum(entry) do
     quote do
@@ -64,6 +65,22 @@ defmodule ContextBotWeb.InvocationsController do
     conn
     |> put_resp_content_type("text/html")
     |> send_resp(200, html_content)
+  end
+
+  def index_json(conn, _params) do
+    json(conn, %{invocations: PublicData.list_invocations()})
+  end
+
+  def show(conn, %{"id" => id}) do
+    case PublicData.invocation_document(id) do
+      nil ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "not_found"})
+
+      document ->
+        json(conn, document)
+    end
   end
 
   defp calculate_period_stats(now, days: days_ago) do
@@ -253,7 +270,7 @@ defmodule ContextBotWeb.InvocationsController do
 
     """
           <tr>
-            <td>#{inv.id}</td>
+            <td><a href="/invocations/#{inv.id}.json">#{inv.id}</a></td>
             <td class="status-#{inv.status}">#{inv.status}</td>
             <td>#{inv.stage}</td>
             <td>#{escape_html(inv.actor_handle || "")}</td>

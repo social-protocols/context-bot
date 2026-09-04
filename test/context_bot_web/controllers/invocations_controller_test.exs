@@ -5,6 +5,7 @@ defmodule ContextBotWeb.InvocationsControllerTest do
 
   alias ContextBot.Repo
   alias ContextBot.Research.BudgetEntry
+  alias ContextBot.Research.ResponseEnvelope
   alias ContextBot.Workflow.Invocation
 
   describe "GET /invocations" do
@@ -812,6 +813,219 @@ defmodule ContextBotWeb.InvocationsControllerTest do
       conn = post(conn, "/invocations", %{})
       assert conn.status == 404
     end
+
+    test "links each row ID to the public invocation JSON URL", %{conn: conn} do
+      {:ok, inv} =
+        insert_invocation(%{
+          invocation_uri: "at://did:plc:jsonlink/app.bsky.feed.post/json1",
+          notification_cid: "cid-jsonlink",
+          current_cid: "cid-jsonlink",
+          actor_did: "did:plc:jsonlink",
+          actor_handle: "jsonlink.bsky.social",
+          received_at: DateTime.utc_now(),
+          status: :complete,
+          stage: :complete
+        })
+
+      conn = get(conn, ~p"/invocations")
+      row = row_html(table_html(html_response(conn, 200)), inv.id)
+
+      assert row =~ ~s(href="/invocations/#{inv.id}.json")
+      assert row =~ ">#{inv.id}</a>"
+    end
+  end
+
+  describe "GET /invocations.json" do
+    test "lists invocations as JSON with every schema column", %{conn: conn} do
+      {:ok, inv} =
+        insert_invocation(%{
+          invocation_uri: "at://did:plc:listjson/app.bsky.feed.post/list1",
+          notification_cid: "cid-listjson",
+          current_cid: "cid-listjson",
+          actor_did: "did:plc:listjson",
+          actor_handle: "listjson.bsky.social",
+          received_at: ~U[2026-08-26 10:00:00Z],
+          status: :complete,
+          stage: :complete,
+          research_claim_token: "research-token-list",
+          publication_claim_token: "publication-token-list",
+          selected_reply: "A compact reply",
+          full_response: "The full writeup"
+        })
+
+      inv
+      |> Invocation.anthropic_responses_changeset([
+        %{"raw_body" => "SECRET_LEGACY_ENVELOPE", "status" => 200}
+      ])
+      |> Repo.update!()
+
+      conn = get(conn, "/invocations.json")
+      assert json_content_type?(conn)
+      body = json_response(conn, 200)
+
+      assert %{"invocations" => [row]} = body
+      assert_has_schema_fields(row, Invocation)
+      assert row["id"] == inv.id
+      assert row["status"] == "complete"
+      assert row["actor_handle"] == "listjson.bsky.social"
+      assert row["research_claim_token"] == "research-token-list"
+      assert row["publication_claim_token"] == "publication-token-list"
+      assert row["selected_reply"] == "A compact reply"
+      assert row["full_response"] == "The full writeup"
+
+      assert row["anthropic_responses"] == [
+               %{"raw_body" => "SECRET_LEGACY_ENVELOPE", "status" => 200}
+             ]
+    end
+
+    test "does not accept POST", %{conn: conn} do
+      conn = post(conn, "/invocations.json", %{})
+      assert conn.status == 404
+    end
+  end
+
+  describe "GET /invocations/:id.json" do
+    test "returns the full invocation plus related budget entries and envelopes", %{conn: conn} do
+      now = ~U[2026-08-26 10:05:00.000000Z]
+
+      {:ok, inv} =
+        insert_invocation(%{
+          invocation_uri: "at://did:plc:showjson/app.bsky.feed.post/show1",
+          notification_cid: "cid-showjson",
+          current_cid: "cid-showjson",
+          actor_did: "did:plc:showjson",
+          actor_handle: "showjson.bsky.social",
+          received_at: now,
+          status: :failed,
+          stage: :failed,
+          failure_category: :provider_response,
+          failure_detail: %{"reason" => "code_execution_failed"},
+          research_claim_token: "research-token-show",
+          publication_claim_token: "publication-token-show",
+          selected_reply: "Selected compact",
+          full_response: "Selected full",
+          anthropic_usage: %{"input_tokens" => 11, "output_tokens" => 7},
+          citation_sources: [%{"url" => "https://example.com/source", "title" => "Example"}]
+        })
+
+      inv
+      |> Invocation.anthropic_responses_changeset([
+        %{"raw_body" => "SECRET_LEGACY_ENVELOPE", "status" => 503}
+      ])
+      |> Repo.update!()
+
+      entry =
+        insert_budget_entry!(inv, "show-attempt-1",
+          reserved_microdollars: 400_000,
+          settled_microdollars: 350_000,
+          state: :settled,
+          research_claim_token: "budget-claim-token"
+        )
+
+      envelope = insert_envelope!(inv, entry, "SECRET_BLOB_ENVELOPE")
+
+      conn = get(conn, "/invocations/#{inv.id}.json")
+      assert json_content_type?(conn)
+      body = json_response(conn, 200)
+
+      refute conn.resp_body =~ "<html"
+      assert_has_schema_fields(body, Invocation)
+      assert body["id"] == inv.id
+      assert body["status"] == "failed"
+      assert body["stage"] == "failed"
+      assert body["actor_did"] == "did:plc:showjson"
+      assert body["actor_handle"] == "showjson.bsky.social"
+      assert body["invocation_uri"] == "at://did:plc:showjson/app.bsky.feed.post/show1"
+      assert body["failure_category"] == "provider_response"
+      assert body["failure_detail"] == %{"reason" => "code_execution_failed"}
+      assert body["research_claim_token"] == "research-token-show"
+      assert body["publication_claim_token"] == "publication-token-show"
+      assert body["selected_reply"] == "Selected compact"
+      assert body["full_response"] == "Selected full"
+      assert body["anthropic_usage"] == %{"input_tokens" => 11, "output_tokens" => 7}
+
+      assert body["citation_sources"] == [
+               %{"url" => "https://example.com/source", "title" => "Example"}
+             ]
+
+      assert body["anthropic_responses"] == [
+               %{"raw_body" => "SECRET_LEGACY_ENVELOPE", "status" => 503}
+             ]
+
+      assert [budget] = body["budget_entries"]
+      assert_has_schema_fields(budget, BudgetEntry)
+      assert budget["id"] == entry.id
+      assert budget["attempt_key"] == "show-attempt-1"
+      assert budget["research_claim_token"] == "budget-claim-token"
+      assert budget["reserved_microdollars"] == 400_000
+      assert budget["settled_microdollars"] == 350_000
+
+      assert [stored] = body["anthropic_response_envelopes"]
+      assert_has_schema_fields(stored, ContextBot.Research.ResponseEnvelope)
+      assert stored["id"] == envelope.id
+      assert stored["invocation_id"] == inv.id
+      assert stored["budget_entry_id"] == entry.id
+      assert Base.decode64!(stored["raw_body"]) == "SECRET_BLOB_ENVELOPE"
+      assert stored["metadata"]["status"] == 200
+      assert stored["metadata"]["attempt_key"] == "show-attempt-1"
+    end
+
+    test "returns JSON 404 for an unknown id", %{conn: conn} do
+      conn = get(conn, "/invocations/999999.json")
+
+      assert json_content_type?(conn)
+      assert json_response(conn, 404) == %{"error" => "not_found"}
+      refute conn.resp_body =~ "<html"
+    end
+
+    test "returns JSON 404 for a non-integer id", %{conn: conn} do
+      conn = get(conn, "/invocations/not-an-id.json")
+
+      assert json_content_type?(conn)
+      assert json_response(conn, 404) == %{"error" => "not_found"}
+    end
+
+    test "HTML dashboard stays cheap and omits stored provider payloads", %{conn: conn} do
+      {:ok, inv} =
+        insert_invocation(%{
+          invocation_uri: "at://did:plc:cheap/app.bsky.feed.post/cheap1",
+          notification_cid: "cid-cheap",
+          current_cid: "cid-cheap",
+          actor_did: "did:plc:cheap",
+          actor_handle: "cheap.bsky.social",
+          received_at: DateTime.utc_now(),
+          status: :complete,
+          stage: :complete
+        })
+
+      inv
+      |> Invocation.anthropic_responses_changeset([
+        %{"raw_body" => "SECRET_LEGACY_ENVELOPE", "status" => 200}
+      ])
+      |> Repo.update!()
+
+      entry =
+        insert_budget_entry!(inv, "cheap-attempt-1",
+          reserved_microdollars: 100_000,
+          settled_microdollars: 100_000,
+          state: :settled
+        )
+
+      insert_envelope!(inv, entry, "SECRET_BLOB_ENVELOPE")
+
+      html = conn |> get(~p"/invocations") |> html_response(200)
+      refute html =~ "SECRET_LEGACY_ENVELOPE"
+      refute html =~ "SECRET_BLOB_ENVELOPE"
+
+      json = conn |> get("/invocations/#{inv.id}.json") |> json_response(200)
+
+      assert json["anthropic_responses"] == [
+               %{"raw_body" => "SECRET_LEGACY_ENVELOPE", "status" => 200}
+             ]
+
+      assert [envelope] = json["anthropic_response_envelopes"]
+      assert Base.decode64!(envelope["raw_body"]) == "SECRET_BLOB_ENVELOPE"
+    end
   end
 
   defp insert_invocation(attrs) do
@@ -836,11 +1050,44 @@ defmodule ContextBotWeb.InvocationsControllerTest do
         reserved_microdollars: Keyword.fetch!(opts, :reserved_microdollars),
         settled_microdollars: Keyword.fetch!(opts, :settled_microdollars),
         state: Keyword.fetch!(opts, :state),
-        usage: %{"input_tokens" => 100, "output_tokens" => 50}
+        usage: %{"input_tokens" => 100, "output_tokens" => 50},
+        research_claim_token: Keyword.get(opts, :research_claim_token)
       })
       |> Repo.insert()
 
     entry
+  end
+
+  defp insert_envelope!(invocation, entry, raw_body) do
+    metadata = %{status: 200, attempt_key: entry.attempt_key}
+    metadata_blob = :erlang.term_to_binary(metadata, [:deterministic])
+
+    %ResponseEnvelope{}
+    |> ResponseEnvelope.changeset(%{
+      invocation_id: invocation.id,
+      budget_entry_id: entry.id,
+      attempt_key: entry.attempt_key,
+      kind: :research,
+      status: 200,
+      metadata_blob: metadata_blob,
+      raw_body: raw_body,
+      received_at: ~U[2026-08-26 10:06:00.000000Z],
+      duration_ms: 12,
+      storage_bytes: byte_size(metadata_blob) + byte_size(raw_body)
+    })
+    |> Repo.insert!()
+  end
+
+  defp json_content_type?(conn) do
+    content_type = List.first(get_resp_header(conn, "content-type")) || ""
+    String.starts_with?(content_type, "application/json")
+  end
+
+  defp assert_has_schema_fields(row, module) do
+    Enum.each(module.__schema__(:fields), fn field ->
+      assert Map.has_key?(row, Atom.to_string(field)),
+             "expected #{inspect(module)} JSON to include #{field}"
+    end)
   end
 
   defp table_html(body) do
@@ -853,7 +1100,7 @@ defmodule ContextBotWeb.InvocationsControllerTest do
   defp row_html(table, invocation_id) do
     id = Integer.to_string(invocation_id)
 
-    case Regex.run(~r/<tr>\s*<td>#{id}<\/td>.*?<\/tr>/s, table) do
+    case Regex.run(~r/<tr>\s*<td>(?:<a[^>]*>)?#{id}(?:<\/a>)?<\/td>.*?<\/tr>/s, table) do
       [row] -> row
       _ -> flunk("expected a table row for invocation #{id}")
     end
