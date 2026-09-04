@@ -1314,6 +1314,128 @@ defmodule ContextBot.Research.RunnerTest do
     assert length(responses(invocation)) == 2
   end
 
+  test "a stored writeup plus 2xx repair max_tokens starts a live structure call" do
+    writeup = "Stored writeup from research."
+    citations = [%{"url" => "https://primary.example/report", "cited_text" => "excerpt"}]
+    thread = "ROOT\nClaim needing context.\n\nINVOCATION\nPlease add context."
+    truncated = ~s({"disposition":"reply","title":"Mostly True?","compact_reply":"Mostly true. )
+
+    invocation =
+      invocation("structure-repair-max-tokens-resume", %{
+        anthropic_messages: live_structure_request(writeup, citations, thread),
+        anthropic_attempt_sequence: 2,
+        full_response: writeup,
+        citation_sources: citations,
+        canonical_thread: thread
+      })
+
+    insert_recorded_envelope(
+      invocation,
+      1,
+      :structure,
+      200,
+      Jason.encode!(message_body(truncated, nil, "max_tokens"))
+    )
+
+    insert_recorded_envelope(
+      invocation,
+      2,
+      :repair,
+      200,
+      Jason.encode!(message_body(truncated, nil, "max_tokens"))
+    )
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, fixture("structure_success.json"))}
+    ])
+
+    assert {:ok, result} = Runner.run(Repo.reload!(invocation), options())
+    assert result.full_response == writeup
+    assert result.text == "Useful context from primary sources."
+    assert_received {:anthropic_call, structure, %{kind: :structure}, false}
+    assert Request.structure_request?(structure)
+    refute Request.structure_repair_request?(structure)
+    refute Map.has_key?(structure, "thinking")
+    refute Map.has_key?(structure["output_config"], "effort")
+    assert structure["messages"] |> hd() |> Map.get("content") =~ writeup
+    refute_received {:anthropic_call, _request, %{kind: :research}, _in_transaction}
+    refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
+    assert length(responses(invocation)) == 3
+
+    assert Enum.map(Repo.all(from entry in BudgetEntry, order_by: entry.id), & &1.kind) == [
+             :structure,
+             :repair,
+             :structure
+           ]
+  end
+
+  test "a stored writeup plus successful 2xx structure envelope still replays" do
+    writeup = "Stored writeup from research."
+    citations = [%{"url" => "https://primary.example/report", "cited_text" => "excerpt"}]
+    thread = "ROOT\nClaim needing context.\n\nINVOCATION\nPlease add context."
+
+    invocation =
+      invocation("structure-2xx-success-replay", %{
+        anthropic_messages: live_structure_request(writeup, citations, thread),
+        anthropic_attempt_sequence: 1,
+        full_response: writeup,
+        citation_sources: citations,
+        canonical_thread: thread
+      })
+
+    insert_recorded_envelope(invocation, 1, :structure, 200, fixture("structure_success.json"))
+    Process.put(:runner_client_results, [])
+
+    assert {:ok, result} = Runner.run(Repo.reload!(invocation), options())
+    assert result.full_response == writeup
+    assert result.text == "Useful context from primary sources."
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+    assert length(responses(invocation)) == 1
+    assert Enum.map(Repo.all(BudgetEntry), & &1.kind) == [:structure]
+  end
+
+  test "a stored writeup plus 2xx structure max_tokens still starts one compact-repair" do
+    writeup = "Thorough markdown writeup that must stay on the Standard.site page."
+    citations = [%{"url" => "https://primary.example/report", "cited_text" => "excerpt"}]
+    thread = "ROOT\nClaim needing context.\n\nINVOCATION\nPlease add context."
+    compact = "Mostly true. Public reporting matches the claim."
+    truncated = ~s({"disposition":"reply","title":"Mostly True?","compact_reply":"Mostly true. )
+
+    invocation =
+      invocation("structure-max-tokens-resume-repair", %{
+        anthropic_messages: live_structure_request(writeup, citations, thread),
+        anthropic_attempt_sequence: 1,
+        full_response: writeup,
+        citation_sources: citations,
+        canonical_thread: thread
+      })
+
+    insert_recorded_envelope(
+      invocation,
+      1,
+      :structure,
+      200,
+      Jason.encode!(message_body(truncated, nil, "max_tokens"))
+    )
+
+    Process.put(:runner_client_results, [
+      {:ok,
+       envelope(
+         200,
+         Jason.encode!(message_body(structured_json(compact, title: "Mostly True?")))
+       )}
+    ])
+
+    assert {:ok, result} = Runner.run(Repo.reload!(invocation), options())
+    assert result.text == compact
+    assert result.full_response == writeup
+    assert result.validation["repair_used"] == true
+    assert_received {:anthropic_call, repair, %{kind: :repair}, false}
+    assert Request.structure_repair_request?(repair)
+    refute_received {:anthropic_call, _request, %{kind: :structure}, _in_transaction}
+    refute_received {:anthropic_call, _request, %{kind: :research}, _in_transaction}
+  end
+
   test "operator force_new_attempt starts a new POST instead of replaying a failed code_execution envelope" do
     invocation = invocation("code-exec-new-attempt")
     fixture = decoded_fixture("tool_success.json")
@@ -2079,6 +2201,51 @@ defmodule ContextBot.Research.RunnerTest do
       research_claim_token: @claim_token
     })
     |> Repo.insert!()
+  end
+
+  defp live_structure_request(writeup, citations, thread) do
+    Request.structure(%{
+      model_id: settings().anthropic_structure_model_id,
+      max_tokens: settings().anthropic_structure_max_tokens,
+      writeup: writeup,
+      citations: citations,
+      canonical_thread: thread
+    })
+  end
+
+  defp insert_recorded_envelope(invocation, sequence, kind, status, raw_body) do
+    reserved =
+      if kind == :structure,
+        do: settings().anthropic_structure_reservation_microdollars,
+        else: settings().anthropic_repair_reservation_microdollars
+
+    entry =
+      %BudgetEntry{}
+      |> BudgetEntry.changeset(%{
+        attempt_key: "invocation-#{invocation.id}-attempt-#{sequence}-#{kind}",
+        invocation_id: invocation.id,
+        budget_date: DateTime.to_date(@now),
+        kind: kind,
+        reserved_microdollars: reserved,
+        state: :sent,
+        sent_at: @now,
+        response_recorded_at: @now,
+        research_claim_token: @claim_token
+      })
+      |> Repo.insert!()
+
+    prepared =
+      ResponseEnvelope.prepare(envelope(status, raw_body), %{
+        attempt_key: entry.attempt_key,
+        kind: kind
+      })
+
+    %ResponseEnvelope{}
+    |> ResponseEnvelope.changeset(Map.put(prepared, :invocation_id, invocation.id))
+    |> ResponseEnvelope.changeset(%{budget_entry_id: entry.id})
+    |> Repo.insert!()
+
+    entry
   end
 
   defp decoded_fixture(name), do: name |> fixture() |> Jason.decode!()

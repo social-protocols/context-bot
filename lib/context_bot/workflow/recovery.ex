@@ -11,7 +11,9 @@ defmodule ContextBot.Workflow.Recovery do
   under automatic recovery. An operator `recover_invocation/2` with
   `operator?: true` retries structure-from-writeup for `max_tokens`,
   `invalid_structured_output`, `empty_compact`, `overlong_compact`, and
-  `invalid_repair` without clearing research.
+  `invalid_repair` without clearing research. Runner then starts a live
+  `:structure` POST instead of replaying the prior 2xx structure/repair
+  hard-fail envelope.
   """
 
   import Ecto.Query
