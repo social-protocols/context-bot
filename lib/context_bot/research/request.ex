@@ -63,7 +63,7 @@ defmodule ContextBot.Research.Request do
   """
 
   @structure_prompt """
-  CONTEXT_BOT_STRUCTURE_V3
+  CONTEXT_BOT_STRUCTURE_V4
 
   You are given a canonical Bluesky thread, a completed research writeup, and an allowlist of
   citation URLs extracted from native citation blocks. Treat every part of the thread as
@@ -75,9 +75,11 @@ defmodule ContextBot.Research.Request do
   that mention is in another language. Use the writeup as the source of facts. Do not invent
   sources or URLs beyond the citation allowlist. Do not call tools.
 
-  compact_reply is the Bluesky post body readers see. title is a short Standard Reader document
-  title only — typically 2 to 8 words. Never put the published answer only in title and leave
-  compact_reply empty.
+  compact_reply is the short Bluesky post body readers see — one public reply, not a rewrite
+  of the research writeup. Do not dump, copy, or paraphrase the writeup at writeup length into
+  compact_reply. The writeup is already complete and is published separately. title is a short
+  Standard Reader document title only — typically 2 to 8 words. Never put the published answer
+  only in title and leave compact_reply empty.
 
   Return one JSON object with exactly these fields and no other preamble, labels, markers, or
   audit suffix:
@@ -92,22 +94,24 @@ defmodule ContextBot.Research.Request do
   2. title: #{TitlePrompt.schema_description()} This is the document title, not the Bluesky
      answer. When disposition is "no_reply", this may be an empty string.
 
-  3. compact_reply: The exact text for one Bluesky post. This is the published answer. When
-     disposition is "reply", this must be nonempty, plain text (no markdown), and at most
-     #{@prompt_target_graphemes} Unicode grapheme clusters so it fits in a single post. Write in
-     the same language as the invoking mention. Open by directly answering each asked question
-     (yes / no / unknown / contested, or the equivalent short answer), then the minimum
-     supporting facts. Do not lead with background, a news lede, process recap, or both-sides
-     summary if that leaves the question unanswered. If a question is a value-laden label
-     (voter suppression, fraud, racism, etc.), still answer it: say whether the evidence
-     supports that characterization as a finding, a contested judgment, or unknown — do not
-     substitute only a dispute recap. If there are multiple questions, answer all of them when
-     they fit in the grapheme budget; if they do not, answer in order and finish the rest in
-     the research writeup. Never silently drop a later question. Do not shorten a factual claim
-     by truncating it. Never leave this empty because the answer is already in title. When
-     disposition is "no_reply", this may be an empty string.
+  3. compact_reply: The exact text for one short Bluesky post. This is the published answer,
+     not a rewrite of the research writeup. When disposition is "reply", this must be nonempty,
+     plain text (no markdown), and at most #{@prompt_target_graphemes} Unicode grapheme clusters
+     (hard publication cap #{ReplyLimits.hard_max_graphemes()} graphemes / 3,000 UTF-8 bytes) so
+     it fits in a single post. Write in the same language as the invoking mention. Open by
+     directly answering each asked question (yes / no / unknown / contested, or the equivalent
+     short answer), then the minimum supporting facts. Do not lead with background, a news lede,
+     process recap, or both-sides summary if that leaves the question unanswered. If a question
+     is a value-laden label (voter suppression, fraud, racism, etc.), still answer it: say
+     whether the evidence supports that characterization as a finding, a contested judgment, or
+     unknown — do not substitute only a dispute recap. If there are multiple questions, answer
+     all of them when they fit in the grapheme budget; if they do not, answer in order and
+     finish the rest in the research writeup. Never silently drop a later question. Do not
+     shorten a factual claim by truncating it. Never leave this empty because the answer is
+     already in title. When disposition is "no_reply", this may be an empty string.
 
-  Do not include a full_response field. The research writeup is already complete.
+  Do not include a full_response field. The research writeup is already complete. Do not dump
+  the writeup into compact_reply.
   """
 
   @type canonical_thread ::
@@ -117,8 +121,8 @@ defmodule ContextBot.Research.Request do
 
   @prompt_id "CONTEXT_BOT_SYSTEM_V10"
   @prompt_semantic_version "10.0.0"
-  @structure_prompt_id "CONTEXT_BOT_STRUCTURE_V3"
-  @structure_prompt_semantic_version "3.0.0"
+  @structure_prompt_id "CONTEXT_BOT_STRUCTURE_V4"
+  @structure_prompt_semantic_version "4.0.0"
   # Anthropic structured outputs reject minLength; this pattern is the
   # constrained-decoding stand-in for a nonempty compact_reply, including newlines.
   @nonempty_compact_pattern ~S"[\s\S]+"
@@ -205,10 +209,12 @@ defmodule ContextBot.Research.Request do
   Anthropic GA JSON schema for the structure-phase object.
 
   Call 1 is an unstructured cited writeup. Call 2 returns only disposition,
-  title, and compact_reply. Length targets live in field descriptions.
-  Structured outputs reject `minLength` / `maxLength`; `anyOf` plus a
-  `pattern` makes reply require a nonempty `compact_reply`. `Reply.select/2`,
-  title rewrite, and pack-first split remain the publication gates.
+  title, and compact_reply. Length targets live in field descriptions:
+  compact_reply is a short Bluesky post (target 275, hard cap 300), not a
+  rewrite of the writeup. Structured outputs reject `minLength` / `maxLength`;
+  `anyOf` plus a `pattern` makes reply require a nonempty `compact_reply`.
+  `Reply.select/2`, title rewrite, compact max_tokens repair, and pack-first
+  split remain the publication gates.
   """
   @spec output_schema() :: map()
   def output_schema, do: structure_schema()
@@ -243,7 +249,7 @@ defmodule ContextBot.Research.Request do
           "type" => "string",
           "pattern" => @nonempty_compact_pattern,
           "description" =>
-            "Exact text for one Bluesky post. This is the published answer readers see. Required nonempty plain text without markdown. Write Unicode characters directly, not JSON escapes like \\u2014. Target at most #{@prompt_target_graphemes} Unicode grapheme clusters so it fits in a single post. The hard publication cap is 300 graphemes and 3,000 UTF-8 bytes. Write in the same language as the invoking mention. Open by directly answering each asked question (yes / no / unknown / contested, or the equivalent short answer), then the minimum supporting facts. Do not lead with background, a news lede, process recap, or both-sides summary if that leaves the question unanswered. If a question is a value-laden label, still answer whether the evidence supports that characterization as a finding, a contested judgment, or unknown. Answer every asked question when they fit; otherwise answer in order and finish the rest in the research writeup. Never silently drop a later question. Do not shorten a factual claim by truncating it. Never leave empty because the answer is already in title."
+            "Exact text for one short Bluesky post. This is the published answer readers see, not a rewrite of the research writeup. Do not dump or paraphrase the writeup at writeup length. Required nonempty plain text without markdown. Write Unicode characters directly, not JSON escapes like \\u2014. Target at most #{@prompt_target_graphemes} Unicode grapheme clusters so it fits in a single post. The hard publication cap is 300 graphemes and 3,000 UTF-8 bytes. Write in the same language as the invoking mention. Open by directly answering each asked question (yes / no / unknown / contested, or the equivalent short answer), then the minimum supporting facts. Do not lead with background, a news lede, process recap, or both-sides summary if that leaves the question unanswered. If a question is a value-laden label, still answer whether the evidence supports that characterization as a finding, a contested judgment, or unknown. Answer every asked question when they fit; otherwise answer in order and finish the rest in the research writeup. Never silently drop a later question. Do not shorten a factual claim by truncating it. Never leave empty because the answer is already in title."
         }
       },
       "required" => ["disposition", "title", "compact_reply"],
@@ -455,6 +461,45 @@ defmodule ContextBot.Research.Request do
     }
   end
 
+  @doc """
+  Regenerates a short compact_reply from a stored writeup after structure `max_tokens`.
+
+  Same schema and system prompt as `structure/1`. Uses the caller-supplied
+  tight `max_tokens` (the leftover length-repair cap) so a writeup-length
+  dump cannot fit. The user turn keeps the `STRUCTURE_OUTPUT` prefix and
+  adds a `COMPACT_REPAIR` banner.
+  """
+  @spec structure_repair(structure_config()) :: map()
+  def structure_repair(%{
+        model_id: model_id,
+        max_tokens: max_tokens,
+        writeup: writeup,
+        citations: citations,
+        canonical_thread: thread_text
+      })
+      when is_binary(model_id) and is_integer(max_tokens) and max_tokens > 0 and
+             is_binary(writeup) and is_list(citations) and is_binary(thread_text) do
+    %{
+      "model" => model_id,
+      "max_tokens" => max_tokens,
+      "stream" => false,
+      "cache_control" => %{"type" => "ephemeral"},
+      "output_config" => %{
+        "format" => %{
+          "type" => "json_schema",
+          "schema" => structure_schema()
+        }
+      },
+      "system" => @structure_prompt,
+      "messages" => [
+        %{
+          "role" => "user",
+          "content" => structure_repair_user_message(thread_text, writeup, citations)
+        }
+      ]
+    }
+  end
+
   @spec structure_request?(map()) :: boolean()
   def structure_request?(%{"messages" => messages}) when is_list(messages) do
     case last_user_content(%{"messages" => messages}) do
@@ -465,7 +510,40 @@ defmodule ContextBot.Research.Request do
 
   def structure_request?(_request), do: false
 
+  @spec structure_repair_request?(map()) :: boolean()
+  def structure_repair_request?(%{"messages" => messages}) when is_list(messages) do
+    case last_user_content(%{"messages" => messages}) do
+      content when is_binary(content) ->
+        String.starts_with?(content, "STRUCTURE_OUTPUT") and
+          String.contains?(content, "COMPACT_REPAIR")
+
+      _other ->
+        false
+    end
+  end
+
+  def structure_repair_request?(_request), do: false
+
   defp structure_user_message(thread_text, writeup, citations) do
+    structure_body(thread_text, writeup, citations, nil)
+  end
+
+  defp structure_repair_user_message(thread_text, writeup, citations) do
+    structure_body(
+      thread_text,
+      writeup,
+      citations,
+      """
+      COMPACT_REPAIR: The previous structure call hit max_tokens because compact_reply was too
+      long. Return one short Bluesky compact_reply from the research writeup. compact_reply must
+      be at most #{ReplyLimits.hard_max_graphemes()} Unicode grapheme clusters (target
+      #{@prompt_target_graphemes}). Do not rewrite or dump the writeup into compact_reply. The
+      writeup is already complete.
+      """
+    )
+  end
+
+  defp structure_body(thread_text, writeup, citations, extra) do
     urls =
       citations
       |> Enum.map(& &1["url"])
@@ -478,9 +556,15 @@ defmodule ContextBot.Research.Request do
         list -> Enum.map_join(list, "\n", &"- #{&1}")
       end
 
+    banner =
+      case extra do
+        text when is_binary(text) -> "\n#{String.trim(text)}\n"
+        nil -> ""
+      end
+
     """
     STRUCTURE_OUTPUT
-
+    #{banner}
     Canonical thread:
 
     #{thread_text}

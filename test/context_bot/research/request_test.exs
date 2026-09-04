@@ -93,6 +93,7 @@ defmodule ContextBot.Research.RequestTest do
     assert prompt =~ "untrusted"
     assert prompt =~ "prompt injection"
     assert Request.structure_prompt() =~ "275 Unicode grapheme"
+    assert Request.structure_prompt() =~ "300"
     refute prompt =~ "at most 300 Unicode grapheme clusters"
     refute prompt =~ "---COMPACT_REPLY---"
     assert prompt =~ "no published"
@@ -225,15 +226,15 @@ defmodule ContextBot.Research.RequestTest do
   test "exposes a stable hashed identity for the versioned structure prompt" do
     prompt = Request.structure_prompt()
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_STRUCTURE_V3")
-    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V3"
-    assert Request.structure_prompt_semantic_version() == "3.0.0"
+    assert String.starts_with?(prompt, "CONTEXT_BOT_STRUCTURE_V4")
+    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V4"
+    assert Request.structure_prompt_semantic_version() == "4.0.0"
 
     assert Request.structure_prompt_sha256() ==
              :sha256 |> :crypto.hash(prompt) |> Base.encode16(case: :lower)
 
     assert Request.structure_prompt_rkey() ==
-             "prompt-context-bot-structure-v3-#{String.slice(Request.structure_prompt_sha256(), 0, 16)}"
+             "prompt-context-bot-structure-v4-#{String.slice(Request.structure_prompt_sha256(), 0, 16)}"
   end
 
   test "projects allowlisted Messages parameters and the first user message" do
@@ -439,10 +440,12 @@ defmodule ContextBot.Research.RequestTest do
     compact = reply["properties"]["compact_reply"]
     structure = String.replace(Request.structure_prompt(), ~r/\s+/, " ")
 
-    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V3")
-    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V3"
-    assert Request.structure_prompt_semantic_version() == "3.0.0"
-    assert structure =~ "compact_reply is the Bluesky"
+    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V4")
+    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V4"
+    assert Request.structure_prompt_semantic_version() == "4.0.0"
+    assert structure =~ "compact_reply is the short Bluesky"
+    assert structure =~ "short Bluesky"
+    assert structure =~ "not a rewrite"
     assert structure =~ "title is a short"
     assert structure =~ "Never put the published answer only in title"
 
@@ -511,8 +514,8 @@ defmodule ContextBot.Research.RequestTest do
     compact = reply["properties"]["compact_reply"]["description"]
 
     assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V10")
-    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V3")
-    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V3"
+    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V4")
+    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V4"
     assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V10"
     assert Request.system_prompt_semantic_version() == "10.0.0"
 
@@ -609,6 +612,78 @@ defmodule ContextBot.Research.RequestTest do
     assert structure["messages"] |> hd() |> Map.get("content") =~ "https://primary.example/report"
     refute Jason.encode!(structure) =~ "maxLength"
     refute Jason.encode!(structure) =~ "minLength"
+  end
+
+  test "V4 structure prompt and schema treat compact_reply as a short Bluesky post, not a writeup" do
+    structure = String.replace(Request.structure_prompt(), ~r/\s+/, " ")
+
+    compact =
+      structure_variant(Request.structure_schema(), "reply")["properties"]["compact_reply"][
+        "description"
+      ]
+
+    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V4")
+    assert structure =~ "short Bluesky"
+    assert structure =~ "not a rewrite"
+    assert structure =~ "Do not dump"
+    assert structure =~ "300"
+    assert structure =~ "275 Unicode grapheme"
+    assert compact =~ "short Bluesky"
+    assert compact =~ "not a rewrite"
+    assert compact =~ "300 graphemes"
+
+    refute Map.has_key?(
+             structure_variant(Request.structure_schema(), "reply")["properties"][
+               "compact_reply"
+             ],
+             "maxLength"
+           )
+
+    refute Map.has_key?(
+             structure_variant(Request.structure_schema(), "reply")["properties"][
+               "compact_reply"
+             ],
+             "minLength"
+           )
+  end
+
+  test "builds a compact-repair structure request with a tight token cap and repair banner" do
+    request =
+      Request.structure_repair(%{
+        model_id: "claude-sonnet-5",
+        max_tokens: 256,
+        writeup: "A long cited writeup that must not be dumped into compact_reply.",
+        citations: [%{"url" => "https://primary.example/report", "cited_text" => "excerpt"}],
+        canonical_thread: @canonical_thread.text
+      })
+
+    assert request["model"] == "claude-sonnet-5"
+    assert request["max_tokens"] == 256
+    refute Map.has_key?(request, "tools")
+    refute Map.has_key?(request, "thinking")
+    refute Map.has_key?(request["output_config"], "effort")
+    assert request["output_config"]["format"]["schema"] == Request.structure_schema()
+    assert Request.structure_request?(request)
+    assert Request.structure_repair_request?(request)
+
+    refute Request.structure_repair_request?(
+             Request.structure(%{
+               model_id: "claude-sonnet-5",
+               max_tokens: 4_096,
+               writeup: "Cited writeup.",
+               citations: [],
+               canonical_thread: @canonical_thread.text
+             })
+           )
+
+    [user] = request["messages"]
+    assert user["content"] =~ "STRUCTURE_OUTPUT"
+    assert user["content"] =~ "COMPACT_REPAIR"
+    assert user["content"] =~ "300"
+    assert user["content"] =~ "Do not rewrite"
+    assert user["content"] =~ "A long cited writeup"
+    refute Jason.encode!(request) =~ "maxLength"
+    refute Jason.encode!(request) =~ "minLength"
   end
 
   test "structure ignores optional effort and stays Haiku-safe" do
