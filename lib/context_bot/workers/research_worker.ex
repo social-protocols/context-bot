@@ -14,7 +14,7 @@ defmodule ContextBot.Workers.ResearchWorker do
   alias ContextBot.{LimitNotice, Operations, Repo}
   alias ContextBot.Reply.Intent
   alias ContextBot.Research.{Request, Runner}
-  alias ContextBot.StandardSite.{Document, PageCopy, PromptDocument, Publication}
+  alias ContextBot.StandardSite.{Document, Mirror, PageCopy, PromptDocument, Publication}
   alias ContextBot.Workflow.{Invocation, Store}
 
   @reply_worker "ContextBot.Workers.ReplyWorker"
@@ -175,8 +175,7 @@ defmodule ContextBot.Workers.ResearchWorker do
          bot_did,
          document
        ) do
-    reader_url = document_reader_url(document)
-    intent_opts = if reader_url, do: [reader_url: reader_url], else: []
+    intent_opts = bluesky_full_response_opts(invocation, document)
 
     intent_result =
       if Map.has_key?(result, :text_part2) do
@@ -463,6 +462,16 @@ defmodule ContextBot.Workers.ResearchWorker do
        do: reader_url
 
   defp document_reader_url(_document), do: nil
+
+  defp bluesky_full_response_opts(invocation, document) do
+    case {document_reader_url(document), Mirror.public_url(invocation)} do
+      {reader_url, mirror_url} when is_binary(reader_url) and is_binary(mirror_url) ->
+        [reader_url: mirror_url]
+
+      _missing ->
+        []
+    end
+  end
 
   defp defer_budget(invocation, defer_until, kind, token, dependencies) do
     case Store.transition_research(

@@ -184,6 +184,31 @@ defmodule ContextBot.Workflow.Store do
     end
   end
 
+  @doc """
+  Caches a Standard Reader index probe on the invocation row.
+
+  A confirmed `:indexed` result latches `reader_ready_at`. `:not_indexed` and
+  `:ambiguous` only refresh `reader_checked_at` so the public mirror can skip
+  the AppView until the negative TTL expires. This never clears a ready latch.
+  """
+  @spec record_reader_index(Invocation.t(), :indexed | :not_indexed | :ambiguous, DateTime.t()) ::
+          {:ok, Invocation.t()} | {:error, Changeset.t()}
+  def record_reader_index(%Invocation{id: id}, result, %DateTime{} = now)
+      when result in [:indexed, :not_indexed, :ambiguous] do
+    current = Repo.get!(Invocation, id)
+
+    attrs =
+      if result == :indexed do
+        %{reader_checked_at: now, reader_ready_at: current.reader_ready_at || now}
+      else
+        %{reader_checked_at: now}
+      end
+
+    current
+    |> Invocation.reader_index_changeset(attrs)
+    |> Repo.update()
+  end
+
   @doc "Records the published limit-notice coordinates after a successful putRecord."
   @spec record_limit_notice(Invocation.t(), String.t(), String.t(), DateTime.t()) ::
           {:ok, Invocation.t()} | {:error, :stale_stage | Changeset.t()}

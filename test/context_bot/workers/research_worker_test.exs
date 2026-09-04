@@ -330,8 +330,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert persisted.reply_record["text"] == "Frozen concise context. (full response)"
     assert [facet] = persisted.reply_record["facets"]
 
-    assert hd(facet["features"])["uri"] ==
-             "https://standard-reader.app/a/#{@bot_did}/#{doc_rkey}"
+    assert hd(facet["features"])["uri"] == "https://getcontext.bot/r/#{persisted.id}"
   end
 
   test "Reader Summary keeps the untruncated compact_source when Bluesky text is shortened" do
@@ -503,7 +502,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert persisted.standard_site_document_uri =~ "site.standard.document"
     assert persisted.reply_record["text"] == part1 <> ellipsis
     assert persisted.reply_part2_record["text"] == ellipsis <> part2
-    assert persisted.reply_part2_record["readerUrl"] =~ "https://standard-reader.app/a/"
+    assert persisted.reply_part2_record["readerUrl"] == "https://getcontext.bot/r/#{persisted.id}"
   end
 
   test "completes a dry run with all research evidence and no publication intent" do

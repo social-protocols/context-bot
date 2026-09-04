@@ -55,6 +55,9 @@ config :context_bot, ContextBot.ATProto.PublicClient,
   timeout: 1_000,
   req_options: [plug: {Req.Test, ContextBot.ATProto.PublicClient}]
 
+config :context_bot, ContextBot.StandardSite.ReaderIndex,
+  req_options: [plug: {Req.Test, ContextBot.StandardSite.ReaderIndex}]
+
 config :context_bot, :anthropic_api_key, "anthropic-test-key-never-expose"
 
 config :context_bot, ContextBot.Research.AnthropicClient,

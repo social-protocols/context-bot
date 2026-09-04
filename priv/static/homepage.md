@@ -22,7 +22,7 @@ Anyone can mention it; it joins a thread when invited. Ask a concrete question, 
 
 {{bluesky_embed}}
 
-[Full writeup](https://standard-reader.app/a/did:plc:anbhmngzs3exwbq47xxzogk4/3mudapth2od2p) · [Bluesky reply](https://bsky.app/profile/getcontext.bot/post/3mudelkjrym23)
+[Full writeup](/r/3mudapth2od2p) · [Bluesky reply](https://bsky.app/profile/getcontext.bot/post/3mudelkjrym23)
 
 ## Why it works
 

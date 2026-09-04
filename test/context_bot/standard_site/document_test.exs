@@ -327,6 +327,22 @@ defmodule ContextBot.StandardSite.DocumentTest do
                "Responding to [@alice.test](https://bsky.app/profile/alice.test/post/3k123)'s reply to [@bob.test](https://bsky.app/profile/bob.test/post/3parentrkey12)'s post."
     end
 
+    test "includes a Claude continue link that names a getcontext.bot mirror URL" do
+      content =
+        Map.put(
+          @content,
+          :document_reader_url,
+          "https://getcontext.bot/r/31"
+        )
+
+      markdown = Document.format_markdown(content)
+      href = continue_href(markdown)
+      query = continue_query(href)
+
+      assert query =~ "https://getcontext.bot/r/31"
+      refute query =~ "https://standard-reader.app/a/#{@repo}/3kfullresp"
+    end
+
     test "places the compact summary first, then responding-to, writeup, continue link, and metadata" do
       markdown = Document.format_markdown(@content)
       summary_at = match_at(markdown, "## Summary")
@@ -368,6 +384,9 @@ defmodule ContextBot.StandardSite.DocumentTest do
   describe "reader_url_from_uri/1" do
     test "converts a stored document AT URI into the Standard Reader URL" do
       uri = "at://did:plc:test123abc/site.standard.document/3k123abc"
+
+      assert Document.parse_document_uri(uri) ==
+               {:ok, %{did: "did:plc:test123abc", rkey: "3k123abc"}}
 
       assert Document.reader_url_from_uri(uri) ==
                "https://standard-reader.app/a/did:plc:test123abc/3k123abc"

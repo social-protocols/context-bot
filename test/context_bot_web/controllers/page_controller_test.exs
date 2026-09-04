@@ -64,8 +64,7 @@ defmodule ContextBotWeb.PageControllerTest do
 
     assert response =~ ~s(src="https://embed.bsky.app/static/embed.js")
 
-    assert response =~
-             ~s(href="https://standard-reader.app/a/did:plc:anbhmngzs3exwbq47xxzogk4/3mudapth2od2p")
+    assert response =~ ~s(href="/r/3mudapth2od2p")
 
     assert response =~
              ~s(href="https://bsky.app/profile/getcontext.bot/post/3mudelkjrym23")
