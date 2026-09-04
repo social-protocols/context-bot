@@ -40,6 +40,54 @@ defmodule ContextBot.Research.DraftsTest do
     assert Drafts.parse("CONTEXT_BOT_DRAFT\nmissing labels\nCONTEXT_BOT_DRAFT_END") == :error
   end
 
+  test "strip/1 removes the draft block and leaves the essay" do
+    essay = "Thorough cited writeup.\n\n## Sources\n\n[Report](https://primary.example/report)"
+    writeup = Drafts.format("What Is That Bird?", "A Himalayan Monal.") <> "\n\n" <> essay
+
+    stripped = Drafts.strip(writeup)
+
+    assert stripped == essay
+    refute stripped =~ Drafts.open_marker()
+    refute stripped =~ Drafts.close_marker()
+    refute stripped =~ "title: What Is That Bird?"
+    refute stripped =~ "compact_reply: A Himalayan Monal."
+    assert Drafts.strip(stripped) == essay
+  end
+
+  test "strip/1 is a no-op when the draft block is absent" do
+    essay = "Thorough writeup with no draft block.\n\nKeep every paragraph."
+
+    assert Drafts.strip(essay) == essay
+    assert Drafts.strip("") == ""
+  end
+
+  test "strip/1 matches parse marker variants and surrounding whitespace" do
+    essay = "Essay after a CRLF draft."
+
+    crlf =
+      "CONTEXT_BOT_DRAFT\r\ntitle: Bird\r\ncompact_reply: A Himalayan Monal.\r\nCONTEXT_BOT_DRAFT_END\r\n\r\n" <>
+        essay
+
+    assert Drafts.parse(crlf) == {:ok, %{title: "Bird", compact_reply: "A Himalayan Monal."}}
+    assert Drafts.strip(crlf) == essay
+
+    padded = "\n\n" <> Drafts.format("Bird", "A Himalayan Monal.") <> "\n\n\n" <> essay
+    assert Drafts.parse(padded) == {:ok, %{title: "Bird", compact_reply: "A Himalayan Monal."}}
+    assert Drafts.strip(padded) == essay
+
+    preface = "Keep this preface.\n\n" <> Drafts.format("Bird", "Short.") <> "\n\n" <> essay
+    assert Drafts.strip(preface) == "Keep this preface.\n\n" <> essay
+    refute Drafts.strip(preface) =~ Drafts.open_marker()
+  end
+
+  test "strip/1 removes a complete marker block even when labels are malformed" do
+    writeup = "CONTEXT_BOT_DRAFT\nmissing labels\nCONTEXT_BOT_DRAFT_END\n\nEssay remains."
+
+    assert Drafts.parse(writeup) == :error
+    assert Drafts.strip(writeup) == "Essay remains."
+    refute Drafts.strip(writeup) =~ Drafts.open_marker()
+  end
+
   test "truncate_to_cap/1 keeps in-cap text and slices over-cap text to the hard caps" do
     in_cap = String.duplicate("a", 300)
     assert Drafts.truncate_to_cap(in_cap) == in_cap

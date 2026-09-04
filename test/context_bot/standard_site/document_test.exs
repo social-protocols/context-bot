@@ -1,6 +1,7 @@
 defmodule ContextBot.StandardSite.DocumentTest do
   use ContextBot.DataCase, async: true
 
+  alias ContextBot.Research.Drafts
   alias ContextBot.StandardSite.Document
 
   @repo "did:plc:test123abc"
@@ -228,6 +229,29 @@ defmodule ContextBot.StandardSite.DocumentTest do
       assert record["description"] == asked
     end
 
+    test "published document body has no CONTEXT_BOT_DRAFT markers" do
+      essay = "This is the full research response with detailed analysis."
+      writeup = Drafts.format("What Is That Bird?", "A Himalayan Monal.") <> "\n\n" <> essay
+
+      assert {:ok, _result} =
+               Document.create(
+                 TrackingDocClient,
+                 @repo,
+                 @publication_uri,
+                 %{@content | full_response: writeup},
+                 @created_at
+               )
+
+      assert_received {:document_put, record}
+      markdown = record["content"]["text"]["markdown"]
+
+      assert record["textContent"] == essay
+      refute record["textContent"] =~ Drafts.open_marker()
+      assert markdown =~ essay
+      refute markdown =~ Drafts.open_marker()
+      refute markdown =~ Drafts.close_marker()
+    end
+
     test "publishes a Claude continue link that names this document's reader URL" do
       assert {:ok, result} =
                Document.create(
@@ -366,6 +390,20 @@ defmodule ContextBot.StandardSite.DocumentTest do
       refute href =~ @content.full_response
       refute href =~ "attachment="
       refute href =~ "claude://"
+    end
+
+    test "strips CONTEXT_BOT_DRAFT from the published writeup and leaves the essay" do
+      essay = "This is the full research response with detailed analysis."
+      writeup = Drafts.format("What Is That Bird?", "A Himalayan Monal.") <> "\n\n" <> essay
+      content = %{@content | full_response: writeup}
+      markdown = Document.format_markdown(content)
+
+      assert markdown =~ essay
+      refute markdown =~ Drafts.open_marker()
+      refute markdown =~ Drafts.close_marker()
+      refute markdown =~ "title: What Is That Bird?"
+      refute markdown =~ "compact_reply: A Himalayan Monal."
+      assert Document.format_markdown(%{@content | full_response: essay}) =~ essay
     end
 
     test "uses the root sentence when the invoking post is not a reply" do

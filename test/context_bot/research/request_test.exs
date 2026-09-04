@@ -719,6 +719,9 @@ defmodule ContextBot.Research.RequestTest do
     assert banner =~ "hard_cap: 300 graphemes / #{ReplyLimits.max_bytes()} bytes"
     assert banner =~ "over_cap: compact is 40 graphemes over; shorten by about 40 graphemes"
     assert content =~ writeup
+    assert content =~ Drafts.open_marker()
+    assert content =~ Drafts.close_marker()
+    assert content =~ "Research writeup:\n\n#{writeup}"
   end
 
   test "structure user turn omits draft counts when parse misses" do

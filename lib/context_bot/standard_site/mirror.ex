@@ -22,7 +22,7 @@ defmodule ContextBot.StandardSite.Mirror do
   import Ecto.Query
 
   alias ContextBot.Repo
-  alias ContextBot.Research.Request
+  alias ContextBot.Research.{Drafts, Request}
   alias ContextBot.StandardSite.{Document, PageCopy, PromptDocument, ReaderIndex}
   alias ContextBot.Workflow.{Invocation, Store}
 
@@ -221,7 +221,7 @@ defmodule ContextBot.StandardSite.Mirror do
 
     # Research Analysis
 
-    #{content.full_response}
+    #{Drafts.strip(content.full_response)}
     """
   end
 
