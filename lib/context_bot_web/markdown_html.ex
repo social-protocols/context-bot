@@ -27,32 +27,36 @@ defmodule ContextBotWeb.MarkdownHTML do
   end
 
   defp render_lines([line | rest], acc) do
-    cond do
-      String.starts_with?(line, "#### ") ->
-        render_lines(rest, [heading("h4", String.slice(line, 5..-1//1)) | acc])
+    case line_kind(line) do
+      {:heading, tag, text} ->
+        render_lines(rest, [heading(tag, text) | acc])
 
-      String.starts_with?(line, "### ") ->
-        render_lines(rest, [heading("h3", String.slice(line, 4..-1//1)) | acc])
-
-      String.starts_with?(line, "## ") ->
-        render_lines(rest, [heading("h2", String.slice(line, 3..-1//1)) | acc])
-
-      String.starts_with?(line, "# ") ->
-        render_lines(rest, [heading("h1", String.slice(line, 2..-1//1)) | acc])
-
-      String.starts_with?(line, "---") and String.trim(line, "-") == "" ->
+      :hr ->
         render_lines(rest, ["<hr>" | acc])
 
-      String.starts_with?(line, "- ") ->
+      :list_item ->
         {items, remaining} = take_list([line | rest], [])
         render_lines(remaining, [list_html(items) | acc])
 
-      String.trim(line) == "" ->
+      :blank ->
         render_lines(rest, acc)
 
-      true ->
-        html = "<p>#{inline(line)}</p>"
-        render_lines(rest, [html | acc])
+      :paragraph ->
+        render_lines(rest, ["<p>#{inline(line)}</p>" | acc])
+    end
+  end
+
+  defp line_kind("#### " <> text), do: {:heading, "h4", text}
+  defp line_kind("### " <> text), do: {:heading, "h3", text}
+  defp line_kind("## " <> text), do: {:heading, "h2", text}
+  defp line_kind("# " <> text), do: {:heading, "h1", text}
+  defp line_kind("- " <> _text), do: :list_item
+
+  defp line_kind(line) do
+    cond do
+      String.starts_with?(line, "---") and String.trim(line, "-") == "" -> :hr
+      String.trim(line) == "" -> :blank
+      true -> :paragraph
     end
   end
 
