@@ -299,35 +299,40 @@ defmodule ContextBot.Workflow.Recovery do
         :unchanged
 
       operator_structure_retry?(invocation, config) ->
-        work = research_work(invocation)
-        job = latest_job(invocation, work.worker)
-        reopen_for_structure(invocation, job, work, config)
+        reopen_research_work(invocation, config, &reopen_for_structure/4)
 
       InterruptRecovery.deterministic_parse_hard_fail?(invocation) ->
         mark_checked(invocation, config.now)
         :unchanged
 
+      true ->
+        recover_failed_research(invocation, config)
+    end
+  end
+
+  defp recover_failed_research(invocation, config) do
+    cond do
       InterruptRecovery.replayable_recorded_response?(invocation) and
           InterruptRecovery.can_restart_research?(invocation) ->
-        work = research_work(invocation)
-        job = latest_job(invocation, work.worker)
-        reopen_for_replay(invocation, job, work, config)
+        reopen_research_work(invocation, config, &reopen_for_replay/4)
 
       InterruptRecovery.interrupted_after_send?(invocation) and
           InterruptRecovery.can_restart_research?(invocation) ->
-        work = research_work(invocation)
-        job = latest_job(invocation, work.worker)
-        recover_research(invocation, job, work, config)
+        reopen_research_work(invocation, config, &recover_research/4)
 
       structure_from_writeup?(invocation) ->
-        work = research_work(invocation)
-        job = latest_job(invocation, work.worker)
-        reopen_for_structure(invocation, job, work, config)
+        reopen_research_work(invocation, config, &reopen_for_structure/4)
 
       true ->
         mark_checked(invocation, config.now)
         :unchanged
     end
+  end
+
+  defp reopen_research_work(invocation, config, fun) do
+    work = research_work(invocation)
+    job = latest_job(invocation, work.worker)
+    fun.(invocation, job, work, config)
   end
 
   defp recover_research(invocation, job, work, config) do
