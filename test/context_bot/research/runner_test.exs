@@ -27,6 +27,7 @@ defmodule ContextBot.Research.RunnerTest do
     BudgetEntry,
     Citations,
     Drafts,
+    Reply,
     ReplyLimits,
     Request,
     ResponseEnvelope,
@@ -1833,7 +1834,7 @@ defmodule ContextBot.Research.RunnerTest do
     part1 = String.duplicate("a", 200)
     part2 = String.duplicate("b", 177)
     overlong = part1 <> "\n\n" <> part2
-    {:ok, split1, split2} = ContextBot.Research.Reply.split_text(overlong)
+    {:ok, split1, split2} = Reply.split_text(overlong)
 
     Process.put(:runner_client_results, [
       {:ok, envelope(200, Jason.encode!(message_body(writeup)))},
@@ -1928,7 +1929,7 @@ defmodule ContextBot.Research.RunnerTest do
     part1 = String.duplicate("a", 200)
     part2 = String.duplicate("b", 177)
     draft_compact = part1 <> "\n\n" <> part2
-    {:ok, split1, split2} = ContextBot.Research.Reply.split_text(draft_compact)
+    {:ok, split1, split2} = Reply.split_text(draft_compact)
     writeup = Drafts.format("Mostly True?", draft_compact) <> "\n\nThorough markdown writeup."
     truncated = ~s({"disposition":"reply","title":"Mostly True?","compact_reply":"Mostly true. )
 

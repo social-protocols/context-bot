@@ -171,16 +171,19 @@ defmodule ContextBot.Research.Drafts do
     else
       text
       |> String.graphemes()
-      |> Enum.reduce_while({"", 0}, fn grapheme, {acc, size} ->
-        next = size + ReplyLimits.bytes(grapheme)
+      |> take_bytes_acc(max, "", 0)
+    end
+  end
 
-        if next <= max do
-          {:cont, {acc <> grapheme, next}}
-        else
-          {:halt, {acc, size}}
-        end
-      end)
-      |> elem(0)
+  defp take_bytes_acc([], _max, acc, _size), do: acc
+
+  defp take_bytes_acc([grapheme | rest], max, acc, size) do
+    next = size + ReplyLimits.bytes(grapheme)
+
+    if next <= max do
+      take_bytes_acc(rest, max, acc <> grapheme, next)
+    else
+      acc
     end
   end
 

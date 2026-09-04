@@ -199,19 +199,21 @@ defmodule ContextBot.Research.Reply do
         {:ok, text, nil}
 
       true ->
-        case two_post_pack(text) do
-          {:ok, part1, part2} ->
-            {:ok, part1, part2}
+        pack_or_shorten(text)
+    end
+  end
 
-          :error ->
-            case Drafts.truncate_to_cap(text) do
-              truncated when is_binary(truncated) and truncated != "" ->
-                {:ok, truncated, nil}
+  defp pack_or_shorten(text) do
+    case two_post_pack(text) do
+      {:ok, part1, part2} -> {:ok, part1, part2}
+      :error -> shorten_to_cap(text)
+    end
+  end
 
-              _empty ->
-                :error
-            end
-        end
+  defp shorten_to_cap(text) do
+    case Drafts.truncate_to_cap(text) do
+      truncated when is_binary(truncated) and truncated != "" -> {:ok, truncated, nil}
+      _empty -> :error
     end
   end
 
