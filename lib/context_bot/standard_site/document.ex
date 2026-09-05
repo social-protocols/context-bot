@@ -60,13 +60,20 @@ defmodule ContextBot.StandardSite.Document do
         }
 
   @type result ::
-          {:ok, %{uri: String.t(), rkey: String.t(), reader_url: String.t()}}
+          {:ok,
+           %{
+             uri: String.t(),
+             rkey: String.t(),
+             reader_url: String.t(),
+             cid: String.t() | nil
+           }}
           | {:error, atom()}
 
   @doc """
   Creates a Standard.site document record for the full research response.
 
-  Returns the document URI, rkey, and reader URL on success.
+  Returns the document URI, rkey, reader URL, and recorded CID on success.
+  A missing putRecord/getRecord CID is returned as nil and is never invented.
   """
   @spec create(Client.t(), String.t(), String.t(), document_content(), DateTime.t()) :: result()
   def create(
@@ -90,9 +97,11 @@ defmodule ContextBot.StandardSite.Document do
         )
 
       case client.put_record(repo, @collection, rkey, record) do
-        {:ok, _status, _headers, _body} ->
+        {:ok, _status, _headers, body} ->
           uri = "at://#{repo}/#{@collection}/#{rkey}"
-          {:ok, %{uri: uri, rkey: rkey, reader_url: document_url}}
+          cid = Client.recorded_cid(body) || fetch_recorded_cid(client, repo, rkey)
+
+          {:ok, %{uri: uri, rkey: rkey, reader_url: document_url, cid: cid}}
 
         {:error, reason} ->
           {:error, reason}
@@ -129,6 +138,13 @@ defmodule ContextBot.StandardSite.Document do
   end
 
   defp reader_url(did, rkey), do: "#{@reader_base_url}/#{did}/#{rkey}"
+
+  defp fetch_recorded_cid(client, repo, rkey) do
+    case client.get_record(repo, @collection, rkey) do
+      {:ok, _status, _headers, body} -> Client.recorded_cid(body)
+      _missing -> nil
+    end
+  end
 
   @doc """
   Updates an existing document to add the bskyPostRef after the Bluesky reply is published.

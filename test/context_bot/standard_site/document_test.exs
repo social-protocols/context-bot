@@ -55,9 +55,13 @@ defmodule ContextBot.StandardSite.DocumentTest do
   defmodule TrackingDocClient do
     @moduledoc false
 
-    def put_record(_repo, _collection, _rkey, record) do
+    def get_record(_repo, _collection, _rkey) do
+      {:error, :record_not_found}
+    end
+
+    def put_record(repo, collection, rkey, record) do
       send(self(), {:document_put, record})
-      {:ok, 200, %{}, %{}}
+      {:ok, 200, %{}, FakeSiteCids.put_body(repo, collection, rkey)}
     end
   end
 
@@ -75,7 +79,21 @@ defmodule ContextBot.StandardSite.DocumentTest do
       assert is_binary(result.uri)
       assert is_binary(result.rkey)
       assert is_binary(result.reader_url)
+      assert result.cid == FakeSiteCids.document()
       assert String.starts_with?(result.reader_url, "https://standard-reader.app/a/")
+    end
+
+    test "fetches the document cid after putRecord when the put body omits it" do
+      assert {:ok, result} =
+               Document.create(
+                 FakeDocClientPutWithoutCid,
+                 @repo,
+                 @publication_uri,
+                 @content,
+                 @created_at
+               )
+
+      assert result.cid == FakeSiteCids.document()
     end
 
     test "returns error when put_record fails" do

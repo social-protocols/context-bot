@@ -108,7 +108,51 @@ defmodule ContextBot.Reply.FollowerPost do
       "title" => card_title(copy),
       "description" => card_description(copy)
     }
+    |> maybe_put_associated_refs(invocation)
   end
+
+  defp maybe_put_associated_refs(external, invocation) do
+    case associated_refs(invocation) do
+      [] -> external
+      refs -> Map.put(external, "associatedRefs", refs)
+    end
+  end
+
+  defp associated_refs(%Invocation{} = invocation) do
+    []
+    |> maybe_add_ref(invocation.standard_site_document_uri, invocation.standard_site_document_cid)
+    |> maybe_add_ref(
+      invocation.standard_site_publication_uri,
+      invocation.standard_site_publication_cid
+    )
+  end
+
+  defp maybe_add_ref(refs, uri, cid) do
+    cond do
+      not present?(uri) or not present?(cid) ->
+        refs
+
+      not record_uri?(uri) ->
+        refs
+
+      true ->
+        refs ++ [%{"uri" => uri, "cid" => cid}]
+    end
+  end
+
+  defp record_uri?("at://" <> rest) do
+    case String.split(rest, "/", parts: 3) do
+      [did, collection, rkey]
+      when did != "" and collection != "" and rkey != "" ->
+        String.starts_with?(did, "did:") and
+          collection in ["site.standard.document", "site.standard.publication"]
+
+      _other ->
+        false
+    end
+  end
+
+  defp record_uri?(_uri), do: false
 
   defp page_copy(%Invocation{} = invocation) do
     subject = PageCopy.subject(invocation, %{})

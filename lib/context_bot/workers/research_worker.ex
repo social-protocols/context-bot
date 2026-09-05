@@ -234,6 +234,9 @@ defmodule ContextBot.Workers.ResearchWorker do
       no_reply: false,
       standard_site_document_uri: document_uri(document),
       standard_site_document_rkey: document_rkey(document),
+      standard_site_document_cid: document_cid(document),
+      standard_site_publication_uri: publication_uri(document),
+      standard_site_publication_cid: publication_cid(document),
       reply_repo: intent.reply_repo,
       reply_rkey: intent.reply_rkey,
       reply_record: intent.reply_record,
@@ -289,6 +292,9 @@ defmodule ContextBot.Workers.ResearchWorker do
       no_reply: true,
       standard_site_document_uri: nil,
       standard_site_document_rkey: nil,
+      standard_site_document_cid: nil,
+      standard_site_publication_uri: nil,
+      standard_site_publication_cid: nil,
       reply_repo: nil,
       reply_rkey: nil,
       reply_record: nil,
@@ -351,13 +357,13 @@ defmodule ContextBot.Workers.ResearchWorker do
 
     if is_binary(full_response) and byte_size(full_response) > 0 do
       case Publication.ensure_exists(client, repo, created_at) do
-        {:ok, publication_uri} ->
+        {:ok, publication} ->
           create_document_with_publication(
             invocation,
             result,
             client,
             repo,
-            publication_uri,
+            publication,
             created_at,
             dependencies.settings
           )
@@ -375,17 +381,23 @@ defmodule ContextBot.Workers.ResearchWorker do
          result,
          client,
          repo,
-         publication_uri,
+         publication,
          created_at,
          settings
        ) do
+    publication_uri = publication.uri
+
     with {:ok, prompt_doc} <-
            PromptDocument.ensure_exists(client, repo, publication_uri, created_at),
          {:ok, structure_doc} <-
            PromptDocument.ensure_structure_exists(client, repo, publication_uri, created_at),
          content = full_response_content(invocation, result, prompt_doc, structure_doc, settings),
          {:ok, doc_result} <- Document.create(client, repo, publication_uri, content, created_at) do
-      {:ok, doc_result}
+      {:ok,
+       Map.merge(doc_result, %{
+         publication_uri: publication_uri,
+         publication_cid: Map.get(publication, :cid)
+       })}
     else
       {:error, reason} ->
         fail_standard_site(invocation, "site.standard.document", reason)
@@ -464,6 +476,15 @@ defmodule ContextBot.Workers.ResearchWorker do
 
   defp document_rkey({:ok, %{rkey: rkey}}), do: rkey
   defp document_rkey(_document), do: nil
+
+  defp document_cid({:ok, %{cid: cid}}) when is_binary(cid) and cid != "", do: cid
+  defp document_cid(_document), do: nil
+
+  defp publication_uri({:ok, %{publication_uri: uri}}) when is_binary(uri) and uri != "", do: uri
+  defp publication_uri(_document), do: nil
+
+  defp publication_cid({:ok, %{publication_cid: cid}}) when is_binary(cid) and cid != "", do: cid
+  defp publication_cid(_document), do: nil
 
   defp document_reader_url({:ok, %{reader_url: reader_url}})
        when is_binary(reader_url) and reader_url != "",

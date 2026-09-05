@@ -82,6 +82,9 @@ defmodule ContextBot.Workflow.Invocation do
     :no_reply,
     :standard_site_document_uri,
     :standard_site_document_rkey,
+    :standard_site_document_cid,
+    :standard_site_publication_uri,
+    :standard_site_publication_cid,
     :reader_ready_at,
     :reader_checked_at,
     :reply_repo,
@@ -171,6 +174,9 @@ defmodule ContextBot.Workflow.Invocation do
     field :no_reply, :boolean, default: false
     field :standard_site_document_uri, :string
     field :standard_site_document_rkey, :string
+    field :standard_site_document_cid, :string
+    field :standard_site_publication_uri, :string
+    field :standard_site_publication_cid, :string
     field :reader_ready_at, :utc_datetime_usec
     field :reader_checked_at, :utc_datetime_usec
     field :reply_repo, :string

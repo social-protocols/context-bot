@@ -108,6 +108,9 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert persisted.selected_reply == "Useful context from primary sources."
     assert persisted.full_response =~ "Useful context from primary sources."
     assert persisted.standard_site_document_uri =~ "site.standard.document"
+    assert persisted.standard_site_document_cid == FakeSiteCids.document()
+    assert persisted.standard_site_publication_uri =~ "site.standard.publication"
+    assert persisted.standard_site_publication_cid == FakeSiteCids.publication()
     assert [research_response, structure_response] = Store.anthropic_responses(persisted)
     assert research_response.raw_body == body
     assert structure_response.kind == :structure
@@ -326,6 +329,12 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
              "at://#{@bot_did}/site.standard.document/#{doc_rkey}"
 
     assert persisted.standard_site_document_rkey == doc_rkey
+    assert persisted.standard_site_document_cid == FakeSiteCids.document()
+
+    assert persisted.standard_site_publication_uri ==
+             "at://#{@bot_did}/site.standard.publication/context-bot"
+
+    assert persisted.standard_site_publication_cid == FakeSiteCids.publication()
     assert persisted.failure_detail == nil
     assert persisted.reply_record["text"] == "Frozen concise context. (full response)"
     assert [facet] = persisted.reply_record["facets"]
@@ -538,6 +547,8 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     ellipsis = ReplyLimits.continuation_ellipsis()
     assert persisted.full_response == "Thorough markdown writeup."
     assert persisted.standard_site_document_uri =~ "site.standard.document"
+    assert persisted.standard_site_document_cid == FakeSiteCids.document()
+    assert persisted.standard_site_publication_cid == FakeSiteCids.publication()
     assert persisted.reply_record["text"] == part1 <> ellipsis
     assert persisted.reply_part2_record["text"] == ellipsis <> part2
     assert persisted.reply_part2_record["readerUrl"] == "https://getcontext.bot/r/#{persisted.id}"
@@ -934,6 +945,9 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert persisted.reply_record == nil
     assert persisted.standard_site_document_uri == nil
     assert persisted.standard_site_document_rkey == nil
+    assert persisted.standard_site_document_cid == nil
+    assert persisted.standard_site_publication_uri == nil
+    assert persisted.standard_site_publication_cid == nil
     assert persisted.failure_category == nil
     assert persisted.failure_detail == nil
     refute_received {:standard_site_get, _, _}

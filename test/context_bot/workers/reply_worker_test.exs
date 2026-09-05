@@ -760,6 +760,17 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
     refute persisted.follower_post_record["embed"]["record"]["record"]["uri"] ==
              persisted.reply_uri
 
+    assert persisted.follower_post_record["embed"]["media"]["external"]["associatedRefs"] == [
+             %{
+               "uri" => invocation.standard_site_document_uri,
+               "cid" => FakeSiteCids.document()
+             },
+             %{
+               "uri" => invocation.standard_site_publication_uri,
+               "cid" => FakeSiteCids.publication()
+             }
+           ]
+
     snapshot = Remote.snapshot(remote)
 
     assert Enum.member?(
@@ -1192,6 +1203,9 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
           },
           reply_validation: %{"document_title" => "What Is The Evidence?"},
           standard_site_document_uri: "at://#{@bot_did}/site.standard.document/doc-#{suffix}",
+          standard_site_document_cid: FakeSiteCids.document(),
+          standard_site_publication_uri: "at://#{@bot_did}/site.standard.publication/context-bot",
+          standard_site_publication_cid: FakeSiteCids.publication(),
           reply_record: %{
             "$type" => "app.bsky.feed.post",
             "text" => "Frozen context for #{suffix}. (full response)",

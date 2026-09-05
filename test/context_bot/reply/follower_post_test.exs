@@ -10,6 +10,10 @@ defmodule ContextBot.Reply.FollowerPostTest do
   @invocation_uri "at://did:plc:asker/app.bsky.feed.post/3muqinvok3abc"
   @reply_uri "at://did:plc:anbhmngzs3exwbq47xxzogk4/app.bsky.feed.post/3muqreply1abc"
   @reader_url "https://standard-reader.app/a/did:plc:anbhmngzs3exwbq47xxzogk4/3mupz2v6j6h3u"
+  @document_uri "at://did:plc:anbhmngzs3exwbq47xxzogk4/site.standard.document/3mupz2v6j6h3u"
+  @document_cid "bafyreiav7tayirff3dyoducbjo2xrakjwuwux7keypjaikzr5oyn3euzc4"
+  @publication_uri "at://did:plc:anbhmngzs3exwbq47xxzogk4/site.standard.publication/context-bot"
+  @publication_cid "bafyreigpgh2c7uvtnjdwnjua4f6gu4dsr4g4pjh2qhmmactp72yunpdz7e"
   @mirror_url_id 33
   @asked "@getcontext.bot Is there evidence the FDA cuts are causing Americans to get sicker?"
   @title "FDA cuts and rising illness: what's verified"
@@ -44,9 +48,70 @@ defmodule ContextBot.Reply.FollowerPostTest do
              "external" => %{
                "uri" => @reader_url,
                "title" => @title <> " · Context Bot",
-               "description" => @asked
+               "description" => @asked,
+               "associatedRefs" => [
+                 %{"uri" => @document_uri, "cid" => @document_cid},
+                 %{"uri" => @publication_uri, "cid" => @publication_cid}
+               ]
              }
            }
+  end
+
+  test "omits associatedRefs when document and publication StrongRefs are unknown" do
+    invocation =
+      invocation(%{
+        standard_site_document_uri: @document_uri,
+        standard_site_document_cid: nil,
+        standard_site_publication_uri: nil,
+        standard_site_publication_cid: nil
+      })
+
+    assert {:ok, record} = FollowerPost.build(invocation, @created_at)
+    external = record["embed"]["media"]["external"]
+
+    assert external["uri"] == @reader_url
+    assert external["title"] == @title <> " · Context Bot"
+    assert external["description"] == @asked
+    refute Map.has_key?(external, "associatedRefs")
+  end
+
+  test "includes only the document StrongRef when the publication cid is unknown" do
+    invocation =
+      invocation(%{
+        standard_site_publication_uri: @publication_uri,
+        standard_site_publication_cid: nil
+      })
+
+    assert {:ok, record} = FollowerPost.build(invocation, @created_at)
+
+    assert record["embed"]["media"]["external"]["associatedRefs"] == [
+             %{"uri" => @document_uri, "cid" => @document_cid}
+           ]
+  end
+
+  test "omits a ref that is not a site.standard document or publication AT URI" do
+    invocation =
+      invocation(%{
+        standard_site_document_uri: "https://standard-reader.app/a/did:plc:bot/3mupz2v6j6h3u",
+        standard_site_publication_uri:
+          "at://did:plc:anbhmngzs3exwbq47xxzogk4/app.bsky.feed.post/3mup"
+      })
+
+    assert {:ok, record} = FollowerPost.build(invocation, @created_at)
+    refute Map.has_key?(record["embed"]["media"]["external"], "associatedRefs")
+  end
+
+  test "omits a ref whose uri or cid is missing rather than sending an empty array" do
+    invocation =
+      invocation(%{
+        standard_site_document_uri: nil,
+        standard_site_document_cid: @document_cid,
+        standard_site_publication_uri: @publication_uri,
+        standard_site_publication_cid: nil
+      })
+
+    assert {:ok, record} = FollowerPost.build(invocation, @created_at)
+    refute Map.has_key?(record["embed"]["media"]["external"], "associatedRefs")
   end
 
   test "does not quote the invoking mention or the bot reply" do
@@ -125,8 +190,10 @@ defmodule ContextBot.Reply.FollowerPostTest do
           reply_validation: %{"document_title" => @title},
           raw_notification: %{"record" => %{"text" => @asked}},
           reply_record: linked_reply(@reader_url),
-          standard_site_document_uri:
-            "at://did:plc:anbhmngzs3exwbq47xxzogk4/site.standard.document/3mupz2v6j6h3u"
+          standard_site_document_uri: @document_uri,
+          standard_site_document_cid: @document_cid,
+          standard_site_publication_uri: @publication_uri,
+          standard_site_publication_cid: @publication_cid
         },
         overrides
       )
