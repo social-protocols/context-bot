@@ -18,7 +18,11 @@ config :context_bot, Oban,
   repo: ContextBot.Repo,
   queues: [eligibility: 1, thread: 1, research: 1, reply: 1, maintenance: 1],
   plugins: [
-    {Oban.Plugins.Cron, crontab: [{"* * * * *", ContextBot.Workers.DeferredWorker}]}
+    {Oban.Plugins.Cron,
+     crontab: [
+       {"* * * * *", ContextBot.Workers.DeferredWorker},
+       {"* * * * *", ContextBot.Workers.FollowerPostWorker}
+     ]}
   ]
 
 # Configure the endpoint

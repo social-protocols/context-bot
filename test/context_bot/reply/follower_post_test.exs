@@ -130,7 +130,7 @@ defmodule ContextBot.Reply.FollowerPostTest do
     refute quoted == @reply_uri
   end
 
-  test "uses a short getcontext.bot mirror URL when that is the published link" do
+  test "cards the Standard Reader URL even when the thread reply linked the getcontext.bot mirror" do
     mirror = "https://getcontext.bot/r/#{@mirror_url_id}"
 
     invocation =
@@ -142,9 +142,10 @@ defmodule ContextBot.Reply.FollowerPostTest do
       })
 
     assert {:ok, record} = FollowerPost.build(invocation, @created_at)
-    assert record["text"] == "getcontext.bot/r/#{@mirror_url_id}"
-    assert hd(hd(record["facets"])["features"])["uri"] == mirror
-    assert record["embed"]["media"]["external"]["uri"] == mirror
+    assert record["text"] == "standard-reader.app/a/did:plc:an..."
+    assert hd(hd(record["facets"])["features"])["uri"] == @reader_url
+    assert record["embed"]["media"]["external"]["uri"] == @reader_url
+    refute record["embed"]["media"]["external"]["uri"] == mirror
   end
 
   test "skips when the thread has no quoteable parent root" do
