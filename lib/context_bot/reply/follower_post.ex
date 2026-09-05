@@ -3,12 +3,13 @@ defmodule ContextBot.Reply.FollowerPost do
   Builds one top-level follower-feed post after a successful thread reply.
 
   Followers do not see reply-only answers. This post quotes the canonical thread
-  root (the claim the invoking question is about) and cards the published
-  full-response URL. It never quotes the invoking mention or the bot's own reply.
+  root (the claim the invoking question is about) and cards the Standard Reader
+  URL so Bluesky can scrape the Reader OG once Tap has indexed the document. It
+  never quotes the invoking mention or the bot's own reply.
   """
 
   alias ContextBot.ATProto.StrongRef
-  alias ContextBot.StandardSite.{Document, Mirror, PageCopy}
+  alias ContextBot.StandardSite.{Document, PageCopy}
   alias ContextBot.Workflow.Invocation
 
   @post_type "app.bsky.feed.post"
@@ -67,11 +68,11 @@ defmodule ContextBot.Reply.FollowerPost do
   @spec reader_url(Invocation.t()) :: {:ok, String.t()} | {:error, :invalid_reader_url}
   def reader_url(%Invocation{} = invocation) do
     cond do
-      https_url?(facet_or_stored_url(invocation)) ->
-        {:ok, facet_or_stored_url(invocation)}
+      https_url?(standard_reader_url(invocation)) ->
+        {:ok, standard_reader_url(invocation)}
 
-      https_url?(published_page_url(invocation)) ->
-        {:ok, published_page_url(invocation)}
+      standard_reader_url?(facet_or_stored_url(invocation)) ->
+        {:ok, facet_or_stored_url(invocation)}
 
       true ->
         {:error, :invalid_reader_url}
@@ -193,12 +194,12 @@ defmodule ContextBot.Reply.FollowerPost do
       stored_reader_url(invocation.reply_part3_record)
   end
 
-  defp published_page_url(%Invocation{standard_site_document_uri: uri} = invocation)
-       when is_binary(uri) and uri != "" do
-    Mirror.public_url(invocation) || Document.reader_url_from_uri(uri)
+  defp standard_reader_url(%Invocation{standard_site_document_uri: uri}) do
+    Document.reader_url_from_uri(uri)
   end
 
-  defp published_page_url(_invocation), do: nil
+  defp standard_reader_url?("https://standard-reader.app/" <> rest) when rest != "", do: true
+  defp standard_reader_url?(_url), do: false
 
   defp facet_link_uri(%{"facets" => facets}) when is_list(facets) do
     Enum.find_value(facets, &facet_feature_uri/1)

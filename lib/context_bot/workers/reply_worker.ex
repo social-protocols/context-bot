@@ -18,7 +18,8 @@ defmodule ContextBot.Workers.ReplyWorker do
   alias ContextBot.ATProto.{Client, ReqClient, TID}
   alias ContextBot.{Operations, Repo}
   alias ContextBot.Reply.FollowerPost
-  alias ContextBot.StandardSite.Document
+  alias ContextBot.StandardSite.{Document, ReaderIndex, ReaderReady}
+  alias ContextBot.Workers.FollowerPostWorker
   alias ContextBot.Workflow.{Invocation, Store}
 
   @collection "app.bsky.feed.post"
@@ -794,6 +795,10 @@ defmodule ContextBot.Workers.ReplyWorker do
       :skip ->
         transition_terminal(invocation, token, :complete, reply_attrs, completed_at)
 
+      :awaiting_reader ->
+        transition_terminal(invocation, token, :complete, reply_attrs, completed_at)
+        enqueue_follower_post(invocation, dependencies)
+
       :stale_claim ->
         :ok
 
@@ -844,8 +849,22 @@ defmodule ContextBot.Workers.ReplyWorker do
         :skip
 
       true ->
-        reconcile_follower_post(current, token, dependencies)
+        case ReaderReady.ensure(current,
+               check: dependencies.reader_check,
+               now: dependencies.now.()
+             ) do
+          {:ready, ready} ->
+            reconcile_follower_post(ready, token, dependencies)
+
+          {:wait, _reason, _updated} ->
+            :awaiting_reader
+        end
     end
+  end
+
+  defp enqueue_follower_post(invocation, dependencies) do
+    _ = dependencies.enqueue_follower.(invocation)
+    :ok
   end
 
   defp reconcile_follower_post(invocation, token, dependencies) do
@@ -1081,8 +1100,10 @@ defmodule ContextBot.Workers.ReplyWorker do
     %{
       claim_lease_ms: Keyword.get(config, :claim_lease_ms, @default_claim_lease_ms),
       client: Keyword.get(config, :client, ReqClient),
+      enqueue_follower: Keyword.get(config, :enqueue_follower, &FollowerPostWorker.enqueue/1),
       final_attempt?: final_attempt?(job),
-      now: Keyword.get(config, :now, &DateTime.utc_now/0)
+      now: Keyword.get(config, :now, &DateTime.utc_now/0),
+      reader_check: Keyword.get(config, :reader_check, &ReaderIndex.check/1)
     }
   end
 

@@ -24,6 +24,7 @@ defmodule ContextBot.Operations do
     :structure,
     :retry,
     :publication,
+    :follower_post,
     :maintenance
   ]
   @media_dispositions [:supported, :video_unsupported, :image_limit_exceeded]

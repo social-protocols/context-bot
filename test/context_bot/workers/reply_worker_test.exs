@@ -842,6 +842,216 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
     refute log =~ persisted.reply_uri
   end
 
+  test "does not put the follower post when Standard Reader has not indexed the write-up" do
+    test_pid = self()
+    invocation = follower_invocation("follower-wait-index")
+
+    remote =
+      configure_remote(
+        get_results: [
+          {:error, :record_not_found},
+          {:ok, 200, %{}, remote_record(invocation, "bafy-created")}
+        ],
+        put_results: [
+          {:ok, 200, %{},
+           %{
+             "uri" => remote_record(invocation, "bafy-created")["uri"],
+             "cid" => "untrusted-put-cid"
+           }}
+        ]
+      )
+
+    configure_worker(
+      reader_check: fn uri ->
+        send(test_pid, {:reader_check, uri})
+        :not_indexed
+      end,
+      enqueue_follower: fn enqueued -> send(test_pid, {:enqueued_follower, enqueued.id}) end
+    )
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert persisted.reply_uri == remote_record(invocation, "bafy-created")["uri"]
+    assert persisted.follower_post_uri == nil
+    assert persisted.follower_post_rkey == nil
+    assert persisted.reader_checked_at == @now
+    assert persisted.reader_ready_at == nil
+
+    snapshot = Remote.snapshot(remote)
+
+    refute Enum.any?(snapshot.calls, fn
+             {:put, _repo, _collection, rkey, _record} -> rkey != @rkey
+             _other -> false
+           end)
+
+    invocation_id = persisted.id
+
+    assert_received {:reader_check,
+                     "at://#{@bot_did}/site.standard.document/doc-follower-wait-index"}
+
+    assert_received {:enqueued_follower, ^invocation_id}
+  end
+
+  test "does not put the follower post when the Reader probe is ambiguous" do
+    test_pid = self()
+    invocation = follower_invocation("follower-wait-ambiguous")
+    reply_remote = remote_record(invocation, "bafy-created")
+
+    remote =
+      configure_remote(
+        get_results: [{:error, :record_not_found}, {:ok, 200, %{}, reply_remote}],
+        put_results: [
+          {:ok, 200, %{}, %{"uri" => reply_remote["uri"], "cid" => "untrusted-put-cid"}}
+        ]
+      )
+
+    configure_worker(
+      reader_check: fn _uri -> :ambiguous end,
+      enqueue_follower: fn enqueued -> send(test_pid, {:enqueued_follower, enqueued.id}) end
+    )
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert persisted.follower_post_uri == nil
+    assert persisted.reader_ready_at == nil
+
+    refute Enum.any?(Remote.snapshot(remote).calls, fn
+             {:put, _repo, _collection, rkey, _record} -> rkey != @rkey
+             _other -> false
+           end)
+
+    invocation_id = persisted.id
+    assert_received {:enqueued_follower, ^invocation_id}
+  end
+
+  test "puts the follower post immediately when Reader is already indexed" do
+    test_pid = self()
+    follower_rkey = "3mfollowerindex1"
+    follower_cid = "bafy-follower-indexed"
+    created_at = ~U[2026-07-29 13:00:00.123456Z]
+    invocation = follower_invocation("follower-indexed")
+    {:ok, follower_record} = FollowerPost.build(invocation, created_at)
+
+    invocation =
+      invocation
+      |> Invocation.changeset(%{
+        follower_post_rkey: follower_rkey,
+        follower_post_record: follower_record
+      })
+      |> Repo.update!()
+
+    reply_remote = remote_record(invocation, "bafy-created")
+
+    follower_remote = %{
+      "uri" => "at://#{@bot_did}/#{@collection}/#{follower_rkey}",
+      "cid" => follower_cid,
+      "value" => follower_record
+    }
+
+    remote =
+      configure_remote(
+        get_results: [
+          {:error, :record_not_found},
+          {:ok, 200, %{}, reply_remote},
+          {:error, :record_not_found},
+          {:ok, 200, %{}, follower_remote}
+        ],
+        put_results: [
+          {:ok, 200, %{}, %{"uri" => reply_remote["uri"], "cid" => "untrusted-put-cid"}},
+          {:ok, 200, %{}, %{"uri" => follower_remote["uri"], "cid" => follower_cid}}
+        ]
+      )
+
+    configure_worker(
+      reader_check: fn uri ->
+        send(test_pid, {:reader_check, uri})
+        :indexed
+      end,
+      enqueue_follower: fn _enqueued -> flunk("should not enqueue when already indexed") end
+    )
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert persisted.follower_post_uri == follower_remote["uri"]
+    assert persisted.follower_post_cid == follower_cid
+    assert persisted.reader_ready_at == @now
+
+    assert Enum.member?(
+             Remote.snapshot(remote).calls,
+             {:put, @bot_did, @collection, follower_rkey, follower_record}
+           )
+
+    assert_received {:reader_check,
+                     "at://#{@bot_did}/site.standard.document/doc-follower-indexed"}
+
+    refute_received {:enqueued_follower, _}
+  end
+
+  test "latched reader_ready_at publishes the follower post without probing Reader" do
+    follower_rkey = "3mfollowerlatch1"
+    follower_cid = "bafy-follower-latched"
+    created_at = ~U[2026-07-29 13:00:00.123456Z]
+
+    invocation =
+      follower_invocation("follower-latched", %{reader_ready_at: @now, reader_checked_at: @now})
+
+    {:ok, follower_record} = FollowerPost.build(invocation, created_at)
+
+    invocation =
+      invocation
+      |> Invocation.changeset(%{
+        follower_post_rkey: follower_rkey,
+        follower_post_record: follower_record
+      })
+      |> Repo.update!()
+      |> Invocation.reader_index_changeset(%{reader_ready_at: @now, reader_checked_at: @now})
+      |> Repo.update!()
+
+    reply_remote = remote_record(invocation, "bafy-created")
+
+    follower_remote = %{
+      "uri" => "at://#{@bot_did}/#{@collection}/#{follower_rkey}",
+      "cid" => follower_cid,
+      "value" => follower_record
+    }
+
+    remote =
+      configure_remote(
+        get_results: [
+          {:error, :record_not_found},
+          {:ok, 200, %{}, reply_remote},
+          {:error, :record_not_found},
+          {:ok, 200, %{}, follower_remote}
+        ],
+        put_results: [
+          {:ok, 200, %{}, %{"uri" => reply_remote["uri"], "cid" => "untrusted-put-cid"}},
+          {:ok, 200, %{}, %{"uri" => follower_remote["uri"], "cid" => follower_cid}}
+        ]
+      )
+
+    configure_worker(
+      reader_check: fn _uri -> flunk("should not probe after reader_ready_at latches") end,
+      enqueue_follower: fn _enqueued -> flunk("should not enqueue when already ready") end
+    )
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert persisted.follower_post_uri == follower_remote["uri"]
+
+    assert Enum.member?(
+             Remote.snapshot(remote).calls,
+             {:put, @bot_did, @collection, follower_rkey, follower_record}
+           )
+  end
+
   test "after a successful reply, publishes one top-level follower post quoting the root" do
     follower_rkey = "3mfollowerpost1"
     follower_cid = "bafy-follower-created"
@@ -1297,7 +1507,9 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
       claim_lease_ms: 300_000,
       client: PDS,
       now: fn -> @now end,
-      settings: Settings.load(bot_did: @bot_did)
+      settings: Settings.load(bot_did: @bot_did),
+      reader_check: fn _uri -> :indexed end,
+      enqueue_follower: fn _invocation -> :ok end
     ]
 
     Application.put_env(:context_bot, ReplyWorker, Keyword.merge(defaults, overrides))
