@@ -6,9 +6,14 @@ defmodule ContextBot.Reply.FollowerPost do
   root (the claim the invoking question is about) and cards the Standard Reader
   URL so Bluesky can scrape the Reader OG once Tap has indexed the document. It
   never quotes the invoking mention or the bot's own reply.
+
+  Publication is gated by `FOLLOWER_POSTS_ENABLED` (default false). `eligible?/1`
+  is false when the gate is off so finish_publication skips and the worker
+  does not `putRecord`.
   """
 
   alias ContextBot.ATProto.StrongRef
+  alias ContextBot.Settings
   alias ContextBot.StandardSite.{Document, PageCopy}
   alias ContextBot.Workflow.Invocation
 
@@ -29,8 +34,8 @@ defmodule ContextBot.Reply.FollowerPost do
 
   @spec eligible?(Invocation.t()) :: boolean()
   def eligible?(%Invocation{} = invocation) do
-    not invocation.dry_run and not invocation.no_reply and quoteable_root?(invocation) and
-      match?({:ok, _url}, reader_url(invocation))
+    follower_posts_enabled?() and not invocation.dry_run and not invocation.no_reply and
+      quoteable_root?(invocation) and match?({:ok, _url}, reader_url(invocation))
   end
 
   def eligible?(_invocation), do: false
@@ -77,6 +82,10 @@ defmodule ContextBot.Reply.FollowerPost do
       true ->
         {:error, :invalid_reader_url}
     end
+  end
+
+  defp follower_posts_enabled? do
+    Settings.follower_posts_enabled?(Application.fetch_env!(:context_bot, :settings))
   end
 
   defp accept(%Invocation{} = invocation) do

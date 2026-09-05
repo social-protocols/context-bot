@@ -68,6 +68,7 @@ defmodule ContextBot.Settings do
 
   @enforce_keys [
     :bot_enabled,
+    :follower_posts_enabled,
     :appview_url,
     :poll_interval_ms,
     :notification_page_cap,
@@ -116,6 +117,7 @@ defmodule ContextBot.Settings do
   # credo:disable-for-next-line Credo.Check.Warning.StructFieldAmount
   defstruct [
     :bot_enabled,
+    :follower_posts_enabled,
     :bot_did,
     :bot_handle,
     :bot_pds_url,
@@ -167,6 +169,7 @@ defmodule ContextBot.Settings do
 
   @type t :: %__MODULE__{
           bot_enabled: boolean(),
+          follower_posts_enabled: boolean(),
           bot_did: String.t() | nil,
           bot_handle: String.t() | nil,
           bot_pds_url: String.t() | nil,
@@ -223,6 +226,8 @@ defmodule ContextBot.Settings do
   def load(environment) do
     settings = %__MODULE__{
       bot_enabled: boolean!(environment, "BOT_ENABLED", :bot_enabled, false),
+      follower_posts_enabled:
+        boolean!(environment, "FOLLOWER_POSTS_ENABLED", :follower_posts_enabled, false),
       bot_did: optional_string(environment, "BOT_DID", :bot_did),
       bot_handle: optional_string(environment, "BOT_HANDLE", :bot_handle),
       bot_pds_url: optional_url(environment, "BOT_PDS_URL", :bot_pds_url),
@@ -708,6 +713,10 @@ defmodule ContextBot.Settings do
 
   @spec bot_enabled?(t()) :: boolean()
   def bot_enabled?(%__MODULE__{bot_enabled: bot_enabled}), do: bot_enabled
+
+  @spec follower_posts_enabled?(t()) :: boolean()
+  def follower_posts_enabled?(%__MODULE__{follower_posts_enabled: follower_posts_enabled}),
+    do: follower_posts_enabled
 
   @spec fly_max_kill_timeout_ms() :: pos_integer()
   def fly_max_kill_timeout_ms, do: @fly_max_kill_timeout_ms

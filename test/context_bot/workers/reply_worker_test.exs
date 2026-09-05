@@ -118,10 +118,17 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
   setup do
     original_worker_config = Application.get_env(:context_bot, ReplyWorker, :missing)
     original_pds_config = Application.get_env(:context_bot, PDS, :missing)
+    original_settings = Application.fetch_env!(:context_bot, :settings)
+
+    Application.put_env(:context_bot, :settings, %{
+      original_settings
+      | follower_posts_enabled: true
+    })
 
     on_exit(fn ->
       restore_env(ReplyWorker, original_worker_config)
       restore_env(PDS, original_pds_config)
+      Application.put_env(:context_bot, :settings, original_settings)
     end)
 
     :ok
@@ -892,6 +899,48 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
                      "at://#{@bot_did}/site.standard.document/doc-follower-wait-index"}
 
     assert_received {:enqueued_follower, ^invocation_id}
+  end
+
+  test "does not put or enqueue a follower post when FOLLOWER_POSTS_ENABLED is off" do
+    current = Application.fetch_env!(:context_bot, :settings)
+    Application.put_env(:context_bot, :settings, %{current | follower_posts_enabled: false})
+
+    test_pid = self()
+    invocation = follower_invocation("follower-gate-off")
+    reply_remote = remote_record(invocation, "bafy-created")
+
+    remote =
+      configure_remote(
+        get_results: [{:error, :record_not_found}, {:ok, 200, %{}, reply_remote}],
+        put_results: [
+          {:ok, 200, %{}, %{"uri" => reply_remote["uri"], "cid" => "untrusted-put-cid"}}
+        ]
+      )
+
+    configure_worker(
+      reader_check: fn _uri -> flunk("disabled gate should not probe Reader") end,
+      enqueue_follower: fn _enqueued ->
+        send(test_pid, :enqueued_follower)
+        :ok
+      end
+    )
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert persisted.reply_uri == reply_remote["uri"]
+    assert persisted.follower_post_uri == nil
+    assert persisted.follower_post_rkey == nil
+
+    snapshot = Remote.snapshot(remote)
+
+    refute Enum.any?(snapshot.calls, fn
+             {:put, _repo, _collection, rkey, _record} -> rkey != @rkey
+             _other -> false
+           end)
+
+    refute_received :enqueued_follower
   end
 
   test "does not put the follower post when the Reader probe is ambiguous" do

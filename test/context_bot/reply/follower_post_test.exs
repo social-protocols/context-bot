@@ -1,7 +1,8 @@
 defmodule ContextBot.Reply.FollowerPostTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias ContextBot.Reply.FollowerPost
+  alias ContextBot.Settings
   alias ContextBot.Workflow.Invocation
 
   @created_at ~U[2026-09-04 22:46:35.681Z]
@@ -17,6 +18,14 @@ defmodule ContextBot.Reply.FollowerPostTest do
   @mirror_url_id 33
   @asked "@getcontext.bot Is there evidence the FDA cuts are causing Americans to get sicker?"
   @title "FDA cuts and rising illness: what's verified"
+
+  setup do
+    original = Application.fetch_env!(:context_bot, :settings)
+    enable_follower_posts!(original)
+
+    on_exit(fn -> Application.put_env(:context_bot, :settings, original) end)
+    :ok
+  end
 
   test "builds a top-level quote of the parent root with a Reader external card" do
     invocation = invocation()
@@ -173,6 +182,23 @@ defmodule ContextBot.Reply.FollowerPostTest do
 
     assert FollowerPost.eligible?(unlinked) == false
     assert {:error, :ineligible} = FollowerPost.build(unlinked, @created_at)
+  end
+
+  test "skips when FOLLOWER_POSTS_ENABLED is off even if the invocation is otherwise eligible" do
+    original = Application.fetch_env!(:context_bot, :settings)
+    Application.put_env(:context_bot, :settings, %{original | follower_posts_enabled: false})
+
+    assert FollowerPost.eligible?(invocation()) == false
+    assert {:error, :ineligible} = FollowerPost.build(invocation(), @created_at)
+  end
+
+  test "is eligible when FOLLOWER_POSTS_ENABLED is on and the invocation is otherwise eligible" do
+    assert FollowerPost.eligible?(invocation()) == true
+    assert {:ok, _record} = FollowerPost.build(invocation(), @created_at)
+  end
+
+  defp enable_follower_posts!(%Settings{} = settings) do
+    Application.put_env(:context_bot, :settings, %{settings | follower_posts_enabled: true})
   end
 
   defp invocation(overrides \\ %{}) do

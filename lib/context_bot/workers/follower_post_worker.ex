@@ -2,6 +2,10 @@ defmodule ContextBot.Workers.FollowerPostWorker do
   @moduledoc """
   Puts the follower-feed quote+Reader card after Standard Reader has indexed.
 
+  Publication is gated by `FOLLOWER_POSTS_ENABLED` (default false). When the
+  gate is off, per-invocation jobs and the minute cron reconsider return
+  `:ok` without `putRecord`.
+
   Thread replies complete on the current schedule. This worker only puts the
   follower record once `ReaderReady.ensure/2` reports ready (`reader_ready_at`
   or `ReaderIndex` `:indexed`). `:not_indexed` and `:ambiguous` snooze with
@@ -17,7 +21,7 @@ defmodule ContextBot.Workers.FollowerPostWorker do
   import Ecto.Query
 
   alias ContextBot.ATProto.{Client, ReqClient, TID}
-  alias ContextBot.{Operations, Repo}
+  alias ContextBot.{Operations, Repo, Settings}
   alias ContextBot.Reply.FollowerPost
   alias ContextBot.StandardSite.{ReaderIndex, ReaderReady}
   alias ContextBot.Workflow.{Invocation, Store}
@@ -32,22 +36,30 @@ defmodule ContextBot.Workers.FollowerPostWorker do
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"invocation_id" => id}} = job)
       when is_integer(id) and id > 0 do
-    dependencies = dependencies(job)
+    if follower_posts_enabled?() do
+      dependencies = dependencies(job)
 
-    case Repo.get(Invocation, id) do
-      nil ->
-        :ok
+      case Repo.get(Invocation, id) do
+        nil ->
+          :ok
 
-      %Invocation{dry_run: true} ->
-        :ok
+        %Invocation{dry_run: true} ->
+          :ok
 
-      invocation ->
-        logged_publish(invocation, job, dependencies)
+        invocation ->
+          logged_publish(invocation, job, dependencies)
+      end
+    else
+      :ok
     end
   end
 
   def perform(%Oban.Job{}) do
-    reconsider_pending(dependencies(%Oban.Job{attempt: 1}))
+    if follower_posts_enabled?() do
+      reconsider_pending(dependencies(%Oban.Job{attempt: 1}))
+    else
+      :ok
+    end
   end
 
   @impl Oban.Worker
@@ -313,6 +325,10 @@ defmodule ContextBot.Workers.FollowerPostWorker do
     end)
 
     :ok
+  end
+
+  defp follower_posts_enabled? do
+    Settings.follower_posts_enabled?(Application.fetch_env!(:context_bot, :settings))
   end
 
   defp pending_follower_posts(now) do
