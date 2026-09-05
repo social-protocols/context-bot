@@ -64,13 +64,20 @@ defmodule ContextBotWeb.PageControllerTest do
 
     assert response =~ ~s(src="https://embed.bsky.app/static/embed.js")
 
-    assert response =~ ~s(href="/r/3mudapth2od2p")
+    assert response =~
+             ~s(href="https://standard-reader.app/a/did:plc:anbhmngzs3exwbq47xxzogk4/3mudapth2od2p")
 
     assert response =~
              ~s(href="https://bsky.app/profile/getcontext.bot/post/3mudelkjrym23")
 
     csp = conn |> get_resp_header("content-security-policy") |> List.first()
     assert csp =~ "https://embed.bsky.app"
+  end
+
+  test "GET /r/:id is not a published writeup route", %{conn: conn} do
+    assert_error_sent 404, fn ->
+      get(conn, "/r/1")
+    end
   end
 
   test "GET / includes Open Graph and Twitter metadata", %{conn: conn} do

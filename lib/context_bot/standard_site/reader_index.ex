@@ -13,7 +13,7 @@ defmodule ContextBot.StandardSite.ReaderIndex do
     (and usually `content` + a real `title`)
   * not indexed: HTTP 400 `InvalidRequest` / `Document not found`
   * anything else (timeout, 5xx, malformed JSON, 200 without a renderable
-    body): `:ambiguous` — callers stay on the getcontext.bot mirror
+    body): `:ambiguous` — callers treat the document as not ready
   """
 
   alias ContextBot.HTTP.BodyLimit
