@@ -14,10 +14,13 @@ defmodule ContextBot.Workers.FollowerPostWorkerTest do
   setup do
     original_worker = Application.get_env(:context_bot, FollowerPostWorker, :missing)
     original_pds = Application.get_env(:context_bot, PDS, :missing)
+    original_settings = Application.fetch_env!(:context_bot, :settings)
+    enable_follower_posts!(original_settings)
 
     on_exit(fn ->
       restore_env(FollowerPostWorker, original_worker)
       restore_env(PDS, original_pds)
+      Application.put_env(:context_bot, :settings, original_settings)
     end)
 
     :ok
@@ -167,6 +170,32 @@ defmodule ContextBot.Workers.FollowerPostWorkerTest do
     assert Remote.snapshot(remote).calls == []
   end
 
+  test "does not put when FOLLOWER_POSTS_ENABLED is off" do
+    disable_follower_posts!()
+    invocation = complete_follower!("gate-off")
+    remote = configure_remote()
+
+    configure_worker(reader_check: fn _uri -> flunk("disabled gate should not probe") end)
+
+    assert :ok = perform(invocation)
+    assert Repo.reload!(invocation).follower_post_uri == nil
+    assert Remote.snapshot(remote).calls == []
+  end
+
+  test "reconsider does not enqueue pending follower posts when the gate is off" do
+    pending = complete_follower!("reconsider-disabled")
+    disable_follower_posts!()
+
+    configure_worker(now: fn -> @now end)
+    assert :ok = FollowerPostWorker.perform(%Oban.Job{args: %{}})
+
+    refute Enum.any?(
+             Repo.all(Oban.Job),
+             &(&1.worker == "ContextBot.Workers.FollowerPostWorker" and
+                 &1.args["invocation_id"] == pending.id)
+           )
+  end
+
   test "reconsider enqueues unique jobs for complete invocations waiting on Reader" do
     pending = complete_follower!("reconsider-pending")
 
@@ -275,6 +304,15 @@ defmodule ContextBot.Workers.FollowerPostWorkerTest do
       |> Invocation.reader_index_changeset(cache)
       |> Repo.update!()
     end
+  end
+
+  defp enable_follower_posts!(settings) do
+    Application.put_env(:context_bot, :settings, %{settings | follower_posts_enabled: true})
+  end
+
+  defp disable_follower_posts! do
+    current = Application.fetch_env!(:context_bot, :settings)
+    Application.put_env(:context_bot, :settings, %{current | follower_posts_enabled: false})
   end
 
   defp restore_env(module, :missing), do: Application.delete_env(:context_bot, module)

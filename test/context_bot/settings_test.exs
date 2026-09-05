@@ -18,6 +18,8 @@ defmodule ContextBot.SettingsTest do
     settings = Settings.load([])
 
     assert settings.bot_enabled == false
+    assert settings.follower_posts_enabled == false
+    refute Settings.follower_posts_enabled?(settings)
     assert settings.thread_parent_height == 80
     assert settings.actor_hourly_limit == 2
     assert settings.actor_daily_limit == 5
@@ -61,6 +63,13 @@ defmodule ContextBot.SettingsTest do
     assert settings.anthropic_web_fetch_tool_type == "web_fetch_20260318"
   end
 
+  test "loads FOLLOWER_POSTS_ENABLED as a boolean defaulting to false" do
+    assert Settings.load([]).follower_posts_enabled == false
+    assert Settings.load(%{"FOLLOWER_POSTS_ENABLED" => "true"}).follower_posts_enabled == true
+    assert Settings.load(follower_posts_enabled: true).follower_posts_enabled == true
+    assert Settings.load(follower_posts_enabled: "false").follower_posts_enabled == false
+  end
+
   test "loads and validates Anthropic effort" do
     assert Settings.load(%{"ANTHROPIC_EFFORT" => "low"}).anthropic_effort == :low
     assert Settings.load(anthropic_effort: "medium").anthropic_effort == :medium
@@ -84,6 +93,10 @@ defmodule ContextBot.SettingsTest do
 
     assert_raise ArgumentError, ~r/BOT_ENABLED/, fn ->
       Settings.load(bot_enabled: "yes")
+    end
+
+    assert_raise ArgumentError, ~r/FOLLOWER_POSTS_ENABLED/, fn ->
+      Settings.load(follower_posts_enabled: "yes")
     end
 
     assert_raise ArgumentError, ~r/OPERATOR_ALLOWED_DIDS/, fn ->

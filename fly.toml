@@ -14,6 +14,9 @@ kill_timeout = 300
   # Supply the real public identity before activation. Empty values are safe
   # while BOT_ENABLED remains false and deliberately fail startup when enabled.
   BOT_ENABLED = "true"
+  # Off after Bluesky labeled the account Spam for follower-feed auto quotes.
+  # Thread replies are unchanged. Set true to re-enable later.
+  FOLLOWER_POSTS_ENABLED = "false"
   BOT_DID = "did:plc:anbhmngzs3exwbq47xxzogk4"
   BOT_HANDLE = "getcontext.bot"
   BOT_PDS_URL = "https://rhizopogon.us-west.host.bsky.network"
