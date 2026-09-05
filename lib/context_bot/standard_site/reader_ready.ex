@@ -3,10 +3,10 @@ defmodule ContextBot.StandardSite.ReaderReady do
   Decides whether a Standard.site document is indexed on Standard Reader.
 
   A latched `reader_ready_at` is authoritative and does not probe. A recent
-  `reader_checked_at` inside the negative TTL (the same 60s window Mirror uses
-  for `/r/{id}` 302 decisions) stays waiting without calling AppView. Otherwise
-  this calls `ReaderIndex.check/1` and persists the result through
-  `Store.record_reader_index/3`. `:not_indexed` and `:ambiguous` stay waiting.
+  `reader_checked_at` inside the negative TTL stays waiting without calling
+  AppView. Otherwise this calls `ReaderIndex.check/1` and persists the result
+  through `Store.record_reader_index/3`. `:not_indexed` and `:ambiguous` stay
+  waiting.
   """
 
   alias ContextBot.StandardSite.ReaderIndex
@@ -16,15 +16,15 @@ defmodule ContextBot.StandardSite.ReaderReady do
 
   @type wait_reason :: :not_indexed | :ambiguous
 
-  @doc "Negative-cache window shared with Mirror `/r/{id}` 302 decisions."
+  @doc "Negative-cache window for follower-card Reader probes."
   @spec negative_ttl_ms() :: pos_integer()
   def negative_ttl_ms, do: @negative_ttl_ms
 
   @doc """
   True when `reader_checked_at` is still inside the negative TTL.
 
-  `Mirror.serve/2` uses this for 302 decisions so follower-card waits and
-  public mirror hits skip `app.standard-reader.getDocument` for one window.
+  Follower-card waits skip `app.standard-reader.getDocument` for one window
+  after a miss or ambiguous probe.
   """
   @spec recently_checked?(DateTime.t() | nil, DateTime.t(), pos_integer()) :: boolean()
   def recently_checked?(checked_at, now, ttl_ms \\ @negative_ttl_ms)

@@ -24,7 +24,9 @@ the follower write-up card. A whole-squash revert would break that path.
 - `ReaderIndex.check/1` (`app.standard-reader.getDocument`)
 - invocation `reader_ready_at` / `reader_checked_at` and the existing
   additive migration (no destructive column drop)
-- `Store.record_reader_index/3` and `ReaderReady.ensure/2`
+- `Store.record_reader_index/3` and `ReaderReady.ensure/2`, including the
+  60s negative TTL #140 moved onto `ReaderReady` (no longer shared with a
+  public `/r/` mirror)
 - #139 follower deferral: card URL remains the Standard Reader URL
 
 ## Accepted leftover
