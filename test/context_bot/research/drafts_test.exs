@@ -36,8 +36,34 @@ defmodule ContextBot.Research.DraftsTest do
   test "returns error on a parse miss and does not invent drafts" do
     assert Drafts.parse("Thorough writeup with no draft block.") == :error
     assert Drafts.parse_measured("Thorough writeup with no draft block.") == :error
-    assert Drafts.structure_banner("Thorough writeup with no draft block.") == ""
+    assert Drafts.empty_no_reply?("Thorough writeup with no draft block.") == false
+    banner = Drafts.structure_banner("Thorough writeup with no draft block.")
+    assert banner =~ "No parseable CONTEXT_BOT_DRAFT block"
+    refute banner =~ "Research drafts (starting point"
+    refute banner =~ "Research drafts are empty"
     assert Drafts.parse("CONTEXT_BOT_DRAFT\nmissing labels\nCONTEXT_BOT_DRAFT_END") == :error
+
+    assert Drafts.empty_no_reply?("CONTEXT_BOT_DRAFT\nmissing labels\nCONTEXT_BOT_DRAFT_END") ==
+             false
+  end
+
+  test "empty CONTEXT_BOT_DRAFT is the research no_reply signal" do
+    writeup = Drafts.format("", "") <> "\n\nNo published reply is needed."
+    whitespace = Drafts.format("  ", "\n") <> "\n\nNo published reply is needed."
+
+    assert Drafts.parse(writeup) == {:ok, %{title: "", compact_reply: ""}}
+    assert Drafts.empty_no_reply?(writeup)
+    assert Drafts.empty_no_reply?(whitespace)
+    refute Drafts.empty_no_reply?(Drafts.format("Bird", "") <> "\n\nWriteup.")
+    refute Drafts.empty_no_reply?(Drafts.format("", "A Himalayan Monal.") <> "\n\nWriteup.")
+
+    banner = Drafts.structure_banner(writeup)
+    assert banner =~ "Research drafts are empty"
+    assert banner =~ "no published Bluesky reply is needed"
+    assert banner =~ "disposition \"no_reply\""
+    assert banner =~ "Drafts are irrelevant on the no_reply path"
+    refute banner =~ "Research drafts (starting point"
+    refute banner =~ "compact_length:"
   end
 
   test "strip/1 removes the draft block and leaves the essay" do

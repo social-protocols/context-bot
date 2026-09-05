@@ -140,24 +140,73 @@ defmodule ContextBot.Research.Drafts do
   end
 
   @doc """
+  True when research emitted a parseable draft block with blank title and
+  compact_reply.
+
+  That is the research-phase contract for "no published reply is needed".
+  A missing or malformed block is not this signal — structure still writes
+  from the writeup. Whitespace-only fields count as empty.
+  """
+  @spec empty_no_reply?(String.t()) :: boolean()
+  def empty_no_reply?(writeup) when is_binary(writeup) do
+    case parse(writeup) do
+      {:ok, %{title: title, compact_reply: compact}} ->
+        String.trim(title) == "" and String.trim(compact) == ""
+
+      :error ->
+        false
+    end
+  end
+
+  def empty_no_reply?(_writeup), do: false
+
+  @doc """
   Structure-turn banner with parsed drafts and code-measured lengths.
 
   Title and compact_reply text are always included in full, including when
   they are over the hard cap, so the structured-output call can see and
   shorten them. Over-cap fields also get a programmatic truncate ≤ the hard
   cap as a suggested seed. The banner keeps measured full lengths and the
-  over_cap delta. Returns `""` when drafts cannot be parsed so the structure
-  call does not invent a draft that was not in the writeup.
+  over_cap delta.
+
+  Empty drafts (blank title and compact) emit a no_reply signal instead of
+  a "starting point" banner so structure does not rewrite an essay.
+  A parse miss emits a missing-draft banner so structure writes a short
+  compact from the writeup and does not invent a draft.
   """
   @spec structure_banner(String.t()) :: String.t()
   def structure_banner(writeup) when is_binary(writeup) do
-    case parse_measured(writeup) do
-      {:ok, measured} -> structure_banner_text(measured)
-      :error -> ""
+    if empty_no_reply?(writeup) do
+      empty_draft_banner()
+    else
+      measured_or_missing_banner(writeup)
     end
   end
 
   def structure_banner(_writeup), do: ""
+
+  defp measured_or_missing_banner(writeup) do
+    case parse_measured(writeup) do
+      {:ok, measured} -> structure_banner_text(measured)
+      :error -> missing_draft_banner()
+    end
+  end
+
+  defp empty_draft_banner do
+    """
+    Research drafts are empty (blank title and compact_reply). This is the research-phase
+    signal that no published Bluesky reply is needed. Emit disposition "no_reply" with
+    empty title and compact_reply. Do not invent a Bluesky answer. Do not rewrite the
+    writeup into compact_reply. Drafts are irrelevant on the no_reply path.
+    """
+  end
+
+  defp missing_draft_banner do
+    """
+    No parseable CONTEXT_BOT_DRAFT block. Write title and compact_reply from the writeup
+    under the hard cap. Do not invent a draft that was not parsed.
+    """
+  end
 
   defp structure_banner_text(measured) do
     ([

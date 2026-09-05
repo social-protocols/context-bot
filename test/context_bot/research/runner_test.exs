@@ -2034,6 +2034,83 @@ defmodule ContextBot.Research.RunnerTest do
     refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
   end
 
+  test "empty CONTEXT_BOT_DRAFT plus a no-question writeup skips the paid structure call" do
+    writeup = StructuredFixtures.inv37_writeup()
+    thread = StructuredFixtures.inv37_thread()
+
+    invocation =
+      invocation("inv37-empty-draft-no-reply", %{
+        canonical_thread: thread
+      })
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(message_body(writeup)))}
+    ])
+
+    assert {:ok, result} = Runner.run(invocation, options())
+    assert result.disposition == :no_reply
+    assert result.text == ""
+    refute Map.get(result, :full_response)
+    refute Map.get(result, :document_title)
+
+    assert result.validation == %{
+             "result" => "no_reply",
+             "repair_used" => false,
+             "phase" => "research"
+           }
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.full_response == writeup
+    assert Drafts.empty_no_reply?(persisted.full_response)
+    refute Request.structure_request?(persisted.anthropic_messages)
+
+    assert_received {:anthropic_call, research, %{kind: :research}, false}
+    assert is_list(research["tools"])
+    refute_received {:anthropic_call, _request, %{kind: :structure}, _in_transaction}
+    refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
+  end
+
+  test "a stored inv 37 writeup skips a live structure resume" do
+    writeup = StructuredFixtures.inv37_writeup()
+    thread = StructuredFixtures.inv37_thread()
+    truncated = ~s({"disposition":"no_reply","title":"","compact_reply":)
+
+    invocation =
+      invocation("inv37-structure-max-tokens-resume", %{
+        anthropic_messages: live_structure_request(writeup, [], thread),
+        anthropic_attempt_sequence: 2,
+        full_response: writeup,
+        citation_sources: [],
+        canonical_thread: thread
+      })
+
+    insert_recorded_envelope(
+      invocation,
+      1,
+      :structure,
+      200,
+      Jason.encode!(message_body(truncated, nil, "max_tokens"))
+    )
+
+    insert_recorded_envelope(
+      invocation,
+      2,
+      :repair,
+      200,
+      Jason.encode!(message_body(truncated, nil, "max_tokens"))
+    )
+
+    Process.put(:runner_client_results, [])
+
+    assert {:ok, result} = Runner.run(Repo.reload!(invocation), options())
+    assert result.disposition == :no_reply
+    assert result.text == ""
+    assert result.validation["result"] == "no_reply"
+    assert result.validation["phase"] == "research"
+    refute_received {:anthropic_call, _request, _metadata, _in_transaction}
+    assert length(responses(invocation)) == 2
+  end
+
   test "title and compact come from the structure call and full_response from research" do
     invocation = invocation("two-phase-fields")
     compact = String.duplicate("b", 250)
