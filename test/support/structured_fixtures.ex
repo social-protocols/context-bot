@@ -21,6 +21,44 @@ defmodule ContextBot.Research.StructuredFixtures do
   end
 
   @doc """
+  Inv 35-shaped thread: a claim-only counterargument with no question or
+  request aimed at the bot (diogeneslamp shape).
+  """
+  @spec inv35_thread() :: String.t()
+  def inv35_thread do
+    """
+    ROOT
+    A thread arguing about pandemic origins.
+
+    INVOCATION
+    @getcontext.bot The zoonosis studies are clear. The FBI/GenBank claim is also documented.
+    """
+    |> String.trim()
+  end
+
+  @doc """
+  Inv 35-shaped writeup: empty CONTEXT_BOT_DRAFT plus a note that the
+  mention is a claim-only counterargument and no published reply is needed.
+  """
+  @spec inv35_writeup() :: String.t()
+  def inv35_writeup do
+    Drafts.format("", "") <> "\n\n" <> inv35_essay()
+  end
+
+  @spec inv35_essay() :: String.t()
+  def inv35_essay do
+    """
+    The invoking mention is a counterargument that asserts checkable claims
+    but does not ask this bot anything: zoonosis studies and an FBI/GenBank
+    claim. That is not an obvious question or request aimed at this bot.
+
+    Do not fact-check a claim-dump just because the claims are verifiable.
+    No published reply is needed.
+    """
+    |> String.trim()
+  end
+
+  @doc """
   Inv 37-shaped writeup: empty CONTEXT_BOT_DRAFT plus a note that there is
   no discernible question and no published reply is needed.
   """

@@ -2070,6 +2070,42 @@ defmodule ContextBot.Research.RunnerTest do
     refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
   end
 
+  test "empty CONTEXT_BOT_DRAFT on an inv 35 claim-only writeup skips the paid structure call" do
+    writeup = StructuredFixtures.inv35_writeup()
+    thread = StructuredFixtures.inv35_thread()
+
+    invocation =
+      invocation("inv35-empty-draft-no-reply", %{
+        canonical_thread: thread
+      })
+
+    Process.put(:runner_client_results, [
+      {:ok, envelope(200, Jason.encode!(message_body(writeup)))}
+    ])
+
+    assert {:ok, result} = Runner.run(invocation, options())
+    assert result.disposition == :no_reply
+    assert result.text == ""
+    refute Map.get(result, :full_response)
+    refute Map.get(result, :document_title)
+
+    assert result.validation == %{
+             "result" => "no_reply",
+             "repair_used" => false,
+             "phase" => "research"
+           }
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.full_response == writeup
+    assert Drafts.empty_no_reply?(persisted.full_response)
+    refute Request.structure_request?(persisted.anthropic_messages)
+
+    assert_received {:anthropic_call, research, %{kind: :research}, false}
+    assert is_list(research["tools"])
+    refute_received {:anthropic_call, _request, %{kind: :structure}, _in_transaction}
+    refute_received {:anthropic_call, _request, %{kind: :repair}, _in_transaction}
+  end
+
   test "a stored inv 37 writeup skips a live structure resume" do
     writeup = StructuredFixtures.inv37_writeup()
     thread = StructuredFixtures.inv37_thread()
