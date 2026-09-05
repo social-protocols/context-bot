@@ -59,11 +59,16 @@ defmodule ContextBot.Workflow.InvocationTest do
 
     uri = "at://did:plc:bot/site.standard.document/3kfullresp"
 
+    publication_uri = "at://did:plc:bot/site.standard.publication/context-bot"
+
     invocation
     |> Invocation.transition_changeset(%{
       full_response: "Detailed writeup.",
       standard_site_document_uri: uri,
-      standard_site_document_rkey: "3kfullresp"
+      standard_site_document_rkey: "3kfullresp",
+      standard_site_document_cid: FakeSiteCids.document(),
+      standard_site_publication_uri: publication_uri,
+      standard_site_publication_cid: FakeSiteCids.publication()
     })
     |> Repo.update!()
 
@@ -71,6 +76,9 @@ defmodule ContextBot.Workflow.InvocationTest do
     assert persisted.full_response == "Detailed writeup."
     assert persisted.standard_site_document_uri == uri
     assert persisted.standard_site_document_rkey == "3kfullresp"
+    assert persisted.standard_site_document_cid == FakeSiteCids.document()
+    assert persisted.standard_site_publication_uri == publication_uri
+    assert persisted.standard_site_publication_cid == FakeSiteCids.publication()
     assert persisted.reader_ready_at == nil
     assert persisted.reader_checked_at == nil
     assert persisted.no_reply == false

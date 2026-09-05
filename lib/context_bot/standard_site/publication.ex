@@ -13,14 +13,15 @@ defmodule ContextBot.StandardSite.Publication do
   @publication_url "https://getcontext.bot"
   @publication_name "Context Bot"
 
-  @type result :: {:ok, String.t()} | {:error, atom()}
+  @type result :: {:ok, %{uri: String.t(), cid: String.t() | nil}} | {:error, atom()}
 
   @doc """
-  Ensures the publication record exists and returns its AT URI.
+  Ensures the publication record exists and returns its AT URI and recorded CID.
 
   This operation is idempotent. If the record already exists with matching identity
   (`$type`, `url`, and `name`), returns success even when `createdAt` differs. If it
   exists with different identity fields, returns an error. If it doesn't exist, creates it.
+  The CID comes from getRecord or putRecord; a missing CID is returned as nil.
   """
   @spec ensure_exists(Client.t(), String.t(), DateTime.t()) :: result()
   def ensure_exists(client \\ ContextBot.ATProto.ReqClient, repo, created_at)
@@ -29,24 +30,14 @@ defmodule ContextBot.StandardSite.Publication do
     uri = "at://#{repo}/#{@collection}/#{@publication_rkey}"
 
     case client.get_record(repo, @collection, @publication_rkey) do
-      {:ok, _status, _headers, %{"value" => existing}} when is_map(existing) ->
-        if publication_matches?(existing, record) do
-          {:ok, uri}
-        else
-          {:error, :publication_conflict}
-        end
+      {:ok, _status, _headers, body} ->
+        accept_existing(body, record, uri)
 
       {:error, :record_not_found} ->
-        case client.put_record(repo, @collection, @publication_rkey, record) do
-          {:ok, _status, _headers, _body} -> {:ok, uri}
-          {:error, reason} -> {:error, reason}
-        end
+        create_record(client, repo, record, uri)
 
       {:error, reason} ->
         {:error, reason}
-
-      {:ok, _status, _headers, _body} ->
-        {:error, :publication_conflict}
     end
   end
 
@@ -56,6 +47,34 @@ defmodule ContextBot.StandardSite.Publication do
   @spec publication_uri(String.t()) :: String.t()
   def publication_uri(repo) when is_binary(repo) do
     "at://#{repo}/#{@collection}/#{@publication_rkey}"
+  end
+
+  defp accept_existing(%{"value" => existing} = body, record, uri) when is_map(existing) do
+    if publication_matches?(existing, record) do
+      {:ok, %{uri: uri, cid: Client.recorded_cid(body)}}
+    else
+      {:error, :publication_conflict}
+    end
+  end
+
+  defp accept_existing(_body, _record, _uri), do: {:error, :publication_conflict}
+
+  defp create_record(client, repo, record, uri) do
+    case client.put_record(repo, @collection, @publication_rkey, record) do
+      {:ok, _status, _headers, body} ->
+        cid = Client.recorded_cid(body) || fetch_recorded_cid(client, repo)
+        {:ok, %{uri: uri, cid: cid}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp fetch_recorded_cid(client, repo) do
+    case client.get_record(repo, @collection, @publication_rkey) do
+      {:ok, _status, _headers, body} -> Client.recorded_cid(body)
+      _missing -> nil
+    end
   end
 
   defp publication_matches?(existing, desired) do

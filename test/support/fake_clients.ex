@@ -1,3 +1,24 @@
+defmodule FakeSiteCids do
+  @moduledoc false
+
+  @publication "bafyreipublicationsiteref000000000000000000001"
+  @document "bafyreidocumentsiteref000000000000000000000001"
+
+  def publication, do: @publication
+  def document, do: @document
+
+  def put_body(repo, collection, rkey) do
+    %{
+      "uri" => "at://#{repo}/#{collection}/#{rkey}",
+      "cid" => cid_for(collection)
+    }
+  end
+
+  def cid_for("site.standard.publication"), do: publication()
+  def cid_for("site.standard.document"), do: document()
+  def cid_for(_collection), do: document()
+end
+
 defmodule FakeClientNotFound do
   @moduledoc false
 
@@ -5,8 +26,8 @@ defmodule FakeClientNotFound do
     {:error, :record_not_found}
   end
 
-  def put_record(_repo, _collection, _rkey, _record) do
-    {:ok, 200, %{}, %{}}
+  def put_record(repo, collection, rkey, _record) do
+    {:ok, 200, %{}, FakeSiteCids.put_body(repo, collection, rkey)}
   end
 end
 
@@ -23,7 +44,12 @@ defmodule FakeClientExisting do
       "createdAt" => DateTime.to_iso8601(created_at)
     }
 
-    {:ok, 200, %{}, %{"value" => record}}
+    {:ok, 200, %{},
+     %{
+       "uri" => "at://did:plc:test123abc/site.standard.publication/context-bot",
+       "cid" => FakeSiteCids.publication(),
+       "value" => record
+     }}
   end
 end
 
@@ -38,7 +64,12 @@ defmodule FakeClientExistingDifferentCreatedAt do
       "createdAt" => DateTime.to_iso8601(~U[2026-08-25 12:00:00Z])
     }
 
-    {:ok, 200, %{}, %{"value" => record}}
+    {:ok, 200, %{},
+     %{
+       "uri" => "at://did:plc:test123abc/site.standard.publication/context-bot",
+       "cid" => FakeSiteCids.publication(),
+       "value" => record
+     }}
   end
 end
 
@@ -62,8 +93,43 @@ end
 defmodule FakeDocClientSuccess do
   @moduledoc false
 
+  def get_record(_repo, _collection, _rkey) do
+    {:error, :record_not_found}
+  end
+
+  def put_record(repo, collection, rkey, _record) do
+    {:ok, 200, %{}, FakeSiteCids.put_body(repo, collection, rkey)}
+  end
+end
+
+defmodule FakePublicationPutWithoutCid do
+  @moduledoc false
+
+  def get_record(repo, collection, rkey) do
+    case Process.get(:publication_gets, 0) do
+      0 ->
+        Process.put(:publication_gets, 1)
+        {:error, :record_not_found}
+
+      _seen ->
+        {:ok, 200, %{}, FakeSiteCids.put_body(repo, collection, rkey)}
+    end
+  end
+
   def put_record(_repo, _collection, _rkey, _record) do
     {:ok, 200, %{}, %{}}
+  end
+end
+
+defmodule FakeDocClientPutWithoutCid do
+  @moduledoc false
+
+  def put_record(_repo, _collection, _rkey, _record) do
+    {:ok, 200, %{}, %{"uri" => "at://did:plc:test123abc/site.standard.document/omitted"}}
+  end
+
+  def get_record(repo, collection, rkey) do
+    {:ok, 200, %{}, FakeSiteCids.put_body(repo, collection, rkey)}
   end
 end
 
@@ -94,11 +160,16 @@ defmodule FakeDocClientWithDocument do
       "publishedAt" => DateTime.to_iso8601(created_at)
     }
 
-    {:ok, 200, %{}, %{"value" => record}}
+    {:ok, 200, %{},
+     %{
+       "uri" => "at://did:plc:test123abc/site.standard.document/3k123",
+       "cid" => FakeSiteCids.document(),
+       "value" => record
+     }}
   end
 
-  def put_record(_repo, _collection, _rkey, _record) do
-    {:ok, 200, %{}, %{}}
+  def put_record(repo, collection, rkey, _record) do
+    {:ok, 200, %{}, FakeSiteCids.put_body(repo, collection, rkey)}
   end
 end
 
@@ -117,8 +188,8 @@ defmodule FakeStandardSiteClient do
     {:error, :record_not_found}
   end
 
-  def put_record(_repo, _collection, _rkey, _record) do
-    {:ok, 200, %{}, %{}}
+  def put_record(repo, collection, rkey, _record) do
+    {:ok, 200, %{}, FakeSiteCids.put_body(repo, collection, rkey)}
   end
 end
 
@@ -130,9 +201,9 @@ defmodule FakeStandardSiteTrackingClient do
     {:error, :record_not_found}
   end
 
-  def put_record(_repo, collection, rkey, record) do
+  def put_record(repo, collection, rkey, record) do
     send(self(), {:standard_site_put, collection, rkey, record})
-    {:ok, 200, %{}, %{}}
+    {:ok, 200, %{}, FakeSiteCids.put_body(repo, collection, rkey)}
   end
 end
 
