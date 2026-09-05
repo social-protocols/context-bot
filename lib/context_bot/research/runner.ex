@@ -534,16 +534,23 @@ defmodule ContextBot.Research.Runner do
 
   defp classify_research(invocation, decoded, config) do
     with {:ok, extracted} <- extract_research_writeup(decoded, invocation) do
-      writeup = Citations.publishable_writeup(extracted.text, extracted.citations)
+      continue_after_writeup(invocation, extracted, config)
+    end
+  end
 
-      if Drafts.empty_no_reply?(writeup) do
-        finish_empty_draft_no_reply(invocation, writeup, extracted.citations, config)
-      else
-        with {:ok, checkpoint} <-
-               persist_research_phase(invocation, writeup, extracted.citations, config) do
-          start_attempt(checkpoint, :structure, config)
-        end
-      end
+  defp continue_after_writeup(invocation, extracted, config) do
+    writeup = Citations.publishable_writeup(extracted.text, extracted.citations)
+
+    if Drafts.empty_no_reply?(writeup) do
+      finish_empty_draft_no_reply(invocation, writeup, extracted.citations, config)
+    else
+      start_structure_after_writeup(invocation, writeup, extracted.citations, config)
+    end
+  end
+
+  defp start_structure_after_writeup(invocation, writeup, citations, config) do
+    with {:ok, checkpoint} <- persist_research_phase(invocation, writeup, citations, config) do
+      start_attempt(checkpoint, :structure, config)
     end
   end
 
