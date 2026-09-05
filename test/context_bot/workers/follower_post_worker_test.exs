@@ -96,6 +96,20 @@ defmodule ContextBot.Workers.FollowerPostWorkerTest do
            )
   end
 
+  test "fresh reader_checked_at snoozes without probing" do
+    checked = DateTime.add(@now, -10, :second)
+    invocation = complete_follower!("fresh-ttl", reader_checked_at: checked)
+    remote = configure_remote()
+
+    configure_worker(
+      reader_check: fn _uri -> flunk("should not probe inside the negative TTL") end
+    )
+
+    assert {:snooze, 15} = perform(invocation)
+    assert Repo.reload!(invocation).reader_checked_at == checked
+    assert Remote.snapshot(remote).calls == []
+  end
+
   test "latched reader_ready_at publishes without probing" do
     invocation = complete_follower!("latched", reader_ready_at: @now, reader_checked_at: @now)
     {:ok, record} = FollowerPost.build(invocation, @now)

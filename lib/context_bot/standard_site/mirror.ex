@@ -15,19 +15,19 @@ defmodule ContextBot.StandardSite.Mirror do
 
   Indexed detection: `ReaderIndex.check/1` (`app.standard-reader.getDocument`).
   A confirmed ready result latches `reader_ready_at`. A miss or ambiguous
-  probe only stores `reader_checked_at` (default negative TTL 60s) so we do
-  not hammer Reader on every hit. Ambiguity stays on the mirror.
+  probe only stores `reader_checked_at` (negative TTL from
+  `ReaderReady.negative_ttl_ms/0`, default 60s) so we do not hammer Reader
+  on every hit. Ambiguity stays on the mirror.
   """
 
   import Ecto.Query
 
   alias ContextBot.Repo
   alias ContextBot.Research.{Drafts, Request}
-  alias ContextBot.StandardSite.{Document, PageCopy, PromptDocument, ReaderIndex}
+  alias ContextBot.StandardSite.{Document, PageCopy, PromptDocument, ReaderIndex, ReaderReady}
   alias ContextBot.Workflow.{Invocation, Store}
 
   @public_base_url "https://getcontext.bot"
-  @negative_ttl_ms 60_000
 
   @type serve_result ::
           {:redirect, String.t()}
@@ -62,7 +62,7 @@ defmodule ContextBot.StandardSite.Mirror do
 
   * `:check` — `(document_uri -> :indexed | :not_indexed | :ambiguous)`
   * `:now` — `DateTime` for TTL and cache writes
-  * `:ttl_ms` — negative-cache window (default 60_000)
+  * `:ttl_ms` — negative-cache window (default `ReaderReady.negative_ttl_ms/0`)
   """
   @spec serve(String.t() | integer(), keyword()) :: serve_result()
   def serve(id_or_rkey, opts \\ []) do
@@ -120,7 +120,7 @@ defmodule ContextBot.StandardSite.Mirror do
 
   defp decide(invocation, opts) do
     now = Keyword.get(opts, :now, DateTime.utc_now())
-    ttl_ms = Keyword.get(opts, :ttl_ms, @negative_ttl_ms)
+    ttl_ms = Keyword.get(opts, :ttl_ms, ReaderReady.negative_ttl_ms())
     check = Keyword.get(opts, :check) || index_check()
     reader_url = Document.reader_url_from_uri(invocation.standard_site_document_uri)
 
@@ -131,7 +131,7 @@ defmodule ContextBot.StandardSite.Mirror do
       match?(%DateTime{}, invocation.reader_ready_at) ->
         {:redirect, reader_url}
 
-      recently_checked?(invocation.reader_checked_at, now, ttl_ms) ->
+      ReaderReady.recently_checked?(invocation.reader_checked_at, now, ttl_ms) ->
         {:mirror, invocation, format_markdown(invocation)}
 
       true ->
@@ -188,13 +188,6 @@ defmodule ContextBot.StandardSite.Mirror do
   end
 
   defp publishable(_invocation), do: nil
-
-  defp recently_checked?(%DateTime{} = checked_at, now, ttl_ms)
-       when is_integer(ttl_ms) and ttl_ms > 0 do
-    DateTime.diff(now, checked_at, :millisecond) < ttl_ms
-  end
-
-  defp recently_checked?(_checked_at, _now, _ttl_ms), do: false
 
   defp document_repo(%Invocation{} = invocation) do
     case Document.parse_document_uri(invocation.standard_site_document_uri) do

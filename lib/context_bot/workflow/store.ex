@@ -188,8 +188,9 @@ defmodule ContextBot.Workflow.Store do
   Caches a Standard Reader index probe on the invocation row.
 
   A confirmed `:indexed` result latches `reader_ready_at`. `:not_indexed` and
-  `:ambiguous` only refresh `reader_checked_at` so the public mirror can skip
-  the AppView until the negative TTL expires. This never clears a ready latch.
+  `:ambiguous` only refresh `reader_checked_at` so Mirror and `ReaderReady`
+  can skip the AppView until the negative TTL expires. This never clears a
+  ready latch.
   """
   @spec record_reader_index(Invocation.t(), :indexed | :not_indexed | :ambiguous, DateTime.t()) ::
           {:ok, Invocation.t()} | {:error, Changeset.t()}
