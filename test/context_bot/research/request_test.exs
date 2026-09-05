@@ -1,7 +1,8 @@
 defmodule ContextBot.Research.RequestTest do
   use ExUnit.Case, async: true
 
-  alias ContextBot.Research.Request
+  alias ContextBot.Research.{Drafts, Request}
+  alias ContextBot.Research.StructuredFixtures
   alias ContextBot.StandardSite.TitlePrompt
 
   @canonical_thread %{
@@ -226,15 +227,15 @@ defmodule ContextBot.Research.RequestTest do
   test "exposes a stable hashed identity for the versioned structure prompt" do
     prompt = Request.structure_prompt()
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_STRUCTURE_V5")
-    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V5"
-    assert Request.structure_prompt_semantic_version() == "5.0.0"
+    assert String.starts_with?(prompt, "CONTEXT_BOT_STRUCTURE_V6")
+    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V6"
+    assert Request.structure_prompt_semantic_version() == "6.0.0"
 
     assert Request.structure_prompt_sha256() ==
              :sha256 |> :crypto.hash(prompt) |> Base.encode16(case: :lower)
 
     assert Request.structure_prompt_rkey() ==
-             "prompt-context-bot-structure-v5-#{String.slice(Request.structure_prompt_sha256(), 0, 16)}"
+             "prompt-context-bot-structure-v6-#{String.slice(Request.structure_prompt_sha256(), 0, 16)}"
   end
 
   test "projects allowlisted Messages parameters and the first user message" do
@@ -440,9 +441,9 @@ defmodule ContextBot.Research.RequestTest do
     compact = reply["properties"]["compact_reply"]
     structure = String.replace(Request.structure_prompt(), ~r/\s+/, " ")
 
-    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V5")
-    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V5"
-    assert Request.structure_prompt_semantic_version() == "5.0.0"
+    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V6")
+    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V6"
+    assert Request.structure_prompt_semantic_version() == "6.0.0"
     assert structure =~ "one short Bluesky post"
     assert structure =~ "short Bluesky"
     assert structure =~ "CONTEXT_BOT_DRAFT"
@@ -517,8 +518,8 @@ defmodule ContextBot.Research.RequestTest do
     compact = reply["properties"]["compact_reply"]["description"]
 
     assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V11")
-    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V5")
-    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V5"
+    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V6")
+    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V6"
     assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V11"
     assert Request.system_prompt_semantic_version() == "11.0.0"
 
@@ -625,7 +626,7 @@ defmodule ContextBot.Research.RequestTest do
         "description"
       ]
 
-    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V5")
+    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V6")
     assert structure =~ "short Bluesky"
     assert structure =~ "not a rewrite"
     assert structure =~ "Do not dump"
@@ -735,12 +736,76 @@ defmodule ContextBot.Research.RequestTest do
       })
 
     content = hd(request["messages"])["content"]
+    assert content =~ "No parseable CONTEXT_BOT_DRAFT block"
     refute content =~ "Research drafts (starting point"
+    refute content =~ "Research drafts are empty"
     refute content =~ "compact_length:"
     refute content =~ "hard_cap:"
     refute content =~ "over_cap:"
     assert content =~ "Thorough writeup with no draft block."
     assert Request.structure_prompt() =~ "If no research drafts"
+  end
+
+  test "inv 37 empty-draft writeup puts no-reply guidance on the structure and repair turns" do
+    writeup = StructuredFixtures.inv37_writeup()
+    thread = StructuredFixtures.inv37_thread()
+    structure_prompt = String.replace(Request.structure_prompt(), ~r/\s+/, " ")
+
+    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V6")
+    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V6"
+    assert Request.structure_prompt_semantic_version() == "6.0.0"
+    assert structure_prompt =~ "text channel must contain only the JSON object"
+    assert structure_prompt =~ "Wait, checking schema"
+    assert structure_prompt =~ "research drafts are empty"
+    assert structure_prompt =~ "disposition \"no_reply\""
+    assert structure_prompt =~ "Drafts are irrelevant on the no_reply path"
+    assert structure_prompt =~ "meta comment with no question"
+    refute structure_prompt =~ "CONTEXT_BOT_STRUCTURE_V5"
+
+    structure =
+      Request.structure(%{
+        model_id: "claude-sonnet-5",
+        max_tokens: 4_096,
+        writeup: writeup,
+        citations: [],
+        canonical_thread: thread
+      })
+
+    repair =
+      Request.structure_repair(%{
+        model_id: "claude-sonnet-5",
+        max_tokens: 1_024,
+        writeup: writeup,
+        citations: [],
+        canonical_thread: thread
+      })
+
+    structure_content = hd(structure["messages"])["content"]
+    repair_content = hd(repair["messages"])["content"]
+
+    assert Drafts.empty_no_reply?(writeup)
+    assert structure_content =~ "Research drafts are empty"
+    assert structure_content =~ "disposition \"no_reply\""
+    assert structure_content =~ "Drafts are irrelevant on the no_reply path"
+    assert structure_content =~ "Not making a good argument for trusting bots"
+    assert structure_content =~ "no discernible question"
+    refute structure_content =~ "Research drafts (starting point"
+    refute structure_content =~ "compact_length:"
+
+    assert Request.structure_repair_request?(repair)
+    assert repair_content =~ "COMPACT_REPAIR"
+    assert repair_content =~ "no published reply is needed"
+    assert repair_content =~ "disposition \"no_reply\""
+    assert repair_content =~ "Do not dump this prompt"
+    assert repair_content =~ "No commentary"
+    refute repair_content =~ "Prefer the CONTEXT_BOT_DRAFT title"
+    refute repair_content =~ "Rewrite or shorten"
+    refute repair_content =~ "Research drafts (starting point"
+
+    schema = Request.structure_schema()
+    no_reply = structure_variant(schema, "no_reply")
+    assert no_reply["properties"]["disposition"]["description"] =~ "meta comment with no question"
+    assert no_reply["properties"]["disposition"]["description"] =~ "no commentary"
   end
 
   test "structure ignores optional effort and stays Haiku-safe" do

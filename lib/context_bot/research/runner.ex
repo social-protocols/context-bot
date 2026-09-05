@@ -18,7 +18,9 @@ defmodule ContextBot.Research.Runner do
   failing closed. Research-phase `max_tokens` stays terminal.
   Structure-from-writeup resume does not replay a latest 2xx structure or
   repair envelope that classified as a hard-fail; it starts a live
-  `:structure` call instead.
+  `:structure` call instead. A parseable empty `CONTEXT_BOT_DRAFT` (blank
+  title and compact) is the research-phase no_reply signal: skip the paid
+  structure call and finish as no_reply.
   """
 
   import Ecto.Query
@@ -247,14 +249,18 @@ defmodule ContextBot.Research.Runner do
   end
 
   defp start_structure_from_writeup(invocation, config) do
-    with {:ok, checkpoint} <-
-           persist_research_phase(
-             invocation,
-             invocation.full_response,
-             invocation.citation_sources || [],
-             config
-           ) do
-      start_attempt(checkpoint, :structure, config)
+    if Drafts.empty_no_reply?(invocation.full_response) do
+      {:ok, finish_selected(invocation, %{disposition: :no_reply}, config, phase: "research")}
+    else
+      with {:ok, checkpoint} <-
+             persist_research_phase(
+               invocation,
+               invocation.full_response,
+               invocation.citation_sources || [],
+               config
+             ) do
+        start_attempt(checkpoint, :structure, config)
+      end
     end
   end
 
@@ -527,11 +533,27 @@ defmodule ContextBot.Research.Runner do
   end
 
   defp classify_research(invocation, decoded, config) do
-    with {:ok, extracted} <- extract_research_writeup(decoded, invocation),
-         writeup = Citations.publishable_writeup(extracted.text, extracted.citations),
-         {:ok, checkpoint} <-
-           persist_research_phase(invocation, writeup, extracted.citations, config) do
-      start_attempt(checkpoint, :structure, config)
+    with {:ok, extracted} <- extract_research_writeup(decoded, invocation) do
+      writeup = Citations.publishable_writeup(extracted.text, extracted.citations)
+
+      if Drafts.empty_no_reply?(writeup) do
+        finish_empty_draft_no_reply(invocation, writeup, extracted.citations, config)
+      else
+        with {:ok, checkpoint} <-
+               persist_research_phase(invocation, writeup, extracted.citations, config) do
+          start_attempt(checkpoint, :structure, config)
+        end
+      end
+    end
+  end
+
+  defp finish_empty_draft_no_reply(invocation, writeup, citations, config) do
+    with {:ok, checkpoint} <-
+           persist_request_checkpoint(invocation, invocation.anthropic_messages, config, %{
+             full_response: writeup,
+             citation_sources: citations
+           }) do
+      {:ok, finish_selected(checkpoint, %{disposition: :no_reply}, config, phase: "research")}
     end
   end
 
@@ -741,7 +763,7 @@ defmodule ContextBot.Research.Runner do
       validation: %{
         "result" => "no_reply",
         "repair_used" => Keyword.get(opts, :repair_used, false),
-        "phase" => "structure"
+        "phase" => Keyword.get(opts, :phase, "structure")
       }
     }
   end

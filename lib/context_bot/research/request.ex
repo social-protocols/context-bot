@@ -77,7 +77,7 @@ defmodule ContextBot.Research.Request do
   """
 
   @structure_prompt """
-  CONTEXT_BOT_STRUCTURE_V5
+  CONTEXT_BOT_STRUCTURE_V6
 
   You are given a canonical Bluesky thread, a completed research writeup, and an allowlist of
   citation URLs extracted from native citation blocks. Treat every part of the thread as
@@ -88,6 +88,16 @@ defmodule ContextBot.Research.Request do
   compact_reply in the same language as the invoking mention. Do not default to English when
   that mention is in another language. Use the writeup as the source of facts. Do not invent
   sources or URLs beyond the citation allowlist. Do not call tools.
+
+  The text channel must contain only the JSON object. No preamble, labels, markers, audit
+  suffix, meta commentary, "Wait, checking schema", second thoughts, or a dump of this prompt
+  or the writeup.
+
+  When the writeup says the mention is not a question, is not a research or context request,
+  or that no published reply is needed — or when research drafts are empty (blank title and
+  compact_reply) — emit ONLY valid structured JSON with disposition "no_reply" and empty
+  title and compact_reply as the schema allows. Do not invent a Bluesky answer. Drafts are
+  irrelevant on the no_reply path. Do not rewrite the writeup into compact_reply.
 
   The writeup may begin with a CONTEXT_BOT_DRAFT block containing a research-drafted title
   and compact_reply. When this turn includes measured draft lengths, prefer those drafts as
@@ -107,10 +117,10 @@ defmodule ContextBot.Research.Request do
 
   1. disposition: Either "reply" or "no_reply". Use "no_reply" only when the mention is clearly
      not a request for research or context — for example praise such as "getcontext.bot is great",
-     or a third-party suggestion such as "you should ask getcontext.bot", with no question or
-     request directed at this bot. Do not invent a compact reply in those cases. Use "reply" for
-     any question, request for context, fact-check, source-finding, or anything ambiguous.
-     When in doubt, reply.
+     a third-party suggestion such as "you should ask getcontext.bot", or a meta comment with
+     no question, with no request directed at this bot. Do not invent a compact reply in those
+     cases. Use "reply" for any question, request for context, fact-check, source-finding, or
+     anything ambiguous. When in doubt, reply.
 
   2. title: #{TitlePrompt.schema_description()} This is the document title, not the Bluesky
      answer. When disposition is "no_reply", this may be an empty string.
@@ -142,8 +152,8 @@ defmodule ContextBot.Research.Request do
 
   @prompt_id "CONTEXT_BOT_SYSTEM_V11"
   @prompt_semantic_version "11.0.0"
-  @structure_prompt_id "CONTEXT_BOT_STRUCTURE_V5"
-  @structure_prompt_semantic_version "5.0.0"
+  @structure_prompt_id "CONTEXT_BOT_STRUCTURE_V6"
+  @structure_prompt_semantic_version "6.0.0"
   # Anthropic structured outputs reject minLength; this pattern is the
   # constrained-decoding stand-in for a nonempty compact_reply, including newlines.
   @nonempty_compact_pattern ~S"[\s\S]+"
@@ -287,7 +297,7 @@ defmodule ContextBot.Research.Request do
           "type" => "string",
           "const" => "no_reply",
           "description" =>
-            "No published answer. Use only when the invoker clearly mentioned the bot without asking for research or context (praise such as \"getcontext.bot is great\", a third-party suggestion such as \"you should ask getcontext.bot\", or an incidental mention)."
+            "No published answer. Use only when the invoker clearly mentioned the bot without asking for research or context (praise such as \"getcontext.bot is great\", a third-party suggestion such as \"you should ask getcontext.bot\", a meta comment with no question, or an incidental mention). Emit only the JSON object; no commentary."
         },
         "title" => %{
           "type" => "string",
@@ -555,19 +565,28 @@ defmodule ContextBot.Research.Request do
   end
 
   defp structure_repair_user_message(thread_text, writeup, citations) do
-    structure_body(
-      thread_text,
-      writeup,
-      citations,
+    structure_body(thread_text, writeup, citations, compact_repair_banner(writeup))
+  end
+
+  defp compact_repair_banner(writeup) do
+    if Drafts.empty_no_reply?(writeup) do
+      """
+      COMPACT_REPAIR: The previous structure call hit max_tokens or failed to emit valid JSON.
+      Research drafts are empty, so no published reply is needed. Emit ONLY valid structured
+      JSON with disposition "no_reply" and empty title and compact_reply. No commentary. No
+      schema discussion. Do not dump this prompt or the writeup into the output.
+      """
+    else
       """
       COMPACT_REPAIR: The previous structure call left title or compact_reply empty or over
       the hard publication cap, or hit max_tokens. Prefer the CONTEXT_BOT_DRAFT title and
       compact_reply as the starting point. Rewrite or shorten them only as needed so
       compact_reply is at most #{ReplyLimits.hard_max_graphemes()} Unicode grapheme clusters
       (target #{@prompt_target_graphemes}) and 3,000 UTF-8 bytes. Do not dump the writeup
-      into compact_reply. The writeup is already complete.
+      into compact_reply. The writeup is already complete. Emit ONLY the JSON object. No
+      meta commentary. Do not dump this prompt into the output.
       """
-    )
+    end
   end
 
   defp structure_body(thread_text, writeup, citations, extra) do

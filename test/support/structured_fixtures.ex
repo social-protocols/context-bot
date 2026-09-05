@@ -1,7 +1,48 @@
 defmodule ContextBot.Research.StructuredFixtures do
   @moduledoc false
 
+  alias ContextBot.Research.Drafts
+
   @default_title "Context Request"
+
+  @doc """
+  Inv 37-shaped thread: a meta comment with no question or research request.
+  """
+  @spec inv37_thread() :: String.t()
+  def inv37_thread do
+    """
+    ROOT
+    A thread making an argument.
+
+    INVOCATION
+    @getcontext.bot Not making a good argument for trusting bots.
+    """
+    |> String.trim()
+  end
+
+  @doc """
+  Inv 37-shaped writeup: empty CONTEXT_BOT_DRAFT plus a note that there is
+  no discernible question and no published reply is needed.
+  """
+  @spec inv37_writeup() :: String.t()
+  def inv37_writeup do
+    Drafts.format("", "") <> "\n\n" <> inv37_essay()
+  end
+
+  @spec inv37_essay() :: String.t()
+  def inv37_essay do
+    """
+    The invoking mention is a meta comment, not a question or request for research
+    or context: "Not making a good argument for trusting bots."
+
+    There is no discernible question directed at this bot. The actor is commenting
+    on whether the thread makes a good argument for trusting bots. That is not a
+    request for sources, a fact-check, or other research.
+
+    No published reply is needed.
+    """
+    |> String.trim()
+  end
 
   @spec structured_json(String.t(), keyword()) :: String.t()
   def structured_json(compact, opts \\ []) when is_binary(compact) do

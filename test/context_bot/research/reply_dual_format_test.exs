@@ -223,6 +223,40 @@ defmodule ContextBot.Research.ReplyDualFormatTest do
       end
     end
 
+    test "accepts clean no_reply JSON and fails closed on chatter or truncated no_reply" do
+      clean = StructuredFixtures.no_reply_json()
+
+      assert {:ok, selected} = Reply.select([%{"type" => "text", "text" => clean}], :end_turn)
+      assert selected.disposition == :no_reply
+      assert selected.text == ""
+
+      chatter =
+        "Wait, checking schema...\nThe no_reply variant allows empty fields.\n" <> clean
+
+      assert Reply.select([%{"type" => "text", "text" => chatter}], :end_turn) ==
+               {:error, :invalid_structured_output}
+
+      truncated = ~s({"disposition":"no_reply","title":"","compact_reply":)
+
+      assert Reply.select([%{"type" => "text", "text" => truncated}], :end_turn) ==
+               {:error, :invalid_structured_output}
+
+      assert Reply.select([%{"type" => "text", "text" => truncated}], :max_tokens) ==
+               {:error, :max_tokens}
+
+      assert {:ok, routed} =
+               Reply.select(
+                 [
+                   %{"type" => "text", "text" => "Wait, checking schema"},
+                   %{"type" => "text", "text" => clean}
+                 ],
+                 :end_turn
+               )
+
+      assert routed.disposition == :no_reply
+      assert routed.text == ""
+    end
+
     test "treats legacy JSON without disposition as a reply" do
       content = [
         %{
