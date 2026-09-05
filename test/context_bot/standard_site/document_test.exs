@@ -61,6 +61,19 @@ defmodule ContextBot.StandardSite.DocumentTest do
     end
   end
 
+  defmodule TrackingDocClientWithDocument do
+    @moduledoc false
+
+    def get_record(repo, collection, rkey) do
+      FakeDocClientWithDocument.get_record(repo, collection, rkey)
+    end
+
+    def put_record(_repo, _collection, _rkey, record) do
+      send(self(), {:document_put, record})
+      {:ok, 200, %{}, %{}}
+    end
+  end
+
   describe "create/5" do
     test "creates a document record successfully" do
       assert {:ok, result} =
@@ -156,6 +169,25 @@ defmodule ContextBot.StandardSite.DocumentTest do
       refute markdown =~ "### Canonical thread"
       refute markdown =~ "CONTEXT_BOT_THREAD_V1"
       refute markdown =~ "The first user message sent to the Messages API"
+    end
+
+    test "omits bskyPostRef at create time because the reply is not published yet" do
+      content =
+        @content
+        |> Map.put(:reply_uri, "at://did:plc:contextbot123/app.bsky.feed.post/3kreply")
+        |> Map.put(:reply_cid, "bafyreireplycid1")
+
+      assert {:ok, _result} =
+               Document.create(
+                 TrackingDocClient,
+                 @repo,
+                 @publication_uri,
+                 content,
+                 @created_at
+               )
+
+      assert_received {:document_put, record}
+      refute Map.has_key?(record, "bskyPostRef")
     end
 
     test "maps title and description from the question, not the rkey or reply" do
@@ -439,18 +471,66 @@ defmodule ContextBot.StandardSite.DocumentTest do
     end
   end
 
-  describe "add_post_ref/4" do
-    test "updates document with bskyPostRef" do
-      post_uri = "at://did:plc:abc/app.bsky.feed.post/3k456"
+  describe "add_post_ref/5" do
+    test "writes bskyPostRef as a typed strongRef of the published reply" do
+      reply_uri = "at://did:plc:contextbot123/app.bsky.feed.post/3kreplypart1"
+      reply_cid = "bafyreireplycid1"
+      invocation_uri = "at://did:plc:abc/app.bsky.feed.post/3k123"
 
-      assert :ok = Document.add_post_ref(FakeDocClientWithDocument, @repo, "3k123", post_uri)
+      assert :ok =
+               Document.add_post_ref(
+                 TrackingDocClientWithDocument,
+                 @repo,
+                 "3k123",
+                 reply_uri,
+                 reply_cid
+               )
+
+      assert_received {:document_put, record}
+
+      assert record["bskyPostRef"] == %{
+               "$type" => "com.atproto.repo.strongRef",
+               "uri" => reply_uri,
+               "cid" => reply_cid
+             }
+
+      refute is_binary(record["bskyPostRef"])
+      refute record["bskyPostRef"]["uri"] == invocation_uri
+    end
+
+    test "returns error when the reply uri or cid is not a strongRef" do
+      assert {:error, :invalid_uri} =
+               Document.add_post_ref(
+                 TrackingDocClientWithDocument,
+                 @repo,
+                 "3k123",
+                 "at://did:plc:abc/site.standard.document/3k123",
+                 "bafyreireplycid1"
+               )
+
+      assert {:error, :invalid_cid} =
+               Document.add_post_ref(
+                 TrackingDocClientWithDocument,
+                 @repo,
+                 "3k123",
+                 "at://did:plc:abc/app.bsky.feed.post/3kreplypart1",
+                 ""
+               )
+
+      refute_received {:document_put, _record}
     end
 
     test "returns error when document doesn't exist" do
-      post_uri = "at://did:plc:abc/app.bsky.feed.post/3k456"
+      reply_uri = "at://did:plc:abc/app.bsky.feed.post/3k456"
 
       assert {:error, :record_not_found} =
-               Document.add_post_ref(FakeDocClientNotFound, @repo, "3k123", post_uri)
+               Document.add_post_ref(
+                 FakeDocClientNotFound,
+                 @repo,
+                 "3k123",
+                 reply_uri,
+                 "bafyreireplycid1"
+               )
     end
   end
 

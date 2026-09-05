@@ -18,6 +18,7 @@ defmodule ContextBot.Workers.ReplyWorker do
   alias ContextBot.ATProto.{Client, ReqClient, TID}
   alias ContextBot.{Operations, Repo}
   alias ContextBot.Reply.FollowerPost
+  alias ContextBot.StandardSite.Document
   alias ContextBot.Workflow.{Invocation, Store}
 
   @collection "app.bsky.feed.post"
@@ -778,6 +779,8 @@ defmodule ContextBot.Workers.ReplyWorker do
   defp retry_or_exhausted(_invocation, _token, reason, _dependencies), do: {:error, reason}
 
   defp finish_publication(invocation, token, reply_attrs, completed_at, dependencies) do
+    attach_bsky_post_ref(invocation, reply_attrs, dependencies)
+
     case publish_follower_post(invocation, token, dependencies) do
       {:ok, follower_attrs} ->
         transition_terminal(
@@ -797,6 +800,37 @@ defmodule ContextBot.Workers.ReplyWorker do
       {:retry, reason} ->
         retry_or_exhausted(invocation, token, reason, dependencies)
     end
+  end
+
+  defp attach_bsky_post_ref(
+         invocation,
+         %{reply_uri: uri, reply_cid: cid},
+         dependencies
+       )
+       when is_binary(uri) and uri != "" and is_binary(cid) and cid != "" do
+    rkey = invocation.standard_site_document_rkey
+    repo = invocation.reply_repo
+
+    if attachable_document_ref?(repo, rkey) do
+      case Document.add_post_ref(dependencies.client, repo, rkey, uri, cid) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Operations.log_standard_site(invocation,
+            collection: "site.standard.document",
+            reason: reason
+          )
+      end
+    end
+
+    :ok
+  end
+
+  defp attach_bsky_post_ref(_invocation, _reply_attrs, _dependencies), do: :ok
+
+  defp attachable_document_ref?(repo, rkey) do
+    is_binary(repo) and Regex.match?(@did_regex, repo) and is_binary(rkey) and rkey != ""
   end
 
   defp publish_follower_post(invocation, token, dependencies) do

@@ -5,6 +5,8 @@ defmodule ContextBot.ATProto.StrongRef do
 
   alias ContextBot.ATProto.ATURI
 
+  @type_name "com.atproto.repo.strongRef"
+
   @spec new(binary(), binary()) :: {:ok, map()} | {:error, :invalid_uri | :invalid_cid}
   def new(uri, cid) when is_binary(cid) and byte_size(cid) > 0 do
     case ATURI.parse(uri) do
@@ -15,4 +17,15 @@ defmodule ContextBot.ATProto.StrongRef do
 
   def new(uri, _cid) when is_binary(uri), do: {:error, :invalid_cid}
   def new(_uri, _cid), do: {:error, :invalid_uri}
+
+  @doc """
+  Same as `new/2`, with the lexicon `$type` for records that store a typed strongRef.
+  """
+  @spec typed(binary(), binary()) :: {:ok, map()} | {:error, :invalid_uri | :invalid_cid}
+  def typed(uri, cid) do
+    case new(uri, cid) do
+      {:ok, ref} -> {:ok, Map.put(ref, "$type", @type_name)}
+      error -> error
+    end
+  end
 end

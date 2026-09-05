@@ -111,6 +111,7 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
 
   @bot_did "did:plc:contextbot123"
   @collection "app.bsky.feed.post"
+  @document_collection "site.standard.document"
   @now ~U[2026-07-29 13:00:00.123456Z]
   @rkey "3mreplyrecord2a"
 
@@ -701,6 +702,144 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
 
   test "contextual backoff rejects a minus-signed zero Retry-After value" do
     assert ReplyWorker.backoff(rate_limited_job("-0")) == 15
+  end
+
+  test "after the part-1 reply is published, sets document bskyPostRef to that reply strongRef" do
+    doc_rkey = "3kdocumentrkey1"
+    reply_cid = "bafy-reply-created"
+    follower_rkey = "3mfollowerpost1"
+    follower_cid = "bafy-follower-created"
+    created_at = ~U[2026-07-29 13:00:00.123456Z]
+
+    invocation =
+      follower_invocation("bsky-post-ref", %{
+        standard_site_document_rkey: doc_rkey
+      })
+
+    {:ok, follower_record} = FollowerPost.build(invocation, created_at)
+
+    invocation =
+      invocation
+      |> Invocation.changeset(%{
+        follower_post_rkey: follower_rkey,
+        follower_post_record: follower_record
+      })
+      |> Repo.update!()
+
+    reply_remote = remote_record(invocation, reply_cid)
+
+    follower_remote = %{
+      "uri" => "at://#{@bot_did}/#{@collection}/#{follower_rkey}",
+      "cid" => follower_cid,
+      "value" => follower_record
+    }
+
+    document_value = %{
+      "$type" => @document_collection,
+      "site" => "at://#{@bot_did}/site.standard.publication/context-bot",
+      "title" => "What Is The Evidence?",
+      "textContent" => "Full response",
+      "publishedAt" => "2026-07-29T12:34:56.123456Z"
+    }
+
+    remote =
+      configure_remote(
+        get_results: [
+          {:error, :record_not_found},
+          {:ok, 200, %{}, reply_remote},
+          {:ok, 200, %{}, %{"value" => document_value}},
+          {:error, :record_not_found},
+          {:ok, 200, %{}, follower_remote}
+        ],
+        put_results: [
+          {:ok, 200, %{}, %{"uri" => reply_remote["uri"], "cid" => "untrusted-put-cid"}},
+          {:ok, 200, %{}, %{}},
+          {:ok, 200, %{}, %{"uri" => follower_remote["uri"], "cid" => follower_cid}}
+        ]
+      )
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert persisted.reply_uri == reply_remote["uri"]
+    assert persisted.reply_cid == reply_cid
+    assert persisted.follower_post_uri == follower_remote["uri"]
+    assert persisted.follower_post_cid == follower_cid
+
+    snapshot = Remote.snapshot(remote)
+
+    assert {:put, @bot_did, @document_collection, ^doc_rkey, doc_record} =
+             Enum.find(snapshot.calls, fn
+               {:put, @bot_did, @document_collection, ^doc_rkey, _record} -> true
+               _other -> false
+             end)
+
+    assert doc_record["bskyPostRef"] == %{
+             "$type" => "com.atproto.repo.strongRef",
+             "uri" => persisted.reply_uri,
+             "cid" => persisted.reply_cid
+           }
+
+    refute doc_record["bskyPostRef"]["uri"] == invocation.invocation_uri
+    refute doc_record["bskyPostRef"]["uri"] == persisted.follower_post_uri
+    refute doc_record["bskyPostRef"]["cid"] == persisted.follower_post_cid
+
+    refute Enum.any?(snapshot.calls, fn
+             {:put, _repo, @document_collection, _rkey, %{"bskyPostRef" => %{"uri" => uri}}} ->
+               uri == invocation.invocation_uri
+
+             _other ->
+               false
+           end)
+  end
+
+  test "a failed document bskyPostRef update does not block reply completion" do
+    doc_rkey = "3kdocumentfail1"
+
+    invocation =
+      invocation("bsky-post-ref-fail", :reply_ready, %{standard_site_document_rkey: doc_rkey})
+
+    reply_remote = remote_record(invocation, "bafy-created")
+
+    remote =
+      configure_remote(
+        get_results: [
+          {:error, :record_not_found},
+          {:ok, 200, %{}, reply_remote},
+          {:error, :timeout}
+        ],
+        put_results: [
+          {:ok, 200, %{}, %{"uri" => reply_remote["uri"], "cid" => "untrusted-put-cid"}}
+        ]
+      )
+
+    previous_level = Logger.level()
+    Logger.configure(level: :warning)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    log =
+      capture_log(
+        [level: :warning, formatter: {ContextBot.Logging.JSONFormatter, %{}}],
+        fn -> assert :ok = perform(invocation) end
+      )
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert persisted.reply_uri == reply_remote["uri"]
+    assert persisted.reply_cid == "bafy-created"
+
+    refute Enum.any?(Remote.snapshot(remote).calls, fn
+             {:put, _repo, @document_collection, _rkey, _record} -> true
+             _other -> false
+           end)
+
+    decoded = Jason.decode!(log)
+    assert decoded["message"] == "context_bot_standard_site"
+    assert decoded["invocation_id"] == invocation.id
+    assert decoded["collection"] == @document_collection
+    refute log =~ invocation.invocation_uri
+    refute log =~ persisted.reply_uri
   end
 
   test "after a successful reply, publishes one top-level follower post quoting the root" do

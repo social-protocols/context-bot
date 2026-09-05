@@ -5,11 +5,13 @@ defmodule ContextBot.StandardSite.Document do
   New documents use a short topic summary as Reader `title`, the invoking-post
   text as written as `description`, and open the Markpub body with the compact
   Summary, then a responding-to line and the research writeup. The Claude
-  continue link sits immediately before the production metadata. Existing
-  published records are not rewritten by the publication path.
+  continue link sits immediately before the production metadata. After the
+  part-1 Bluesky reply is published, `bskyPostRef` is a typed strongRef of
+  that reply so off-platform comments attach there. Existing published
+  records are not rewritten by the publication path.
   """
 
-  alias ContextBot.ATProto.{Client, TID}
+  alias ContextBot.ATProto.{Client, StrongRef, TID}
   alias ContextBot.Research.Drafts
   alias ContextBot.StandardSite.PageCopy
 
@@ -131,21 +133,35 @@ defmodule ContextBot.StandardSite.Document do
   defp reader_url(did, rkey), do: "#{@reader_base_url}/#{did}/#{rkey}"
 
   @doc """
-  Updates an existing document to add the bskyPostRef after the Bluesky reply is published.
+  Updates an existing document with `bskyPostRef` after the part-1 Bluesky reply is published.
 
-  This is a best-effort operation. Failures are logged but do not block the workflow.
+  The lexicon uses this strongRef for off-platform comments, so it must point at
+  Context Bot's published reply (`reply_uri` + `reply_cid`), not the invoking mention.
+  Callers treat this as best-effort: log failures and do not block reply publication.
   """
-  @spec add_post_ref(Client.t(), String.t(), String.t(), String.t()) :: :ok | {:error, atom()}
+  @spec add_post_ref(Client.t(), String.t(), String.t(), String.t(), String.t()) ::
+          :ok | {:error, atom()}
   def add_post_ref(
         client \\ ContextBot.ATProto.ReqClient,
         repo,
         rkey,
-        post_uri
+        post_uri,
+        post_cid
       )
-      when is_binary(repo) and is_binary(rkey) and is_binary(post_uri) do
+      when is_binary(repo) and is_binary(rkey) and is_binary(post_uri) and is_binary(post_cid) do
+    case StrongRef.typed(post_uri, post_cid) do
+      {:ok, ref} ->
+        put_post_ref(client, repo, rkey, ref)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp put_post_ref(client, repo, rkey, ref) do
     case client.get_record(repo, @collection, rkey) do
       {:ok, _status, _headers, %{"value" => record}} when is_map(record) ->
-        updated_record = Map.put(record, "bskyPostRef", post_uri)
+        updated_record = Map.put(record, "bskyPostRef", ref)
 
         case client.put_record(repo, @collection, rkey, updated_record) do
           {:ok, _status, _headers, _body} -> :ok
