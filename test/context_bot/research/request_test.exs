@@ -80,7 +80,7 @@ defmodule ContextBot.Research.RequestTest do
   test "sends one versioned prompt with the complete research and reply safety contract" do
     prompt = Request.initial(@canonical_thread, config())["system"]
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V11")
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V12")
     assert prompt =~ "ancestor"
     assert prompt =~ "unstable"
     assert prompt =~ "primary sources"
@@ -101,7 +101,8 @@ defmodule ContextBot.Research.RequestTest do
     assert prompt =~ "getcontext.bot is"
     assert prompt =~ "great"
     assert prompt =~ "you should ask getcontext.bot"
-    assert prompt =~ "When in doubt, research"
+    refute prompt =~ "When in doubt, research"
+    assert prompt =~ "obvious question or request"
     assert prompt =~ "CONTEXT_BOT_DRAFT"
     assert prompt =~ "compact_reply"
     refute prompt =~ "full_response"
@@ -213,29 +214,29 @@ defmodule ContextBot.Research.RequestTest do
   test "exposes a stable hashed identity for the versioned system prompt" do
     prompt = Request.system_prompt()
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V11")
-    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V11"
-    assert Request.system_prompt_semantic_version() == "11.0.0"
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V12")
+    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V12"
+    assert Request.system_prompt_semantic_version() == "12.0.0"
 
     assert Request.system_prompt_sha256() ==
              :sha256 |> :crypto.hash(prompt) |> Base.encode16(case: :lower)
 
     assert Request.system_prompt_rkey() ==
-             "prompt-context-bot-system-v11-#{String.slice(Request.system_prompt_sha256(), 0, 16)}"
+             "prompt-context-bot-system-v12-#{String.slice(Request.system_prompt_sha256(), 0, 16)}"
   end
 
   test "exposes a stable hashed identity for the versioned structure prompt" do
     prompt = Request.structure_prompt()
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_STRUCTURE_V6")
-    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V6"
-    assert Request.structure_prompt_semantic_version() == "6.0.0"
+    assert String.starts_with?(prompt, "CONTEXT_BOT_STRUCTURE_V7")
+    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V7"
+    assert Request.structure_prompt_semantic_version() == "7.0.0"
 
     assert Request.structure_prompt_sha256() ==
              :sha256 |> :crypto.hash(prompt) |> Base.encode16(case: :lower)
 
     assert Request.structure_prompt_rkey() ==
-             "prompt-context-bot-structure-v6-#{String.slice(Request.structure_prompt_sha256(), 0, 16)}"
+             "prompt-context-bot-structure-v7-#{String.slice(Request.structure_prompt_sha256(), 0, 16)}"
   end
 
   test "projects allowlisted Messages parameters and the first user message" do
@@ -247,8 +248,8 @@ defmodule ContextBot.Research.RequestTest do
         research_max_tokens: 4_096
       })
 
-    assert projection.prompt.id == "CONTEXT_BOT_SYSTEM_V11"
-    assert projection.prompt.semantic_version == "11.0.0"
+    assert projection.prompt.id == "CONTEXT_BOT_SYSTEM_V12"
+    assert projection.prompt.semantic_version == "12.0.0"
     assert projection.prompt.sha256 == Request.system_prompt_sha256()
     assert projection.parameters["anthropic-version"] == "2023-06-01"
     assert projection.parameters["model"] == "claude-sonnet-5"
@@ -407,7 +408,7 @@ defmodule ContextBot.Research.RequestTest do
     compact = structure_variant(schema, "reply")["properties"]["compact_reply"]["description"]
     structure = String.replace(Request.structure_prompt(), ~r/\s+/, " ")
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V11")
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V12")
     assert normalized =~ "invoking mention"
     assert normalized =~ "last post in the canonical thread"
     assert normalized =~ "every distinct question"
@@ -441,9 +442,9 @@ defmodule ContextBot.Research.RequestTest do
     compact = reply["properties"]["compact_reply"]
     structure = String.replace(Request.structure_prompt(), ~r/\s+/, " ")
 
-    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V6")
-    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V6"
-    assert Request.structure_prompt_semantic_version() == "6.0.0"
+    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V7")
+    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V7"
+    assert Request.structure_prompt_semantic_version() == "7.0.0"
     assert structure =~ "one short Bluesky post"
     assert structure =~ "short Bluesky"
     assert structure =~ "CONTEXT_BOT_DRAFT"
@@ -494,9 +495,9 @@ defmodule ContextBot.Research.RequestTest do
     schema = Request.output_schema()
     compact = structure_variant(schema, "reply")["properties"]["compact_reply"]["description"]
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V11")
-    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V11"
-    assert Request.system_prompt_semantic_version() == "11.0.0"
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V12")
+    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V12"
+    assert Request.system_prompt_semantic_version() == "12.0.0"
     assert normalized =~ "native web_fetch citations"
     assert normalized =~ "Do not invent URLs"
     refute Map.has_key?(structure_variant(schema, "reply")["properties"], "full_response")
@@ -517,11 +518,11 @@ defmodule ContextBot.Research.RequestTest do
     title = reply["properties"]["title"]["description"]
     compact = reply["properties"]["compact_reply"]["description"]
 
-    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V11")
-    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V6")
-    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V6"
-    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V11"
-    assert Request.system_prompt_semantic_version() == "11.0.0"
+    assert String.starts_with?(prompt, "CONTEXT_BOT_SYSTEM_V12")
+    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V7")
+    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V7"
+    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V12"
+    assert Request.system_prompt_semantic_version() == "12.0.0"
 
     assert normalized =~ "same language as the invoking mention"
     assert normalized =~ "Do not default to English"
@@ -626,7 +627,7 @@ defmodule ContextBot.Research.RequestTest do
         "description"
       ]
 
-    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V6")
+    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V7")
     assert structure =~ "short Bluesky"
     assert structure =~ "not a rewrite"
     assert structure =~ "Do not dump"
@@ -746,21 +747,125 @@ defmodule ContextBot.Research.RequestTest do
     assert Request.structure_prompt() =~ "If no research drafts"
   end
 
+  test "V12 reply gate requires an obvious question or request; claim-only counterarguments are no_reply" do
+    prompt = String.replace(Request.system_prompt(), ~r/\s+/, " ")
+    structure = String.replace(Request.structure_prompt(), ~r/\s+/, " ")
+    schema = Request.structure_schema()
+    reply = structure_variant(schema, "reply")
+    no_reply = structure_variant(schema, "no_reply")
+    compact = reply["properties"]["compact_reply"]["description"]
+    reply_disposition = reply["properties"]["disposition"]["description"]
+    no_reply_disposition = no_reply["properties"]["disposition"]["description"]
+
+    assert String.starts_with?(Request.system_prompt(), "CONTEXT_BOT_SYSTEM_V12")
+    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V7")
+    assert Request.system_prompt_id() == "CONTEXT_BOT_SYSTEM_V12"
+    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V7"
+
+    assert prompt =~ "obvious question or request aimed at this bot"
+    assert prompt =~ "counterargument or debate move"
+    assert prompt =~ "checkable claims"
+    assert prompt =~ "does not ask this bot anything"
+    assert prompt =~ "Do not fact-check a claim-dump"
+    assert prompt =~ "leave title and compact_reply blank"
+    refute prompt =~ "When in doubt, research"
+    refute prompt =~ "When in doubt, reply"
+    refute prompt =~ "enumerate"
+    refute prompt =~ "answer each claim"
+
+    assert structure =~ "obvious question or request aimed at this bot"
+    assert structure =~ "counterargument or debate move"
+    assert structure =~ "checkable claims"
+    assert structure =~ "Do not fact-check a claim-dump"
+    refute structure =~ "When in doubt, reply"
+    refute structure =~ "anything ambiguous"
+    refute structure =~ "enumerate"
+    refute structure =~ "answer each claim"
+
+    assert reply_disposition =~ "obvious question or request aimed at this bot"
+    refute reply_disposition =~ "When in doubt, reply"
+    refute reply_disposition =~ "anything ambiguous"
+    assert no_reply_disposition =~ "counterargument or debate move"
+    assert no_reply_disposition =~ "checkable claims"
+    assert no_reply_disposition =~ "Do not fact-check a claim-dump"
+    assert no_reply_disposition =~ "no commentary"
+
+    assert prompt =~ "Write it as a reply to the invoking mention"
+    assert prompt =~ "Both claims check out"
+    assert prompt =~ "floating referent"
+    assert structure =~ "Write it as a reply to"
+    assert structure =~ "Both claims check out"
+    assert structure =~ "floating referent"
+    assert compact =~ "reply to the invoking mention"
+    assert compact =~ "Both claims check out"
+    assert compact =~ "floating referent"
+    refute compact =~ "enumerate"
+    refute compact =~ "answer each claim"
+
+    assert prompt =~ "Identify every distinct question"
+    assert prompt =~ "Open by directly answering each asked question"
+    assert structure =~ "Open by directly answering each asked question"
+    assert compact =~ "Open by directly answering each asked question"
+  end
+
+  test "inv 35 claim-only writeup keeps the empty-draft no_reply structure banner" do
+    writeup = StructuredFixtures.inv35_writeup()
+    thread = StructuredFixtures.inv35_thread()
+
+    structure =
+      Request.structure(%{
+        model_id: "claude-sonnet-5",
+        max_tokens: 4_096,
+        writeup: writeup,
+        citations: [],
+        canonical_thread: thread
+      })
+
+    repair =
+      Request.structure_repair(%{
+        model_id: "claude-sonnet-5",
+        max_tokens: 1_024,
+        writeup: writeup,
+        citations: [],
+        canonical_thread: thread
+      })
+
+    structure_content = hd(structure["messages"])["content"]
+    repair_content = hd(repair["messages"])["content"]
+
+    assert Drafts.empty_no_reply?(writeup)
+    assert structure_content =~ "Research drafts are empty"
+    assert structure_content =~ "disposition \"no_reply\""
+    assert structure_content =~ "Drafts are irrelevant on the no_reply path"
+    assert structure_content =~ "zoonosis studies"
+    assert structure_content =~ "FBI/GenBank"
+    assert structure_content =~ "No published reply is needed"
+    refute structure_content =~ "Research drafts (starting point"
+    refute structure_content =~ "compact_length:"
+
+    assert Request.structure_repair_request?(repair)
+    assert repair_content =~ "COMPACT_REPAIR"
+    assert repair_content =~ "no published reply is needed"
+    assert repair_content =~ "disposition \"no_reply\""
+    refute repair_content =~ "Prefer the CONTEXT_BOT_DRAFT title"
+    refute repair_content =~ "Rewrite or shorten"
+  end
+
   test "inv 37 empty-draft writeup puts no-reply guidance on the structure and repair turns" do
     writeup = StructuredFixtures.inv37_writeup()
     thread = StructuredFixtures.inv37_thread()
     structure_prompt = String.replace(Request.structure_prompt(), ~r/\s+/, " ")
 
-    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V6")
-    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V6"
-    assert Request.structure_prompt_semantic_version() == "6.0.0"
+    assert String.starts_with?(Request.structure_prompt(), "CONTEXT_BOT_STRUCTURE_V7")
+    assert Request.structure_prompt_id() == "CONTEXT_BOT_STRUCTURE_V7"
+    assert Request.structure_prompt_semantic_version() == "7.0.0"
     assert structure_prompt =~ "text channel must contain only the JSON object"
     assert structure_prompt =~ "Wait, checking schema"
     assert structure_prompt =~ "research drafts are empty"
     assert structure_prompt =~ "disposition \"no_reply\""
     assert structure_prompt =~ "Drafts are irrelevant on the no_reply path"
     assert structure_prompt =~ "meta comment with no question"
-    refute structure_prompt =~ "CONTEXT_BOT_STRUCTURE_V5"
+    refute structure_prompt =~ "CONTEXT_BOT_STRUCTURE_V6"
 
     structure =
       Request.structure(%{
