@@ -9,7 +9,7 @@ defmodule ContextBot.Research.Drafts do
 
   The stored research writeup keeps the block so structure and recover can
   parse it. `strip/1` removes it from published Standard Reader /
-  `site.standard.document` / getcontext.bot writeup bodies.
+  `site.standard.document` writeup bodies.
   """
 
   alias ContextBot.Research.ReplyLimits

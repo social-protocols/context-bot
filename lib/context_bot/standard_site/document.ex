@@ -17,7 +17,6 @@ defmodule ContextBot.StandardSite.Document do
 
   @collection "site.standard.document"
   @reader_base_url "https://standard-reader.app/a"
-  @mirror_base_url "https://getcontext.bot/r"
   @claude_new_url "https://claude.ai/new"
   @continue_link_text "Continue this conversation in Claude"
   @parameter_order [
@@ -214,8 +213,8 @@ defmodule ContextBot.StandardSite.Document do
   Markdown published on the Standard Reader full-response page.
 
   The research writeup is passed through `Drafts.strip/1` so the
-  `CONTEXT_BOT_DRAFT` block never appears in Reader, PDS `textContent`, or
-  the getcontext.bot mirror. Stored sqlite `full_response` is unchanged.
+  `CONTEXT_BOT_DRAFT` block never appears in Reader or PDS `textContent`.
+  Stored sqlite `full_response` is unchanged.
 
   Requires research and structure prompt-document reader URLs, prompt
   identity/hash for both templates, and the allowlisted Messages API parameters.
@@ -305,16 +304,11 @@ defmodule ContextBot.StandardSite.Document do
   defp document_reader_url(content) when is_map(content) do
     case Map.get(content, :document_reader_url) || Map.get(content, "document_reader_url") do
       url when is_binary(url) and url != "" ->
-        if accepted_continue_url?(url), do: url, else: nil
+        if String.starts_with?(url, "#{@reader_base_url}/"), do: url, else: nil
 
       _missing ->
         nil
     end
-  end
-
-  defp accepted_continue_url?(url) do
-    String.starts_with?(url, "#{@reader_base_url}/") or
-      String.starts_with?(url, "#{@mirror_base_url}/")
   end
 
   defp validate_public_inputs(%{

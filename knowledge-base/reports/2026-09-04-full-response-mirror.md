@@ -1,8 +1,14 @@
 # getcontext.bot full-response mirror
 
-**TL;DR:** New `(full response)` links point at `https://getcontext.bot/r/{id}`.
-That page serves the stored writeup immediately and 302s to Standard Reader
-only after `app.standard-reader.getDocument` says the document is indexed.
+**Superseded:** the public `/r/` writeup mirror was rolled back. New
+`(full response)` links use the Standard Reader URL again. The index probe
+and `reader_ready_*` cache remain for follower-card deferral. See
+[2026-09-05-rollback-full-response-mirror.md](2026-09-05-rollback-full-response-mirror.md).
+
+**Historical TL;DR (as shipped in #131):** New `(full response)` links pointed
+at `https://getcontext.bot/r/{id}`. That page served the stored writeup
+immediately and 302ed to Standard Reader only after
+`app.standard-reader.getDocument` said the document was indexed.
 
 ## Why
 

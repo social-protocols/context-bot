@@ -8,7 +8,7 @@ defmodule ContextBotWeb.InvocationsController do
   import Ecto.Query
   alias ContextBot.Repo
   alias ContextBot.Research.BudgetEntry
-  alias ContextBot.StandardSite.{Document, Mirror}
+  alias ContextBot.StandardSite.Document
   alias ContextBot.Workflow.Invocation
   alias ContextBotWeb.PublicData
 
@@ -343,13 +343,9 @@ defmodule ContextBotWeb.InvocationsController do
   end
 
   defp full_response_link(inv) do
-    reader_url = Document.reader_url_from_uri(inv.standard_site_document_uri)
-    mirror_url = Mirror.public_url(inv)
-
-    if is_binary(reader_url) and is_binary(mirror_url) do
-      ~s(<a href="#{mirror_url}">full response</a>)
-    else
-      "&mdash;"
+    case Document.reader_url_from_uri(inv.standard_site_document_uri) do
+      nil -> "&mdash;"
+      url -> ~s(<a href="#{url}" target="_blank">full response</a>)
     end
   end
 
