@@ -360,7 +360,9 @@ defmodule ContextBot.POCFixture do
 
     Application.put_env(:context_bot, ReplyWorker,
       client: ReqClient,
-      now: now
+      now: now,
+      reader_check: fn _uri -> :not_indexed end,
+      enqueue_follower: fn _invocation -> :ok end
     )
 
     previous

@@ -804,6 +804,69 @@ defmodule ContextBot.Workflow.StoreTest do
     assert length(Store.anthropic_responses(invocation)) == 1
   end
 
+  test "records a follower post on a complete invocation without changing stage" do
+    invocation =
+      live_invocation!(
+        live_receipt(
+          "at://did:plc:actor/app.bsky.feed.post/follower-record",
+          "bafy-follower-record"
+        ),
+        :complete
+      )
+
+    assert {:ok, updated} =
+             Store.record_follower_post(
+               invocation,
+               %{
+                 follower_post_rkey: "3mfollowerstore1",
+                 follower_post_record: %{"text" => "card"},
+                 follower_post_uri: "at://did:plc:bot/app.bsky.feed.post/3mfollowerstore1",
+                 follower_post_cid: "bafy-follower-store"
+               }
+             )
+
+    assert updated.stage == :complete
+    assert updated.status == :complete
+    assert updated.follower_post_rkey == "3mfollowerstore1"
+    assert updated.follower_post_uri == "at://did:plc:bot/app.bsky.feed.post/3mfollowerstore1"
+    assert updated.follower_post_cid == "bafy-follower-store"
+    assert Repo.reload!(invocation).stage == :complete
+  end
+
+  test "refuses to overwrite an already published follower post" do
+    invocation =
+      live_invocation!(
+        live_receipt("at://did:plc:actor/app.bsky.feed.post/follower-once", "bafy-follower-once"),
+        :complete
+      )
+
+    assert {:ok, published} =
+             Store.record_follower_post(
+               invocation,
+               %{
+                 follower_post_rkey: "3mfolloweronce1",
+                 follower_post_record: %{"text" => "first"},
+                 follower_post_uri: "at://did:plc:bot/app.bsky.feed.post/3mfolloweronce1",
+                 follower_post_cid: "bafy-first"
+               }
+             )
+
+    assert {:error, :already_published} =
+             Store.record_follower_post(
+               published,
+               %{
+                 follower_post_rkey: "3mfolloweronce2",
+                 follower_post_record: %{"text" => "second"},
+                 follower_post_uri: "at://did:plc:bot/app.bsky.feed.post/3mfolloweronce2",
+                 follower_post_cid: "bafy-second"
+               }
+             )
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.follower_post_uri == "at://did:plc:bot/app.bsky.feed.post/3mfolloweronce1"
+    assert persisted.follower_post_cid == "bafy-first"
+  end
+
   defp mention(uri, cid) do
     %{
       uri: uri,

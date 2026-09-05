@@ -209,6 +209,42 @@ defmodule ContextBot.Workflow.Store do
     |> Repo.update()
   end
 
+  @doc """
+  Persists follower-post coordinates on a complete invocation.
+
+  This does not require a publication claim and does not change stage. It is
+  the path used after thread replies are already published and the follower
+  card is waiting on Standard Reader. An existing published follower URI is
+  never overwritten.
+  """
+  @spec record_follower_post(Invocation.t(), map()) ::
+          {:ok, Invocation.t()} | {:error, :already_published | :stale_stage | Changeset.t()}
+  def record_follower_post(%Invocation{id: id}, attrs) when is_map(attrs) do
+    result =
+      Repo.transaction(
+        fn ->
+          current = Repo.get!(Invocation, id)
+
+          cond do
+            current.stage != :complete ->
+              Repo.rollback(:stale_stage)
+
+            follower_published?(current) ->
+              Repo.rollback(:already_published)
+
+            true ->
+              persist_follower_post!(current, attrs)
+          end
+        end,
+        mode: :immediate
+      )
+
+    case result do
+      {:ok, invocation} -> {:ok, invocation}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   @doc "Records the published limit-notice coordinates after a successful putRecord."
   @spec record_limit_notice(Invocation.t(), String.t(), String.t(), DateTime.t()) ::
           {:ok, Invocation.t()} | {:error, :stale_stage | Changeset.t()}
@@ -1184,6 +1220,31 @@ defmodule ContextBot.Workflow.Store do
 
   defp raise_transaction_error(reason),
     do: raise("invocation receipt transaction failed: #{inspect(reason)}")
+
+  defp follower_published?(%Invocation{follower_post_uri: uri, follower_post_cid: cid})
+       when is_binary(uri) and uri != "" and is_binary(cid) and cid != "",
+       do: true
+
+  defp follower_published?(_invocation), do: false
+
+  defp persist_follower_post!(current, attrs) do
+    allowed = %{
+      follower_post_rkey: Map.get(attrs, :follower_post_rkey),
+      follower_post_record: Map.get(attrs, :follower_post_record),
+      follower_post_uri: Map.get(attrs, :follower_post_uri),
+      follower_post_cid: Map.get(attrs, :follower_post_cid)
+    }
+
+    updates =
+      allowed
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      |> Map.new()
+
+    case Repo.update(Invocation.transition_changeset(current, updates)) do
+      {:ok, updated} -> updated
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
+  end
 
   defp transact_limit_notice(fun) do
     case Repo.transaction(fun, mode: :immediate) do
