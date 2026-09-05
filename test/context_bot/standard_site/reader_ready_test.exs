@@ -16,6 +16,32 @@ defmodule ContextBot.StandardSite.ReaderReadyTest do
     assert ready.reader_ready_at == @now
   end
 
+  test "a fresh negative check stays waiting and does not probe" do
+    checked = DateTime.add(@now, -10, :second)
+    invocation = insert_complete!(reader_checked_at: checked)
+    check = fn _uri -> flunk("should not probe inside the negative TTL") end
+
+    assert {:wait, :not_indexed, waited} =
+             ReaderReady.ensure(invocation, check: check, now: @now)
+
+    assert waited.id == invocation.id
+    assert waited.reader_ready_at == nil
+    assert waited.reader_checked_at == checked
+    assert Repo.reload!(invocation).reader_checked_at == checked
+  end
+
+  test "an expired negative check probes and persists" do
+    checked = DateTime.add(@now, -60, :second)
+    invocation = insert_complete!(reader_checked_at: checked)
+
+    assert {:wait, :not_indexed, waited} =
+             ReaderReady.ensure(invocation, check: fn _uri -> :not_indexed end, now: @now)
+
+    assert waited.reader_ready_at == nil
+    assert waited.reader_checked_at == @now
+    assert Repo.reload!(invocation).reader_checked_at == @now
+  end
+
   test "an indexed probe latches reader_ready_at and is ready" do
     invocation = insert_complete!()
 
