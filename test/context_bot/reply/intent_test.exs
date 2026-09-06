@@ -147,6 +147,7 @@ defmodule ContextBot.Reply.IntentTest do
     assert intent.reply_record["text"] == text <> " (full response)"
     assert [facet] = intent.reply_record["facets"]
     assert hd(facet["features"])["uri"] == reader_url
+    refute hd(facet["features"])["uri"] =~ "getcontext.bot/r/"
     refute Map.has_key?(intent, :reply_part2_record)
   end
 
