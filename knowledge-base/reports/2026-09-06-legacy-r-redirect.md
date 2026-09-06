@@ -1,6 +1,6 @@
 # Legacy `/r/` redirect to Standard Reader
 
-**TL;DR:** `GET /r/{id}` is a thin 302 to the invocation’s Standard Reader
+**TL;DR:** `GET /r/{id}` is a thin 301 to the invocation’s Standard Reader
 URL. New Bluesky posts still link to Reader directly. AppView can lag
 in-place PDS rewrites and keep serving old CIDs that contain `/r/` links.
 
@@ -16,7 +16,7 @@ and those clicks 404.
 
 - Lookup by invocation id, or by `standard_site_document_rkey` when the
   path is not a positive integer
-- 302 to `Document.reader_url_from_uri/1` when that URI is present
+- 301 to `Document.reader_url_from_uri/1` when that URI is present
 - 404 with a short message when the row or Reader URL is missing
 - No sqlite writeup page, Mirror module, or MarkdownHTML
 

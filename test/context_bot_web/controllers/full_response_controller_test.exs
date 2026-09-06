@@ -9,23 +9,23 @@ defmodule ContextBotWeb.FullResponseControllerTest do
   @doc_uri "at://did:plc:bot/site.standard.document/3kfullresp"
   @reader_url "https://standard-reader.app/a/did:plc:bot/3kfullresp"
 
-  test "GET /r/:id 302s to the Standard Reader URL when the document uri is present", %{
+  test "GET /r/:id 301s to the Standard Reader URL when the document uri is present", %{
     conn: conn
   } do
     invocation = insert_published!()
 
     conn = get(conn, "/r/#{invocation.id}")
 
-    assert redirected_to(conn, 302) == @reader_url
+    assert redirected_to(conn, 301) == @reader_url
     refute conn.resp_body =~ @writeup
   end
 
-  test "GET /r/:rkey 302s using the stored document rkey as an alias", %{conn: conn} do
+  test "GET /r/:rkey 301s using the stored document rkey as an alias", %{conn: conn} do
     insert_published!()
 
     conn = get(conn, "/r/3kfullresp")
 
-    assert redirected_to(conn, 302) == @reader_url
+    assert redirected_to(conn, 301) == @reader_url
     refute conn.resp_body =~ @writeup
   end
 
@@ -69,7 +69,7 @@ defmodule ContextBotWeb.FullResponseControllerTest do
 
     conn = get(conn, "/r/#{invocation.id}")
 
-    assert redirected_to(conn, 302) == @reader_url
+    assert redirected_to(conn, 301) == @reader_url
     refute conn.resp_body =~ "Research Analysis"
     refute conn.resp_body =~ "Detailed analysis"
     refute conn.resp_body =~ @writeup

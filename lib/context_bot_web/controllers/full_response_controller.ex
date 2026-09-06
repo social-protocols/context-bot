@@ -2,7 +2,7 @@ defmodule ContextBotWeb.FullResponseController do
   @moduledoc """
   Legacy `GET /r/:id` redirect for already-published Bluesky links.
 
-  New posts link to Standard Reader directly. This route only 302s to
+  New posts link to Standard Reader directly. This route 301s to
   `Document.reader_url_from_uri/1` when the invocation has a stored
   `standard_site_document_uri`. It does not serve writeups from sqlite.
   """
@@ -16,7 +16,9 @@ defmodule ContextBotWeb.FullResponseController do
   def show(conn, %{"id" => id}) do
     case reader_url(id) do
       {:ok, url} ->
-        redirect(conn, external: url)
+        conn
+        |> put_status(:moved_permanently)
+        |> redirect(external: url)
 
       :error ->
         conn

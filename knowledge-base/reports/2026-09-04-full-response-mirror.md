@@ -2,8 +2,11 @@
 
 **Superseded:** the public `/r/` writeup mirror was rolled back. New
 `(full response)` links use the Standard Reader URL again. The index probe
-and `reader_ready_*` cache remain for follower-card deferral. See
-[2026-09-05-rollback-full-response-mirror.md](2026-09-05-rollback-full-response-mirror.md).
+and `reader_ready_*` cache remain for follower-card deferral. Restored
+`GET /r/:id` is a **301** to Reader, not the historical 302-after-index
+behavior below. See
+[2026-09-05-rollback-full-response-mirror.md](2026-09-05-rollback-full-response-mirror.md)
+and [2026-09-06-legacy-r-redirect.md](2026-09-06-legacy-r-redirect.md).
 
 **Historical TL;DR (as shipped in #131):** New `(full response)` links pointed
 at `https://getcontext.bot/r/{id}`. That page served the stored writeup
