@@ -32,4 +32,6 @@ the follower write-up card. A whole-squash revert would break that path.
 ## Accepted leftover
 
 Already-published Bluesky posts that linked `https://getcontext.bot/r/...`
-will 404. Those URLs are not rewritten and are not served as writeups.
+no longer 404: `GET /r/:id` is a legacy 301 to Standard Reader. It still
+does not serve writeups. See
+[2026-09-06-legacy-r-redirect.md](2026-09-06-legacy-r-redirect.md).

@@ -45,6 +45,9 @@ defmodule ContextBot.Reply.FollowerPostTest do
              "uri" => @reader_url
            }
 
+    refute hd(facet["features"])["uri"] =~ "getcontext.bot/r/"
+    refute record["embed"]["media"]["external"]["uri"] =~ "getcontext.bot/r/"
+
     assert record["embed"]["$type"] == "app.bsky.embed.recordWithMedia"
 
     assert record["embed"]["record"] == %{

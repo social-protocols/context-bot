@@ -15,6 +15,7 @@ defmodule ContextBotWeb.Router do
 
     get "/", PageController, :home
     get "/invocations", InvocationsController, :index
+    get "/r/:id", FullResponseController, :show
   end
 
   scope "/", ContextBotWeb do

@@ -77,8 +77,8 @@ defmodule ContextBotWeb.PageControllerTest do
   test "GET /r/:id is not a published writeup route", %{conn: conn} do
     conn = get(conn, "/r/1")
     assert conn.status == 404
-    refute conn.resp_body =~ "full response"
-    refute conn.resp_body =~ "Standard Reader"
+    refute conn.resp_body =~ "SECRET_WRITEUP"
+    refute conn.resp_body =~ "Research Analysis"
   end
 
   test "GET / includes Open Graph and Twitter metadata", %{conn: conn} do
