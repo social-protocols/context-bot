@@ -18,11 +18,11 @@ Anyone can mention it; it joins a thread when invited. Ask a concrete question, 
 
 ## Example
 
-**Google's Geographic-Name Policy for Gulf of America**
+**Chicken of the Woods: edible, but not “definitely”**
 
 {{bluesky_embed}}
 
-[Full writeup](https://standard-reader.app/a/did:plc:anbhmngzs3exwbq47xxzogk4/3mudapth2od2p) · [Bluesky reply](https://bsky.app/profile/getcontext.bot/post/3mudelkjrym23)
+[Full writeup](https://standard-reader.app/a/did:plc:anbhmngzs3exwbq47xxzogk4/3mv2fwgg6du2i) · [Bluesky reply](https://bsky.app/profile/getcontext.bot/post/3mv2fwgg6du2j)
 
 ## Why it works
 
