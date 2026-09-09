@@ -43,7 +43,11 @@ curl --fail --silent --show-error http://127.0.0.1:4000/
 curl --fail --silent --show-error http://127.0.0.1:4000/invocations
 ```
 
-`GET /invocations` shows operational metadata: counts, spend, tokens, status, actor handle, Bluesky links, Standard.site full-response links, and short error reasons. It does not show API keys, post bodies, prompts, or envelopes, and it has no reprocess, reenqueue, recover, or other mutation endpoints. General failed-invocation recovery is `just fly-recover` (the same `Recovery.recover_orphans/1` path as boot). Envelope replay stays on `just fly-reprocess` over Fly SSH. A fresh two-phase research run of the same invocation id stays on `just fly-reenqueue`.
+HTML `GET /invocations` shows operational metadata: counts, spend, tokens, status, actor handle, Bluesky links, Standard.site full-response links, and short error reasons. It does not show API keys, post bodies, prompts, or envelopes, and it has no reprocess, reenqueue, recover, or other mutation endpoints.
+
+Public JSON dumps are a separate, intentional transparency surface. `GET /invocations.json`, `GET /invocations/:id.json`, `GET /api_budget_entries.json`, `GET /api_budget_entries/:id.json`, `GET /anthropic_response_envelopes.json`, and `GET /anthropic_response_envelopes/:id.json` return every product-table column (including Base64 `raw_body` and claim tokens). They are GET-only and have no mutation endpoints.
+
+General failed-invocation recovery is `just fly-recover` (the same `Recovery.recover_orphans/1` path as boot). Envelope replay stays on `just fly-reprocess` over Fly SSH. A fresh two-phase research run of the same invocation id stays on `just fly-reenqueue`.
 
 The homepage is reachable via the configured Phoenix host. Serving https://getcontext.bot (the bot's Bluesky handle and site.standard.publication domain) requires separate DNS configuration pointing to the Fly deployment.
 

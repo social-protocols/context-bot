@@ -50,6 +50,7 @@ defmodule ContextBot.MixProject do
       {:ecto_sqlite3, "~> 0.24.1"},
       {:req, "~> 0.7.1"},
       {:finch, "~> 0.23.0"},
+      {:mint, "~> 1.10"},
       {:oban, "~> 2.24.0"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},

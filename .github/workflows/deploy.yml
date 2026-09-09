@@ -22,7 +22,8 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup Fly CLI
-        uses: superfly/flyctl-actions/setup-flyctl@master
+        # Pin master HEAD (2026-04-08, PR #108 / Node 24). Do not use @master.
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
 
       - name: Deploy to Fly
         run: |
