@@ -5,6 +5,10 @@ defmodule ContextBot.Workers.ReplyWorker do
   Publication is create-only. Every attempt reads before writing, and every possible write is
   accepted only after a subsequent read returns the exact persisted record and coordinates.
 
+  Freeze-time part2/part3 maps may omit `reply.parent` so rkeys stay deterministic before part1
+  exists. After a confirmed put or match, persist the rebuilt published record (parent + root)
+  so `GET /invocations/:id.json` matches AppView/PDS.
+
   Authorization failures stop in `failed/publication_auth` rather than retrying. After repairing
   credentials, an operator may deliberately resume the unchanged intent by resetting the stage to
   `reply_ready` and clearing the terminal markers while retaining `reply_repo`, `reply_rkey`, and
@@ -327,7 +331,7 @@ defmodule ContextBot.Workers.ReplyWorker do
 
   defp publish_part2(invocation, token, part1_uri, part1_cid, part1_completed_at, dependencies) do
     case reconcile_part2(invocation, token, part1_uri, part1_cid, part1_completed_at) do
-      {:ok, part2_uri, part2_cid} ->
+      {:ok, part2_uri, part2_cid, part2_record} ->
         complete_after_part2(
           invocation,
           token,
@@ -335,6 +339,7 @@ defmodule ContextBot.Workers.ReplyWorker do
           part1_cid,
           part2_uri,
           part2_cid,
+          part2_record,
           part1_completed_at,
           dependencies
         )
@@ -354,6 +359,7 @@ defmodule ContextBot.Workers.ReplyWorker do
          part1_cid,
          part2_uri,
          part2_cid,
+         part2_record,
          completed_at,
          dependencies
        ) do
@@ -365,6 +371,7 @@ defmodule ContextBot.Workers.ReplyWorker do
         part1_cid,
         part2_uri,
         part2_cid,
+        part2_record,
         completed_at,
         dependencies
       )
@@ -376,7 +383,8 @@ defmodule ContextBot.Workers.ReplyWorker do
           reply_uri: part1_uri,
           reply_cid: part1_cid,
           reply_part2_uri: part2_uri,
-          reply_part2_cid: part2_cid
+          reply_part2_cid: part2_cid,
+          reply_part2_record: part2_record
         },
         completed_at,
         dependencies
@@ -391,11 +399,12 @@ defmodule ContextBot.Workers.ReplyWorker do
          part1_cid,
          part2_uri,
          part2_cid,
+         part2_record,
          completed_at,
          dependencies
        ) do
     case reconcile_later_part(invocation, token, :part3, part2_uri, part2_cid) do
-      {:ok, part3_uri, part3_cid} ->
+      {:ok, part3_uri, part3_cid, part3_record} ->
         finish_publication(
           invocation,
           token,
@@ -404,8 +413,10 @@ defmodule ContextBot.Workers.ReplyWorker do
             reply_cid: part1_cid,
             reply_part2_uri: part2_uri,
             reply_part2_cid: part2_cid,
+            reply_part2_record: part2_record,
             reply_part3_uri: part3_uri,
-            reply_part3_cid: part3_cid
+            reply_part3_cid: part3_cid,
+            reply_part3_record: part3_record
           },
           completed_at,
           dependencies
@@ -470,7 +481,7 @@ defmodule ContextBot.Workers.ReplyWorker do
       {:ok, corrected_record} ->
         case get_part2_record(invocation, dependencies.client, corrected_record) do
           {:match, uri, cid} ->
-            {:ok, uri, cid}
+            {:ok, uri, cid, corrected_record}
 
           :missing ->
             put_part2_record(invocation, dependencies, corrected_record)
@@ -505,7 +516,7 @@ defmodule ContextBot.Workers.ReplyWorker do
   defp reconcile_part2_after_put(invocation, client, corrected_record) do
     case get_part2_record(invocation, client, corrected_record) do
       {:match, uri, cid} ->
-        {:ok, uri, cid}
+        {:ok, uri, cid, corrected_record}
 
       _other ->
         {:error, :part2_reconciliation_failed}
@@ -608,7 +619,7 @@ defmodule ContextBot.Workers.ReplyWorker do
                corrected_record
              ) do
           {:match, uri, cid} ->
-            {:ok, uri, cid}
+            {:ok, uri, cid, corrected_record}
 
           :missing ->
             put_named_part_record(
@@ -636,7 +647,7 @@ defmodule ContextBot.Workers.ReplyWorker do
          ) do
       {:ok, status, _headers, _body} when status in 200..299 ->
         case get_named_part_record(invocation, dependencies.client, rkey, corrected_record) do
-          {:match, uri, cid} -> {:ok, uri, cid}
+          {:match, uri, cid} -> {:ok, uri, cid, corrected_record}
           _other -> {:error, :part3_reconciliation_failed}
         end
 
