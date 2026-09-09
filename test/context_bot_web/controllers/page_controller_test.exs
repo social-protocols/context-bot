@@ -36,13 +36,14 @@ defmodule ContextBotWeb.PageControllerTest do
     assert response =~ "“Can you find the original source?”"
   end
 
-  test "GET / features the Stancil geographic-name invocation with a Bluesky embed", %{
+  test "GET / features the chicken-of-the-woods invocation with a Bluesky embed", %{
     conn: conn
   } do
     conn = get(conn, ~p"/")
 
     response = html_response(conn, 200)
-    assert response =~ "Geographic-Name Policy for Gulf of America"
+    assert response =~ "Chicken of the Woods: edible, but not"
+    refute response =~ "Geographic-Name Policy for Gulf of America"
     refute response =~ "Yosemite"
     refute response =~ "Lake America"
     refute response =~ "acceptable-opinion"
@@ -51,24 +52,29 @@ defmodule ContextBotWeb.PageControllerTest do
     assert response =~ ~s(class="bluesky-embed")
 
     assert response =~
-             ~s(data-bluesky-uri="at://did:plc:7umvpuxe2vbrc3zrzuquzniu/app.bsky.feed.post/3muclgbgkic25")
+             ~s(data-bluesky-uri="at://did:plc:oky5czdrnfjpqslsw2a5iclo/app.bsky.feed.post/3mv2edeksps2r")
 
     assert response =~
-             ~s(data-bluesky-uri="at://did:plc:33avz2l7y5scw3abq3lmylns/app.bsky.feed.post/3muda3adex22u")
+             ~s(data-bluesky-uri="at://did:plc:33avz2l7y5scw3abq3lmylns/app.bsky.feed.post/3mv2fscp67s2j")
 
     assert response =~
-             ~s(data-bluesky-uri="at://did:plc:anbhmngzs3exwbq47xxzogk4/app.bsky.feed.post/3mudelkjrym23")
+             ~s(data-bluesky-uri="at://did:plc:anbhmngzs3exwbq47xxzogk4/app.bsky.feed.post/3mv2fwgg6du2j")
 
     assert response =~
-             ~s(data-bluesky-uri="at://did:plc:anbhmngzs3exwbq47xxzogk4/app.bsky.feed.post/3mudellmx6b24")
+             ~s(data-bluesky-uri="at://did:plc:anbhmngzs3exwbq47xxzogk4/app.bsky.feed.post/3mv2fwhdiy62l")
 
     assert response =~ ~s(src="https://embed.bsky.app/static/embed.js")
 
     assert response =~
-             ~s(href="https://standard-reader.app/a/did:plc:anbhmngzs3exwbq47xxzogk4/3mudapth2od2p")
+             ~s(<script async src="https://embed.bsky.app/static/embed.js" charset="utf-8"></script>)
+
+    assert length(Regex.scan(~r/embed\.bsky\.app\/static\/embed\.js/, response)) == 1
 
     assert response =~
-             ~s(href="https://bsky.app/profile/getcontext.bot/post/3mudelkjrym23")
+             ~s(href="https://standard-reader.app/a/did:plc:anbhmngzs3exwbq47xxzogk4/3mv2fwgg6du2i")
+
+    assert response =~
+             ~s(href="https://bsky.app/profile/getcontext.bot/post/3mv2fwgg6du2j")
 
     csp = conn |> get_resp_header("content-security-policy") |> List.first()
     assert csp =~ "https://embed.bsky.app"
