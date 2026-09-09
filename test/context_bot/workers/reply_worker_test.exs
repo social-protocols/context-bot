@@ -1353,6 +1353,18 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
     assert persisted.reply_cid == part1_cid
     assert persisted.reply_part2_uri == part2_remote_record["uri"]
     assert persisted.reply_part2_cid == part2_cid
+    assert persisted.reply_part2_record == rebuilt_part2_record
+
+    assert persisted.reply_part2_record["reply"]["parent"] == %{
+             "uri" => part1_uri,
+             "cid" => part1_cid
+           }
+
+    assert persisted.reply_part2_record["reply"]["root"] == %{
+             "uri" => part1_uri,
+             "cid" => part1_cid
+           }
+
     assert persisted.completed_at == @now
 
     snapshot = Remote.snapshot(remote)
@@ -1450,6 +1462,11 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
              snapshot.calls,
              {:put, @bot_did, @collection, rkey_part2, rebuilt_part2_record}
            )
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.reply_part2_record == rebuilt_part2_record
+    assert Map.has_key?(persisted.reply_part2_record["reply"], "parent")
+    assert Map.has_key?(persisted.reply_part2_record["reply"], "root")
   end
 
   test "rebuilds a remainder-plus-link part 2 instead of discarding the remainder" do
@@ -1532,6 +1549,195 @@ defmodule ContextBot.Workers.ReplyWorkerTest do
              snapshot.calls,
              {:put, @bot_did, @collection, rkey_part2, rebuilt_part2_record}
            )
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.reply_part2_record == rebuilt_part2_record
+    assert Map.has_key?(persisted.reply_part2_record["reply"], "parent")
+    assert Map.has_key?(persisted.reply_part2_record["reply"], "root")
+  end
+
+  test "persists rebuilt part2 and part3 records with parent and root after publish" do
+    rkey_part1 = "3mreplypart1111"
+    rkey_part2 = "3mreplypart2222"
+    rkey_part3 = "3mreplypart3333"
+    part1_cid = "bafy-part1-published"
+    part2_cid = "bafy-part2-published"
+    part3_cid = "bafy-part3-published"
+
+    root = %{
+      "uri" => "at://did:plc:actor/app.bsky.feed.post/thread-root",
+      "cid" => "bafy-thread-root"
+    }
+
+    invocation =
+      invocation("split-part3", :reply_ready, %{
+        reply_rkey: rkey_part1,
+        reply_part2_rkey: rkey_part2,
+        reply_part2_record: %{
+          "text" => "This is part 2 of the split reply.",
+          "createdAt" => "2026-07-29T12:59:01.123456Z",
+          "reply" => %{"root" => root}
+        },
+        reply_part3_rkey: rkey_part3,
+        reply_part3_record: %{
+          "text" => "This is part 3 of the split reply.",
+          "createdAt" => "2026-07-29T12:59:02.123456Z",
+          "reply" => %{"root" => root}
+        }
+      })
+
+    part1_remote_record = remote_record(invocation, part1_cid)
+    part1_uri = part1_remote_record["uri"]
+    part2_uri = "at://#{@bot_did}/#{@collection}/#{rkey_part2}"
+    part3_uri = "at://#{@bot_did}/#{@collection}/#{rkey_part3}"
+
+    rebuilt_part2_record = %{
+      "$type" => "app.bsky.feed.post",
+      "text" => "This is part 2 of the split reply.",
+      "createdAt" => "2026-07-29T12:59:01.123456Z",
+      "reply" => %{
+        "parent" => %{"uri" => part1_uri, "cid" => part1_cid},
+        "root" => root
+      }
+    }
+
+    rebuilt_part3_record = %{
+      "$type" => "app.bsky.feed.post",
+      "text" => "This is part 3 of the split reply.",
+      "createdAt" => "2026-07-29T12:59:02.123456Z",
+      "reply" => %{
+        "parent" => %{"uri" => part2_uri, "cid" => part2_cid},
+        "root" => root
+      }
+    }
+
+    part2_remote_record = %{
+      "uri" => part2_uri,
+      "cid" => part2_cid,
+      "value" => rebuilt_part2_record
+    }
+
+    part3_remote_record = %{
+      "uri" => part3_uri,
+      "cid" => part3_cid,
+      "value" => rebuilt_part3_record
+    }
+
+    remote =
+      configure_remote(
+        get_results: [
+          {:error, :record_not_found},
+          {:ok, 200, %{}, part1_remote_record},
+          {:error, :record_not_found},
+          {:ok, 200, %{}, part2_remote_record},
+          {:error, :record_not_found},
+          {:ok, 200, %{}, part3_remote_record}
+        ],
+        put_results: [
+          {:ok, 200, %{}, %{"uri" => part1_uri, "cid" => part1_cid}},
+          {:ok, 200, %{}, %{"uri" => part2_uri, "cid" => part2_cid}},
+          {:ok, 200, %{}, %{"uri" => part3_uri, "cid" => part3_cid}}
+        ]
+      )
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert persisted.reply_part2_uri == part2_uri
+    assert persisted.reply_part2_cid == part2_cid
+    assert persisted.reply_part3_uri == part3_uri
+    assert persisted.reply_part3_cid == part3_cid
+    assert persisted.reply_part2_record == rebuilt_part2_record
+    assert persisted.reply_part3_record == rebuilt_part3_record
+
+    assert persisted.reply_part2_record["reply"]["parent"] == %{
+             "uri" => part1_uri,
+             "cid" => part1_cid
+           }
+
+    assert persisted.reply_part2_record["reply"]["root"] == root
+
+    assert persisted.reply_part3_record["reply"]["parent"] == %{
+             "uri" => part2_uri,
+             "cid" => part2_cid
+           }
+
+    assert persisted.reply_part3_record["reply"]["root"] == root
+
+    snapshot = Remote.snapshot(remote)
+
+    assert Enum.member?(
+             snapshot.calls,
+             {:put, @bot_did, @collection, rkey_part2, rebuilt_part2_record}
+           )
+
+    assert Enum.member?(
+             snapshot.calls,
+             {:put, @bot_did, @collection, rkey_part3, rebuilt_part3_record}
+           )
+  end
+
+  test "persists the live part2 record when reconcile matches without a second put" do
+    rkey_part1 = "3mreplypart1111"
+    rkey_part2 = "3mreplypart2222"
+    part1_cid = "bafy-part1-published"
+    part2_cid = "bafy-part2-published"
+
+    root = %{
+      "uri" => "at://did:plc:actor/app.bsky.feed.post/thread-root",
+      "cid" => "bafy-thread-root"
+    }
+
+    invocation =
+      invocation("match-part2", :reply_ready, %{
+        reply_rkey: rkey_part1,
+        reply_part2_rkey: rkey_part2,
+        reply_part2_record: %{
+          "text" => "Already published part 2.",
+          "createdAt" => "2026-07-29T12:59:01.123456Z",
+          "reply" => %{"root" => root}
+        }
+      })
+
+    part1_remote_record = remote_record(invocation, part1_cid)
+    part1_uri = part1_remote_record["uri"]
+
+    rebuilt_part2_record = %{
+      "$type" => "app.bsky.feed.post",
+      "text" => "Already published part 2.",
+      "createdAt" => "2026-07-29T12:59:01.123456Z",
+      "reply" => %{
+        "parent" => %{"uri" => part1_uri, "cid" => part1_cid},
+        "root" => root
+      }
+    }
+
+    part2_remote_record = %{
+      "uri" => "at://#{@bot_did}/#{@collection}/#{rkey_part2}",
+      "cid" => part2_cid,
+      "value" => rebuilt_part2_record
+    }
+
+    remote =
+      configure_remote(
+        get_results: [
+          {:ok, 200, %{}, part1_remote_record},
+          {:ok, 200, %{}, part2_remote_record}
+        ],
+        put_results: []
+      )
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :complete
+    assert persisted.reply_part2_record == rebuilt_part2_record
+    assert persisted.reply_part2_record["reply"]["parent"]["uri"] == part1_uri
+    assert persisted.reply_part2_record["reply"]["root"] == root
+
+    snapshot = Remote.snapshot(remote)
+    refute Enum.any?(snapshot.calls, &match?({:put, _, _, _, _}, &1))
   end
 
   defp configure_remote(options \\ []) do
