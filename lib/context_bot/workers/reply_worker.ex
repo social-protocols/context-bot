@@ -335,11 +335,13 @@ defmodule ContextBot.Workers.ReplyWorker do
         complete_after_part2(
           invocation,
           token,
-          part1_uri,
-          part1_cid,
-          part2_uri,
-          part2_cid,
-          part2_record,
+          %{
+            reply_uri: part1_uri,
+            reply_cid: part1_cid,
+            reply_part2_uri: part2_uri,
+            reply_part2_cid: part2_cid,
+            reply_part2_record: part2_record
+          },
           part1_completed_at,
           dependencies
         )
@@ -352,72 +354,31 @@ defmodule ContextBot.Workers.ReplyWorker do
     end
   end
 
-  defp complete_after_part2(
-         invocation,
-         token,
-         part1_uri,
-         part1_cid,
-         part2_uri,
-         part2_cid,
-         part2_record,
-         completed_at,
-         dependencies
-       ) do
+  defp complete_after_part2(invocation, token, reply_attrs, completed_at, dependencies) do
     if has_part3?(invocation) do
-      publish_part3(
-        invocation,
-        token,
-        part1_uri,
-        part1_cid,
-        part2_uri,
-        part2_cid,
-        part2_record,
-        completed_at,
-        dependencies
-      )
+      publish_part3(invocation, token, reply_attrs, completed_at, dependencies)
     else
-      finish_publication(
-        invocation,
-        token,
-        %{
-          reply_uri: part1_uri,
-          reply_cid: part1_cid,
-          reply_part2_uri: part2_uri,
-          reply_part2_cid: part2_cid,
-          reply_part2_record: part2_record
-        },
-        completed_at,
-        dependencies
-      )
+      finish_publication(invocation, token, reply_attrs, completed_at, dependencies)
     end
   end
 
-  defp publish_part3(
-         invocation,
-         token,
-         part1_uri,
-         part1_cid,
-         part2_uri,
-         part2_cid,
-         part2_record,
-         completed_at,
-         dependencies
-       ) do
-    case reconcile_later_part(invocation, token, :part3, part2_uri, part2_cid) do
+  defp publish_part3(invocation, token, reply_attrs, completed_at, dependencies) do
+    case reconcile_later_part(
+           invocation,
+           token,
+           :part3,
+           reply_attrs.reply_part2_uri,
+           reply_attrs.reply_part2_cid
+         ) do
       {:ok, part3_uri, part3_cid, part3_record} ->
         finish_publication(
           invocation,
           token,
-          %{
-            reply_uri: part1_uri,
-            reply_cid: part1_cid,
-            reply_part2_uri: part2_uri,
-            reply_part2_cid: part2_cid,
-            reply_part2_record: part2_record,
+          Map.merge(reply_attrs, %{
             reply_part3_uri: part3_uri,
             reply_part3_cid: part3_cid,
             reply_part3_record: part3_record
-          },
+          }),
           completed_at,
           dependencies
         )
