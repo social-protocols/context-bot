@@ -35,12 +35,19 @@ In scope for this repository and the deployed `@getcontext.bot` service:
 - Eligibility or admission bypass that lets an unintended actor spend budget
   or publish a reply
 - Exposure of stored invocation, thread, or provider content through `/health`
-  or other HTTP endpoints
+  or the redacted HTML `GET /invocations` page (those surfaces stay
+  credential-free and must not dump post bodies, prompts, or envelopes)
 - Paths that could publish more than one reply for an invocation, or publish
   from a `dry_run` invocation
 
 Out of scope:
 
+- Public JSON dumps of product SQLite tables
+  (`GET /invocations.json`, `GET /invocations/:id.json`,
+  `GET /api_budget_entries.json`, `GET /anthropic_response_envelopes.json`,
+  and their per-id routes). These intentionally return every product/debug
+  column, including Base64 `raw_body` and claim tokens, for transparency.
+  They are not an accidental leak.
 - The bot posting inaccurate or incomplete context
 - Disagreement with the actor rate-limit tiers (`bsky.team`, Skywatch
   `bluesky-elder`, the operator DID allowlist, or the public daily cap)
