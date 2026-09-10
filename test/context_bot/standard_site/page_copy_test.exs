@@ -293,6 +293,55 @@ defmodule ContextBot.StandardSite.PageCopyTest do
       assert markdown == "> #{@bird_invocation}"
       refute markdown =~ "## Asked"
     end
+
+    test "escapes HTML so a script tag cannot inject into the Reader page" do
+      markdown =
+        PageCopy.asked_markdown(%{
+          asked_text: ~S|<script>alert(1)</script> <img src=x onerror="alert(1)">|,
+          invocation_uri: @invocation_uri,
+          invoker_handle: "alice.test"
+        })
+
+      refute markdown =~ "<script>"
+      refute markdown =~ "<img"
+      refute markdown =~ ~S|onerror="|
+      assert markdown =~ "&lt;script&gt;"
+      assert markdown =~ "&lt;img"
+      assert markdown =~ "&quot;"
+    end
+
+    test "neutralizes a markdown link so javascript and quoted hrefs cannot inject" do
+      markdown =
+        PageCopy.asked_markdown(%{
+          asked_text:
+            ~S|[x](javascript:alert(1)) [y](https://example.com/" onmouseover="alert(1))|,
+          invocation_uri: @invocation_uri,
+          invoker_handle: "alice.test"
+        })
+
+      refute markdown =~ ~r/(?<!\\)\[x\]\(/
+      refute markdown =~ ~r/(?<!\\)\[y\]\(/
+      refute markdown =~ ~S|" onmouseover="|
+      assert markdown =~ "\\[x\\](javascript:alert(1))"
+      assert markdown =~ "&quot;"
+      assert markdown =~ "onmouseover="
+    end
+
+    test "neutralizes headings, images, and emphasis in the invocation" do
+      markdown =
+        PageCopy.asked_markdown(%{
+          asked_text: "# Injected\n![pic](https://evil.test/x)\n**bold**",
+          invocation_uri: @invocation_uri,
+          invoker_handle: "alice.test"
+        })
+
+      refute markdown =~ ~r/^# /m
+      refute markdown =~ ~r/(?<!\\)!\[pic\]\(/
+      refute markdown =~ "**bold**"
+      assert markdown =~ "> \\# Injected"
+      assert markdown =~ "> !\\[pic\\](https://evil.test/x)"
+      assert markdown =~ "> \\*\\*bold\\*\\*"
+    end
   end
 
   describe "subject/2" do

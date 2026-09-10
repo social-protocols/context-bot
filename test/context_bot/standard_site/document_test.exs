@@ -450,6 +450,23 @@ defmodule ContextBot.StandardSite.DocumentTest do
       assert Document.format_markdown(%{@content | full_response: essay}) =~ essay
     end
 
+    test "escapes HTML and markdown from asked_text in the published body" do
+      content =
+        Map.put(
+          @content,
+          :asked_text,
+          ~S|<script>alert(1)</script> [x](https://example.com/" onmouseover="alert(1))|
+        )
+
+      markdown = Document.format_markdown(content)
+
+      refute markdown =~ "<script>"
+      refute markdown =~ ~S|" onmouseover="|
+      refute markdown =~ ~r/(?<!\\)\[x\]\(/
+      assert markdown =~ "&lt;script&gt;"
+      assert markdown =~ "&quot;"
+    end
+
     test "uses the root sentence when the invoking post is not a reply" do
       markdown = Document.format_markdown(Map.delete(@content, :parent_uri))
       block = responding_block(markdown)
