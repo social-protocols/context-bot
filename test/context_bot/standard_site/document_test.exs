@@ -208,7 +208,7 @@ defmodule ContextBot.StandardSite.DocumentTest do
       refute Map.has_key?(record, "bskyPostRef")
     end
 
-    test "maps title and description from the question, not the rkey or reply" do
+    test "maps title from the question and description from the compact reply" do
       assert {:ok, _result} =
                Document.create(
                  TrackingDocClient,
@@ -220,21 +220,23 @@ defmodule ContextBot.StandardSite.DocumentTest do
 
       assert_received {:document_put, record}
       assert record["title"] == "What bird is that?"
-      assert record["description"] == "What bird is that?"
+      assert record["description"] == @content.selected_reply
+      refute record["description"] == @content.asked_text
       refute record["title"] =~ "Context on"
       refute record["title"] =~ "3k123"
-      refute record["description"] =~ @content.selected_reply
     end
 
-    test "uses a Title Case model headline and keeps mentions in the description" do
+    test "uses a Title Case model headline and the compact reply as description" do
       launch =
         "I have just launched @getcontext.bot. Mention it in a post or reply and get a response from Claude. @getcontext.bot, say hello!"
+
+      reply = "Hello! I'm @getcontext.bot."
 
       content =
         @content
         |> Map.put(:asked_text, launch)
         |> Map.put(:document_title, "Context Bot Launch")
-        |> Map.put(:selected_reply, "Hello! I'm @getcontext.bot.")
+        |> Map.put(:selected_reply, reply)
 
       assert {:ok, _result} =
                Document.create(
@@ -247,7 +249,8 @@ defmodule ContextBot.StandardSite.DocumentTest do
 
       assert_received {:document_put, record}
       assert record["title"] == "Context Bot Launch"
-      assert record["description"] == launch
+      assert record["description"] == reply
+      refute record["description"] == launch
       refute record["title"] == "I have just launched. Mention."
       refute record["description"] =~ "launched ."
     end
@@ -256,11 +259,13 @@ defmodule ContextBot.StandardSite.DocumentTest do
       asked =
         "Can you help me understand the historical context of this planned explosion near the harbor?"
 
+      reply = "The blast was a planned demolition."
+
       content =
         @content
         |> Map.put(:asked_text, asked)
         |> Map.put(:document_title, "Context on 3k123...")
-        |> Map.put(:selected_reply, "The blast was a planned demolition.")
+        |> Map.put(:selected_reply, reply)
 
       assert {:ok, _result} =
                Document.create(
@@ -276,7 +281,8 @@ defmodule ContextBot.StandardSite.DocumentTest do
       refute record["title"] =~ "Context on"
       refute record["title"] =~ "3k123"
       assert String.starts_with?(asked, record["title"])
-      assert record["description"] == asked
+      assert record["description"] == reply
+      refute record["description"] == asked
     end
 
     test "published document body has no CONTEXT_BOT_DRAFT markers" do
@@ -333,8 +339,9 @@ defmodule ContextBot.StandardSite.DocumentTest do
 
       assert markdown =~ "# Research Analysis"
       assert markdown =~ @content.full_response
-      assert markdown =~ "## Summary"
-      assert markdown =~ @content.selected_reply
+      refute markdown =~ "## Summary"
+      refute markdown =~ @content.selected_reply
+      assert markdown =~ "> #{@content.asked_text}"
       assert markdown =~ "[CONTEXT_BOT_SYSTEM_V5](#{@prompt_reader_url})"
       assert markdown =~ "[CONTEXT_BOT_STRUCTURE_V2](#{@structure_prompt_reader_url})"
       assert markdown =~ "Semantic version: `5.0.0`"
@@ -387,34 +394,37 @@ defmodule ContextBot.StandardSite.DocumentTest do
                "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:author/bafkreiaurora@jpeg"
     end
 
-    test "places a reply responding-to line before the writeup and does not repeat the question" do
+    test "places a reply responding-to line and asked_text blockquote before the writeup" do
       markdown = Document.format_markdown(@content)
       responding_at = match_at(markdown, "Responding to")
+      quote_at = match_at(markdown, "> What bird is that?")
       analysis_at = match_at(markdown, "# Research Analysis")
       block = responding_block(markdown)
 
-      assert responding_at < analysis_at
+      assert responding_at < quote_at
+      assert quote_at < analysis_at
       refute markdown =~ "## Asked"
+      refute markdown =~ "## Summary"
       refute block =~ "What bird is that?"
 
       assert block ==
                "Responding to [@alice.test](https://bsky.app/profile/alice.test/post/3k123)'s reply to [@bob.test](https://bsky.app/profile/bob.test/post/3parentrkey12)'s post."
     end
 
-    test "places the compact summary first, then responding-to, writeup, continue link, and metadata" do
+    test "places responding-to first, then writeup, continue link, and metadata" do
       markdown = Document.format_markdown(@content)
-      summary_at = match_at(markdown, "## Summary")
-      selected_at = match_at(markdown, @content.selected_reply)
       responding_at = match_at(markdown, "Responding to")
+      quote_at = match_at(markdown, "> What bird is that?")
       analysis_at = match_at(markdown, "# Research Analysis")
       continue_at = match_at(markdown, "Continue this conversation in Claude")
       metadata_at = match_at(markdown, "## How this response was produced")
       href = continue_href(markdown)
       query = continue_query(href)
 
-      assert summary_at < selected_at
-      assert selected_at < responding_at
-      assert responding_at < analysis_at
+      refute markdown =~ "## Summary"
+      refute markdown =~ @content.selected_reply
+      assert responding_at < quote_at
+      assert quote_at < analysis_at
       assert analysis_at < continue_at
       assert continue_at < metadata_at
       assert href =~ "https://claude.ai/new?q="
@@ -447,7 +457,9 @@ defmodule ContextBot.StandardSite.DocumentTest do
       assert block ==
                "Responding to [@alice.test](https://bsky.app/profile/alice.test/post/3k123)'s post."
 
+      assert markdown =~ "> What bird is that?"
       refute markdown =~ "## Asked"
+      refute markdown =~ "## Summary"
       refute markdown =~ "3parentrkey12"
       refute block =~ "What bird is that?"
     end
