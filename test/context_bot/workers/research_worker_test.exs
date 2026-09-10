@@ -56,6 +56,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
   alias ContextBot.LimitNoticeRecorder
   alias ContextBot.Research.{Drafts, ReplyLimits, Request}
   alias ContextBot.Settings
+  alias ContextBot.StandardSite.PageCopy
   alias ContextBot.Workers.ResearchWorker
   alias ContextBot.Workers.ResearchWorkerTest.{AnthropicClient, Runner}
   alias ContextBot.Workflow.{Invocation, Store}
@@ -280,14 +281,16 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert doc_record["$type"] == "site.standard.document"
     assert doc_record["textContent"] == "Thorough markdown writeup."
     assert doc_record["title"] == "What Is That Bird?"
-    assert doc_record["description"] == "@getcontext.bot What bird is that?"
+    assert doc_record["description"] == "Frozen concise context."
     refute doc_record["title"] =~ "Context on"
-    refute doc_record["description"] == "What bird is that?"
+    refute doc_record["description"] == "@getcontext.bot What bird is that?"
 
     markdown = doc_record["content"]["text"]["markdown"]
     responding = responding_block(markdown)
 
     refute markdown =~ "## Asked"
+    refute markdown =~ "## Summary"
+    assert markdown =~ "> @getcontext.bot What bird is that?"
     refute responding =~ "@getcontext.bot What bird is that?"
 
     assert responding ==
@@ -343,10 +346,11 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
              "https://standard-reader.app/a/#{@bot_did}/#{doc_rkey}"
   end
 
-  test "Reader Summary keeps the untruncated compact_source when Bluesky text is shortened" do
+  test "Reader description uses compact_source, not the Bluesky-shortened text" do
     original = String.duplicate("a", 340)
     shortened = String.duplicate("a", 280) <> ReplyLimits.continuation_ellipsis()
     writeup = Drafts.format("Mostly True?", original) <> "\n\nThorough markdown writeup."
+    card_cap = PageCopy.description_max_graphemes()
 
     invocation = invocation("compact-source-writeup", :thread_ready)
 
@@ -375,10 +379,10 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert_received {:standard_site_put, "site.standard.document", _doc_rkey, doc_record}
 
     markdown = doc_record["content"]["text"]["markdown"]
-    [_, summary_and_rest] = String.split(markdown, "## Summary\n\n", parts: 2)
-    [summary, _rest] = String.split(summary_and_rest, "\n\n---", parts: 2)
-    assert summary == original
-    refute String.contains?(summary, ReplyLimits.continuation_ellipsis())
+    refute markdown =~ "## Summary"
+    refute markdown =~ ReplyLimits.continuation_ellipsis()
+    assert doc_record["description"] == String.duplicate("a", card_cap)
+    refute String.contains?(doc_record["description"], ReplyLimits.continuation_ellipsis())
     assert persisted.reply_record["text"] == shortened <> " (full response)"
   end
 
