@@ -21,8 +21,11 @@ defmodule ContextBotWeb.PageControllerTest do
     assert response =~ ~s(href="https://social-protocols.org")
     assert response =~ "Limits"
     assert response =~ "Anyone may mention"
-    assert response =~ "5 invocations per rolling day"
-    assert response =~ "1 invocation per rolling day"
+    assert response =~ "5 first-ask invocations per rolling day"
+    assert response =~ "1 first-ask invocation per rolling day"
+    assert response =~ "Follow-ups"
+    assert response =~ "3 research admissions per rolling day"
+    assert response =~ "posts a short reply instead of staying silent"
     assert response =~ "$20 per UTC day"
     assert response =~ "enter their own funding keys"
   end

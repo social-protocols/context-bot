@@ -30,15 +30,19 @@ Anyone can mention it; it joins a thread when invited. Ask a concrete question, 
 - **Research with Sources.** It uses Claude Sonnet with web search and citations enabled.
 - **Transparent.** The full prompt and reply, including cited sources, are stored as atproto records.
 
-Daily mention limits apply.
+Daily mention limits apply. Limit hits get a short reply.
 
 ## Limits
 
 Anyone may mention [@getcontext.bot](https://bsky.app/profile/getcontext.bot).
 
-- **Operator** (Jonathan): no daily or hourly actor cap.
-- **Bluesky elders** (Skywatch `bluesky-elder`) and verified `bsky.team` / `*.bsky.team`: 5 invocations per rolling day.
-- **Everyone else:** 1 invocation per rolling day.
+- **Operator** (Jonathan): no daily or hourly actor cap. Thread and shared caps still apply.
+- **Bluesky elders** (Skywatch `bluesky-elder`) and verified `bsky.team` / `*.bsky.team`: 5 first-ask invocations per rolling day.
+- **Everyone else:** 1 first-ask invocation per rolling day.
+- **Follow-ups** (a reply to the bot) do not use the asker's actor daily or hourly slot.
+- **Per thread:** 3 research admissions per rolling day, including follow-ups and operator asks.
+
+When an actor, thread, or budget limit is hit, the bot posts a short reply instead of staying silent.
 
 A shared hourly and daily cap, and a pending-work limit, can still delay a reply.
 

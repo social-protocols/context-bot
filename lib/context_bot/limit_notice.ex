@@ -1,24 +1,24 @@
 defmodule ContextBot.LimitNotice do
   @moduledoc """
-  Posts one canned Bluesky reply when an actor or the shared research budget is exhausted.
+  Posts one canned Bluesky reply when an actor, thread, or shared research budget is exhausted.
 
-  Actor-rate notices follow the image-limit capability pattern: freeze a reply intent and
-  hand off to ReplyWorker, then terminalize. They never set `admitted_at` and never run
-  research. Budget notices stay `deferred_budget` so UTC rollover can still research.
+  Actor-rate and thread-rate notices follow the image-limit capability pattern: freeze a reply
+  intent and hand off to ReplyWorker, then terminalize. They never set `admitted_at` and never
+  run research. Budget notices stay `deferred_budget` so UTC rollover can still research.
   """
 
   import Ecto.Query
 
-  alias ContextBot.ATProto.{ATURI, ReqClient, TID}
+  alias ContextBot.ATProto.{ReqClient, TID}
   alias ContextBot.Reply.Intent
   alias ContextBot.Repo
   alias ContextBot.Research.ReplyLimits
   alias ContextBot.Workflow.{Invocation, Store}
 
-  @homepage_url "https://context-bot-social-protocols.fly.dev"
+  @homepage_url "https://getcontext.bot/"
   @collection "app.bsky.feed.post"
   @reply_worker "ContextBot.Workers.ReplyWorker"
-  @notice_kinds [:actor_rate, :budget]
+  @notice_kinds [:actor_rate, :budget, :thread_rate]
 
   @spec homepage_url() :: String.t()
   def homepage_url, do: @homepage_url
@@ -32,6 +32,15 @@ defmodule ContextBot.LimitNotice do
     "You have reached today's limit for your tier. Try again later. #{@homepage_url}"
   end
 
+  @spec thread_rate_text(DateTime.t() | nil) :: String.t()
+  def thread_rate_text(%DateTime{} = defer_until) do
+    "This thread has reached today's research limit. Try again after #{format_time(defer_until)}. #{@homepage_url}"
+  end
+
+  def thread_rate_text(nil) do
+    "This thread has reached today's research limit. Try again later. #{@homepage_url}"
+  end
+
   @spec budget_text() :: String.t()
   def budget_text do
     "The shared daily research budget is used up. Try again after 00:00 UTC. #{@homepage_url}"
@@ -41,23 +50,22 @@ defmodule ContextBot.LimitNotice do
   Freezes one actor-rate notice and hands it to ReplyWorker, or terminalizes silently.
 
   Global and capacity deferrals must not call this. The invocation stays off the
-  admitted-at rate counters.
+  admitted-at rate counters. A parent-by-bot follow-up still gets a notice; only a
+  duplicate notice already posted for this actor in the window is skipped.
   """
   @spec handoff_actor_rate(Invocation.t(), map()) :: :ok
-  def handoff_actor_rate(%Invocation{dry_run: true}, _deps), do: :ok
+  def handoff_actor_rate(%Invocation{} = invocation, deps),
+    do: handoff_notice(invocation, deps, :actor_rate)
 
-  def handoff_actor_rate(%Invocation{} = invocation, deps) do
-    cond do
-      skip_actor_rate_notice?(invocation, deps) ->
-        silent_complete(invocation, now(deps))
+  @doc """
+  Freezes one per-thread research-quota notice and hands it to ReplyWorker.
 
-      not publishable?(deps) ->
-        silent_complete(invocation, now(deps))
-
-      true ->
-        freeze_actor_rate(invocation, deps)
-    end
-  end
+  Same anti-spam rule as actor-rate: skip only when this actor already received a
+  notice in the window. Do not silent-complete because the parent is a bot reply.
+  """
+  @spec handoff_thread_rate(Invocation.t(), map()) :: :ok
+  def handoff_thread_rate(%Invocation{} = invocation, deps),
+    do: handoff_notice(invocation, deps, :thread_rate)
 
   @doc """
   Posts one budget-exhaustion notice and stays `deferred_budget`.
@@ -68,25 +76,35 @@ defmodule ContextBot.LimitNotice do
   def maybe_post_budget(%Invocation{dry_run: true}, _deps), do: :ok
 
   def maybe_post_budget(%Invocation{} = invocation, deps) do
-    cond do
-      parent_by_bot?(invocation, deps) ->
-        :ok
-
-      not publishable?(deps) ->
-        :ok
-
-      true ->
-        post_budget(invocation, deps)
+    if publishable?(deps) do
+      post_budget(invocation, deps)
+    else
+      :ok
     end
   end
 
-  defp freeze_actor_rate(invocation, deps) do
+  defp handoff_notice(%Invocation{dry_run: true}, _deps, _kind), do: :ok
+
+  defp handoff_notice(%Invocation{} = invocation, deps, kind) do
+    cond do
+      actor_noticed_in_window?(invocation, now(deps)) ->
+        silent_complete(invocation, now(deps))
+
+      not publishable?(deps) ->
+        silent_complete(invocation, now(deps))
+
+      true ->
+        freeze_notice(invocation, deps, kind)
+    end
+  end
+
+  defp freeze_notice(invocation, deps, kind) do
     created_at = now(deps)
-    text = actor_rate_text(invocation.defer_until)
+    text = notice_text(kind, invocation)
 
     with :ok <- validate_copy(text),
          {:ok, intent} <- build_intent(deps, invocation, text, created_at) do
-      attrs = notice_reply_attrs(text, "actor_rate", intent, created_at)
+      attrs = notice_reply_attrs(text, kind, intent)
 
       case Store.transition(
              invocation,
@@ -109,6 +127,9 @@ defmodule ContextBot.LimitNotice do
         fail_closed(invocation, created_at)
     end
   end
+
+  defp notice_text(:actor_rate, invocation), do: actor_rate_text(invocation.defer_until)
+  defp notice_text(:thread_rate, invocation), do: thread_rate_text(invocation.defer_until)
 
   defp post_budget(invocation, deps) do
     created_at = now(deps)
@@ -162,12 +183,12 @@ defmodule ContextBot.LimitNotice do
     end
   end
 
-  defp notice_reply_attrs(text, reason, intent, _created_at) do
+  defp notice_reply_attrs(text, kind, intent) do
     %{
       selected_reply: text,
       reply_validation: %{
         "result" => "limit_notice",
-        "reason" => reason,
+        "reason" => Atom.to_string(kind),
         "source" => "local"
       },
       full_response: nil,
@@ -176,7 +197,7 @@ defmodule ContextBot.LimitNotice do
       reply_repo: intent.reply_repo,
       reply_rkey: intent.reply_rkey,
       reply_record: intent.reply_record,
-      limit_notice_kind: :actor_rate,
+      limit_notice_kind: kind,
       admitted_at: nil,
       completed_at: nil,
       failure_category: nil,
@@ -233,37 +254,6 @@ defmodule ContextBot.LimitNotice do
         raise Ecto.InvalidChangesetError, action: :update, changeset: changeset
     end
   end
-
-  defp skip_actor_rate_notice?(invocation, deps) do
-    parent_by_bot?(invocation, deps) or actor_noticed_in_window?(invocation, now(deps))
-  end
-
-  defp parent_by_bot?(invocation, deps) do
-    bot_did = deps.settings.bot_did
-
-    case {bot_did, parent_uri(invocation)} do
-      {did, uri} when is_binary(did) and is_binary(uri) ->
-        case ATURI.parse(uri) do
-          {:ok, %{repo: ^did}} -> true
-          _other -> false
-        end
-
-      _missing ->
-        false
-    end
-  end
-
-  defp parent_uri(%Invocation{
-         raw_notification: %{"record" => %{"reply" => %{"parent" => parent}}}
-       })
-       when is_map(parent) do
-    case Map.get(parent, "uri") || Map.get(parent, :uri) do
-      uri when is_binary(uri) and uri != "" -> uri
-      _missing -> nil
-    end
-  end
-
-  defp parent_uri(_invocation), do: nil
 
   defp actor_noticed_in_window?(%Invocation{id: id, actor_did: actor_did}, %DateTime{} = now) do
     cutoff = DateTime.add(now, -24 * 60 * 60, :second)

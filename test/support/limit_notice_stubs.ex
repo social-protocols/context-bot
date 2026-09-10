@@ -2,6 +2,7 @@ defmodule ContextBot.LimitNoticeNoop do
   @moduledoc false
 
   def handoff_actor_rate(_invocation, _deps), do: :ok
+  def handoff_thread_rate(_invocation, _deps), do: :ok
   def maybe_post_budget(_invocation, _deps), do: :ok
 end
 
@@ -10,6 +11,11 @@ defmodule ContextBot.LimitNoticeRecorder do
 
   def handoff_actor_rate(invocation, _deps) do
     send(self(), {:limit_notice, :actor_rate, invocation.id})
+    :ok
+  end
+
+  def handoff_thread_rate(invocation, _deps) do
+    send(self(), {:limit_notice, :thread_rate, invocation.id})
     :ok
   end
 

@@ -7,6 +7,7 @@ defmodule ContextBot.Admission do
 
   import Ecto.Query
 
+  alias ContextBot.Mentions.Subject
   alias ContextBot.{Repo, Settings}
   alias ContextBot.Workflow.Invocation
   alias Ecto.Changeset
@@ -35,7 +36,7 @@ defmodule ContextBot.Admission do
 
   @spec admit(Invocation.t(), DateTime.t(), Settings.t(), Changeset.t()) ::
           {:ok, Invocation.t()}
-          | {:deferred, :actor_rate | :rate | :capacity, Invocation.t()}
+          | {:deferred, :actor_rate | :thread_rate | :rate | :capacity, Invocation.t()}
   def admit(
         %Invocation{id: id} = invocation,
         %DateTime{} = now,
@@ -77,6 +78,10 @@ defmodule ContextBot.Admission do
     {:actor_rate, defer(invocation, :deferred_rate, actor_until)}
   end
 
+  defp apply_admission_decision({:thread_rate, thread_until}, invocation, _now, _thread_job) do
+    {:thread_rate, defer(invocation, :deferred_rate, thread_until)}
+  end
+
   defp apply_admission_decision({:rate, global_until}, invocation, _now, _thread_job) do
     {:rate, defer(invocation, :deferred_rate, global_until)}
   end
@@ -88,7 +93,8 @@ defmodule ContextBot.Admission do
         status: :capturing_thread,
         stage: :capturing_thread,
         admitted_at: now,
-        defer_until: nil
+        defer_until: nil,
+        root_uri: Subject.thread_root_uri(invocation)
       })
       |> Repo.update!()
 
@@ -100,6 +106,9 @@ defmodule ContextBot.Admission do
 
   defp finalize_admission({:ok, {:actor_rate, invocation}}),
     do: {:deferred, :actor_rate, invocation}
+
+  defp finalize_admission({:ok, {:thread_rate, invocation}}),
+    do: {:deferred, :thread_rate, invocation}
 
   defp finalize_admission({:ok, {:rate, invocation}}), do: {:deferred, :rate, invocation}
   defp finalize_admission({:ok, {:capacity, invocation}}), do: {:deferred, :capacity, invocation}
@@ -115,6 +124,9 @@ defmodule ContextBot.Admission do
 
       actor_until = actor_rate_defer_until(invocation, now, settings) ->
         {:actor_rate, actor_until}
+
+      thread_until = thread_rate_defer_until(invocation, now, settings) ->
+        {:thread_rate, thread_until}
 
       global_until = global_rate_defer_until(now, settings) ->
         {:rate, global_until}
@@ -138,6 +150,7 @@ defmodule ContextBot.Admission do
   defp rate_defer_until(%Invocation{} = invocation, now, settings, excluded_invocation_id) do
     [
       actor_rate_defer_until(invocation, now, settings, excluded_invocation_id),
+      thread_rate_defer_until(invocation, now, settings, excluded_invocation_id),
       global_rate_defer_until(now, settings, excluded_invocation_id)
     ]
     |> Enum.reject(&is_nil/1)
@@ -150,28 +163,44 @@ defmodule ContextBot.Admission do
          settings,
          excluded_invocation_id \\ nil
        ) do
-    if skip_actor_rate_windows?(invocation.actor_did, settings) do
+    if skip_actor_rate_windows?(invocation, settings) do
       nil
     else
       [
-        breached_window(
-          invocation.actor_did,
+        breached_actor_window(
+          invocation,
           now,
           :hour,
           settings.actor_hourly_limit,
-          excluded_invocation_id
+          excluded_invocation_id,
+          settings.bot_did
         ),
-        breached_window(
-          invocation.actor_did,
+        breached_actor_window(
+          invocation,
           now,
           :day,
           actor_daily_limit(invocation, settings),
-          excluded_invocation_id
+          excluded_invocation_id,
+          settings.bot_did
         )
       ]
       |> Enum.reject(&is_nil/1)
       |> Enum.max(DateTime, fn -> nil end)
     end
+  end
+
+  defp thread_rate_defer_until(
+         %Invocation{} = invocation,
+         now,
+         settings,
+         excluded_invocation_id \\ nil
+       ) do
+    breached_thread_window(
+      invocation,
+      now,
+      settings.thread_daily_limit,
+      excluded_invocation_id
+    )
   end
 
   defp global_rate_defer_until(now, settings, excluded_invocation_id \\ nil) do
@@ -183,13 +212,20 @@ defmodule ContextBot.Admission do
     |> Enum.max(DateTime, fn -> nil end)
   end
 
-  # Operator allowlisting skips only actor hourly/daily windows. Global and
-  # max_pending capacity still apply, including for resume_available?/3.
-  defp skip_actor_rate_windows?(actor_did, %Settings{operator_allowed_dids: allowed})
+  # Operator allowlisting skips only actor hourly/daily windows. Follow-ups
+  # whose parent is this bot also skip those actor windows. Global, thread,
+  # and max_pending capacity still apply, including for resume_available?/3
+  # and operator live demos.
+  defp skip_actor_rate_windows?(%Invocation{} = invocation, settings) do
+    operator_allowlisted?(invocation.actor_did, settings) or
+      Subject.parent_by_bot?(invocation, settings.bot_did)
+  end
+
+  defp operator_allowlisted?(actor_did, %Settings{operator_allowed_dids: allowed})
        when is_binary(actor_did),
        do: actor_did in allowed
 
-  defp skip_actor_rate_windows?(_actor_did, _settings), do: false
+  defp operator_allowlisted?(_actor_did, _settings), do: false
 
   # Elders and verified bsky.team share ACTOR_DAILY_LIMIT. Everyone else,
   # including an unclassified or public mention, uses ACTOR_DAILY_LIMIT_PUBLIC.
@@ -199,6 +235,72 @@ defmodule ContextBot.Admission do
        do: settings.actor_daily_limit
 
   defp actor_daily_limit(_invocation, settings), do: settings.actor_daily_limit_public
+
+  defp breached_actor_window(invocation, now, window, limit, excluded_invocation_id, bot_did) do
+    window_seconds = window_seconds(window)
+    cutoff = DateTime.add(now, -window_seconds, :second)
+
+    query =
+      from candidate in Invocation,
+        where:
+          candidate.actor_did == ^invocation.actor_did and
+            candidate.admitted_at > ^cutoff and
+            candidate.admitted_at <= ^now
+
+    query =
+      if excluded_invocation_id do
+        where(query, [candidate], candidate.id != ^excluded_invocation_id)
+      else
+        query
+      end
+
+    counted =
+      query
+      |> Repo.all()
+      |> Enum.reject(&Subject.parent_by_bot?(&1, bot_did))
+
+    case counted do
+      rows when length(rows) >= limit ->
+        earliest = rows |> Enum.map(& &1.admitted_at) |> Enum.min(DateTime)
+        DateTime.add(earliest, window_seconds, :second)
+
+      _below_limit ->
+        nil
+    end
+  end
+
+  defp breached_thread_window(invocation, now, limit, excluded_invocation_id) do
+    window_seconds = window_seconds(:day)
+    cutoff = DateTime.add(now, -window_seconds, :second)
+    root_uri = Subject.thread_root_uri(invocation)
+
+    query =
+      from candidate in Invocation,
+        where:
+          candidate.admitted_at > ^cutoff and
+            candidate.admitted_at <= ^now
+
+    query =
+      if excluded_invocation_id do
+        where(query, [candidate], candidate.id != ^excluded_invocation_id)
+      else
+        query
+      end
+
+    counted =
+      query
+      |> Repo.all()
+      |> Enum.filter(&(Subject.thread_root_uri(&1) == root_uri))
+
+    case counted do
+      rows when length(rows) >= limit ->
+        earliest = rows |> Enum.map(& &1.admitted_at) |> Enum.min(DateTime)
+        DateTime.add(earliest, window_seconds, :second)
+
+      _below_limit ->
+        nil
+    end
+  end
 
   defp breached_window(actor_did, now, window, limit, excluded_invocation_id) do
     window_seconds = window_seconds(window)
