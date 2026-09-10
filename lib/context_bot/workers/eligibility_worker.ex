@@ -188,6 +188,10 @@ defmodule ContextBot.Workers.EligibilityWorker do
     dependencies.limit_notice.handoff_actor_rate(invocation, dependencies)
   end
 
+  defp admission_result({:deferred, :thread_rate, invocation}, dependencies) do
+    dependencies.limit_notice.handoff_thread_rate(invocation, dependencies)
+  end
+
   defp admission_result({:deferred, _reason, _invocation}, _dependencies), do: :ok
 
   defp thread_job(invocation) do

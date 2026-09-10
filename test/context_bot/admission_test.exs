@@ -6,6 +6,8 @@ defmodule ContextBot.AdmissionTest do
 
   @now ~U[2026-07-30 12:00:00Z]
   @actor_did "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"
+  @bot_did "did:plc:contextbot123aaaaaaaaaa"
+  @root_uri "at://did:plc:rootactoraaaaaaaaaaaaaa/app.bsky.feed.post/viral-root"
 
   test "admits and commits capturing_thread with its exact future ThreadWorker job" do
     invocation = eligible_invocation("success", @actor_did)
@@ -416,6 +418,154 @@ defmodule ContextBot.AdmissionTest do
     refute Admission.resume_available?(invocation, @now, operator_settings)
   end
 
+  test "a follow-up whose parent is the bot does not consume the public actor daily slot" do
+    limits = settings(bot_did: @bot_did)
+
+    historical(
+      "follow-up-spent",
+      @actor_did,
+      DateTime.add(@now, -1, :hour),
+      %{
+        eligibility_method: "public",
+        raw_notification: follow_up_notification("follow-up-spent"),
+        root_uri: @root_uri
+      }
+    )
+
+    invocation = eligible_invocation("first-ask-after-follow-up", @actor_did, "public")
+
+    assert {:ok, admitted} =
+             Admission.admit(invocation, @now, limits, thread_job(invocation))
+
+    assert admitted.status == :capturing_thread
+    assert Repo.aggregate(Oban.Job, :count) == 1
+  end
+
+  test "admits a follow-up after the public actor daily slot is already used" do
+    limits = settings(bot_did: @bot_did)
+    historical("public-first-ask", @actor_did, DateTime.add(@now, -1, :hour))
+
+    invocation =
+      eligible_invocation("public-follow-up", @actor_did, "public", %{
+        raw_notification: follow_up_notification("public-follow-up"),
+        root_uri: @root_uri
+      })
+
+    assert {:ok, admitted} =
+             Admission.admit(invocation, @now, limits, thread_job(invocation))
+
+    assert admitted.status == :capturing_thread
+    assert admitted.root_uri == @root_uri
+    assert Repo.aggregate(Oban.Job, :count) == 1
+  end
+
+  test "defers a fourth research admission in the same thread root" do
+    limits = settings(bot_did: @bot_did, thread_daily_limit: 3)
+
+    for index <- 1..3 do
+      historical(
+        "thread-prior-#{index}",
+        "did:plc:threadactor#{index}aaaaaaaaaaaa",
+        DateTime.add(@now, -index, :hour),
+        %{root_uri: @root_uri, raw_notification: thread_notification("thread-prior-#{index}")}
+      )
+    end
+
+    invocation =
+      eligible_invocation("thread-fourth", @actor_did, "public", %{
+        raw_notification: thread_notification("thread-fourth"),
+        root_uri: @root_uri
+      })
+
+    assert {:deferred, :thread_rate, deferred} =
+             Admission.admit(invocation, @now, limits, thread_job(invocation))
+
+    assert deferred.status == :deferred_rate
+    assert DateTime.compare(deferred.defer_until, DateTime.add(@now, 21, :hour)) == :eq
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "admits a third research admission in the same thread root" do
+    limits = settings(bot_did: @bot_did, thread_daily_limit: 3)
+
+    for index <- 1..2 do
+      historical(
+        "thread-under-#{index}",
+        "did:plc:threadunder#{index}aaaaaaaaaaa",
+        DateTime.add(@now, -index, :hour),
+        %{root_uri: @root_uri, raw_notification: thread_notification("thread-under-#{index}")}
+      )
+    end
+
+    invocation =
+      eligible_invocation("thread-third", @actor_did, "public", %{
+        raw_notification: thread_notification("thread-third"),
+        root_uri: @root_uri
+      })
+
+    assert {:ok, admitted} =
+             Admission.admit(invocation, @now, limits, thread_job(invocation))
+
+    assert admitted.status == :capturing_thread
+    assert admitted.root_uri == @root_uri
+  end
+
+  test "thread daily cap applies to operator-allowlisted DIDs and follow-ups" do
+    limits =
+      settings(
+        bot_did: @bot_did,
+        operator_allowed_dids: [@actor_did],
+        thread_daily_limit: 3
+      )
+
+    for index <- 1..3 do
+      historical(
+        "operator-thread-#{index}",
+        "did:plc:opthread#{index}aaaaaaaaaaaaaa",
+        DateTime.add(@now, -index, :hour),
+        %{
+          root_uri: @root_uri,
+          raw_notification: follow_up_notification("operator-thread-#{index}")
+        }
+      )
+    end
+
+    invocation =
+      eligible_invocation("operator-thread-fourth", @actor_did, "operator_allowlist", %{
+        raw_notification: follow_up_notification("operator-thread-fourth"),
+        root_uri: @root_uri
+      })
+
+    assert {:deferred, :thread_rate, deferred} =
+             Admission.admit(invocation, @now, limits, thread_job(invocation))
+
+    assert deferred.status == :deferred_rate
+    assert Repo.aggregate(Oban.Job, :count) == 0
+  end
+
+  test "resume_available? respects the thread daily cap" do
+    invocation =
+      insert_invocation("thread-resume", @actor_did, :deferred_budget, %{
+        admitted_at: DateTime.add(@now, -10, :minute),
+        root_uri: @root_uri,
+        raw_notification: thread_notification("thread-resume")
+      })
+
+    for index <- 1..3 do
+      historical(
+        "thread-resume-other-#{index}",
+        "did:plc:resumethread#{index}aaaaaaaaaa",
+        DateTime.add(@now, -index, :hour),
+        %{
+          root_uri: @root_uri,
+          raw_notification: thread_notification("thread-resume-other-#{index}")
+        }
+      )
+    end
+
+    refute Admission.resume_available?(invocation, @now, settings(bot_did: @bot_did))
+  end
+
   test "serializes concurrent claims so only the actor limit is admitted" do
     invocations =
       for index <- 1..4 do
@@ -438,11 +588,19 @@ defmodule ContextBot.AdmissionTest do
 
   defp settings(overrides \\ []), do: Settings.load(overrides)
 
-  defp eligible_invocation(rkey, actor_did, method \\ "bluesky_elder") do
-    insert_invocation(rkey, actor_did, :checking_eligibility, %{
-      eligibility_method: method,
-      eligibility_evidence: %{"actor_did" => actor_did}
-    })
+  defp eligible_invocation(rkey, actor_did, method \\ "bluesky_elder", extra \\ %{}) do
+    insert_invocation(
+      rkey,
+      actor_did,
+      :checking_eligibility,
+      Map.merge(
+        %{
+          eligibility_method: method,
+          eligibility_evidence: %{"actor_did" => actor_did}
+        },
+        extra
+      )
+    )
   end
 
   defp pending(rkey), do: insert_invocation(rkey, "did:plc:pending#{rkey}", :received)
@@ -453,11 +611,45 @@ defmodule ContextBot.AdmissionTest do
     })
   end
 
-  defp historical(rkey, actor_did, admitted_at) do
-    insert_invocation(rkey, actor_did, :complete, %{
-      admitted_at: admitted_at,
-      completed_at: @now
-    })
+  defp historical(rkey, actor_did, admitted_at, extra \\ %{}) do
+    insert_invocation(
+      rkey,
+      actor_did,
+      :complete,
+      Map.merge(%{admitted_at: admitted_at, completed_at: @now}, extra)
+    )
+  end
+
+  defp follow_up_notification(rkey) do
+    %{
+      "uri" => "at://#{@actor_did}/app.bsky.feed.post/#{rkey}",
+      "cid" => "bafy#{rkey}",
+      "record" => %{
+        "reply" => %{
+          "parent" => %{
+            "uri" => "at://#{@bot_did}/app.bsky.feed.post/bot-reply",
+            "cid" => "bafybotreply"
+          },
+          "root" => %{"uri" => @root_uri, "cid" => "bafyroot"}
+        }
+      }
+    }
+  end
+
+  defp thread_notification(rkey) do
+    %{
+      "uri" => "at://#{@actor_did}/app.bsky.feed.post/#{rkey}",
+      "cid" => "bafy#{rkey}",
+      "record" => %{
+        "reply" => %{
+          "parent" => %{
+            "uri" => "at://did:plc:humanparentaaaaaaaaaaaa/app.bsky.feed.post/parent",
+            "cid" => "bafyparent"
+          },
+          "root" => %{"uri" => @root_uri, "cid" => "bafyroot"}
+        }
+      }
+    }
   end
 
   defp insert_invocation(rkey, actor_did, status, extra \\ %{}) do

@@ -2,6 +2,7 @@ defmodule ContextBot.LimitNoticeTest.Noop do
   @moduledoc false
 
   def handoff_actor_rate(_invocation, _deps), do: :ok
+  def handoff_thread_rate(_invocation, _deps), do: :ok
   def maybe_post_budget(_invocation, _deps), do: :ok
 end
 
@@ -41,7 +42,7 @@ defmodule ContextBot.LimitNoticeTest do
   @actor_did "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"
   @bot_did "did:plc:contextbot123"
   @rkey "3mzzzznotice01"
-  @homepage "https://context-bot-social-protocols.fly.dev"
+  @homepage "https://getcontext.bot/"
 
   test "actor-rate copy names the tier limit, retry time, and homepage without mentioning the bot" do
     text = LimitNotice.actor_rate_text(~U[2026-07-30 13:00:00.000000Z])
@@ -49,8 +50,18 @@ defmodule ContextBot.LimitNoticeTest do
     assert text ==
              "You have reached today's limit for your tier. Try again after 2026-07-30 13:00 UTC. #{@homepage}"
 
+    assert LimitNotice.homepage_url() == @homepage
     refute text =~ "@"
-    refute text =~ "getcontext"
+    assert String.length(text) <= 300
+  end
+
+  test "thread-rate copy names the thread research limit, retry time, and homepage" do
+    text = LimitNotice.thread_rate_text(~U[2026-07-31 12:00:00.000000Z])
+
+    assert text ==
+             "This thread has reached today's research limit. Try again after 2026-07-31 12:00 UTC. #{@homepage}"
+
+    refute text =~ "@"
     assert String.length(text) <= 300
   end
 
@@ -123,32 +134,69 @@ defmodule ContextBot.LimitNoticeTest do
     assert Repo.aggregate(Oban.Job, :count) == 1
   end
 
-  test "skips a new actor-rate notice when the parent is already a bot post" do
+  test "posts an actor-rate notice when the parent is already a bot post" do
     invocation =
       invocation("reply-to-notice", :deferred_rate, %{
         defer_until: ~U[2026-07-30 13:00:00.000000Z],
-        raw_notification: %{
-          "uri" => "at://#{@actor_did}/app.bsky.feed.post/reply-to-notice",
-          "cid" => "bafyreply-to-notice",
-          "record" => %{
-            "reply" => %{
-              "parent" => %{
-                "uri" => "at://#{@bot_did}/app.bsky.feed.post/prior-notice",
-                "cid" => "bafyprior"
-              }
-            }
-          }
-        }
+        raw_notification: follow_up_notification("reply-to-notice")
       })
 
     assert :ok = LimitNotice.handoff_actor_rate(invocation, deps())
 
     persisted = Repo.reload!(invocation)
-    assert persisted.stage == :complete
+    assert persisted.stage == :reply_ready
     assert persisted.admitted_at == nil
-    assert persisted.reply_record == nil
-    assert persisted.limit_notice_kind == nil
-    assert Repo.aggregate(Oban.Job, :count) == 0
+    assert persisted.limit_notice_kind == :actor_rate
+    assert persisted.selected_reply == LimitNotice.actor_rate_text(persisted.defer_until)
+
+    assert [%Oban.Job{worker: "ContextBot.Workers.ReplyWorker", queue: "reply"}] =
+             Repo.all(Oban.Job)
+  end
+
+  test "handoff_thread_rate freezes one ReplyWorker notice without admitting research" do
+    invocation =
+      invocation("thread-rate-notice", :deferred_rate, %{
+        defer_until: ~U[2026-07-31 12:00:00.000000Z],
+        raw_notification: follow_up_notification("thread-rate-notice")
+      })
+
+    assert :ok = LimitNotice.handoff_thread_rate(invocation, deps())
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :reply_ready
+    assert persisted.status == :reply_ready
+    assert persisted.admitted_at == nil
+    assert persisted.limit_notice_kind == :thread_rate
+
+    assert persisted.selected_reply ==
+             LimitNotice.thread_rate_text(~U[2026-07-31 12:00:00.000000Z])
+
+    assert persisted.reply_validation == %{
+             "result" => "limit_notice",
+             "reason" => "thread_rate",
+             "source" => "local"
+           }
+
+    assert [%Oban.Job{worker: "ContextBot.Workers.ReplyWorker", queue: "reply"}] =
+             Repo.all(Oban.Job)
+  end
+
+  test "posts a budget notice when the parent is already a bot post" do
+    invocation =
+      invocation("budget-follow-up", :deferred_budget, %{
+        admitted_at: DateTime.add(@now, -1, :minute),
+        defer_until: ~U[2026-07-31 00:00:00.000000Z],
+        deferred_attempt_kind: :research,
+        raw_notification: follow_up_notification("budget-follow-up")
+      })
+
+    assert :ok = LimitNotice.maybe_post_budget(invocation, deps(atproto_client: PutClient))
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.stage == :deferred_budget
+    assert persisted.limit_notice_kind == :budget
+    assert_received {:limit_notice_put, @bot_did, "app.bsky.feed.post", @rkey, record}
+    assert record["text"] == LimitNotice.budget_text()
   end
 
   test "skips a new actor-rate notice when the actor already received one this window" do
@@ -276,6 +324,25 @@ defmodule ContextBot.LimitNoticeTest do
     ]
 
     Map.new(Keyword.merge(defaults, overrides))
+  end
+
+  defp follow_up_notification(rkey) do
+    %{
+      "uri" => "at://#{@actor_did}/app.bsky.feed.post/#{rkey}",
+      "cid" => "bafy#{rkey}",
+      "record" => %{
+        "reply" => %{
+          "parent" => %{
+            "uri" => "at://#{@bot_did}/app.bsky.feed.post/prior-notice",
+            "cid" => "bafyprior"
+          },
+          "root" => %{
+            "uri" => "at://did:plc:root/app.bsky.feed.post/viral-root",
+            "cid" => "bafyroot"
+          }
+        }
+      }
+    }
   end
 
   defp invocation(rkey, status, extra) do

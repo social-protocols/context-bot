@@ -314,7 +314,7 @@ The release entrypoint migrates `/data/context_bot.db` before starting Phoenix. 
 
 Live tests call Bluesky and Anthropic and publish a public reply. They always require explicit authorization.
 
-Anyone who directly mentions the bot is eligible. Actor daily limits are tiered: unlimited for `OPERATOR_ALLOWED_DIDS` (actor hourly/daily windows skipped), 5/day for a bidirectionally verified `bsky.team` handle or a confirmed Skywatch `bluesky-elder` label (`ACTOR_DAILY_LIMIT`), and 1/day for everyone else (`ACTOR_DAILY_LIMIT_PUBLIC`). A Skywatch or identity outage degrades the actor to the public tier instead of rejecting the mention. Global hourly/daily limits and `max_pending` still apply to everyone, including the operator. `ACTOR_HOURLY_LIMIT` remains a burst cap for non-operator actors; daily tiers are the actor cap.
+Anyone who directly mentions the bot is eligible. Actor daily limits are tiered: unlimited for `OPERATOR_ALLOWED_DIDS` (actor hourly/daily windows skipped), 5/day for a bidirectionally verified `bsky.team` handle or a confirmed Skywatch `bluesky-elder` label (`ACTOR_DAILY_LIMIT`), and 1/day for everyone else (`ACTOR_DAILY_LIMIT_PUBLIC`). Mentions whose parent post is by the bot do not consume the asker's actor hourly/daily slot. `THREAD_DAILY_LIMIT` (default 3) caps research admissions per thread root per rolling day for everyone, including operators and follow-ups. A Skywatch or identity outage degrades the actor to the public tier instead of rejecting the mention. Global hourly/daily limits and `max_pending` still apply to everyone, including the operator. `ACTOR_HOURLY_LIMIT` remains a burst cap for non-operator actors; daily tiers are the actor first-ask cap. Actor-rate, thread-rate, and budget hits post a short Bluesky notice linking `https://getcontext.bot/` instead of staying silent (a duplicate notice already posted for that actor in the window is still skipped).
 
 1. With explicit authorization, record the current invocation, sent-budget-entry, provider-response, and completed-reply counts using the aggregate-only `fly ssh console` queries above.
 2. Create a public ancestor chain. Mention the bot in a new reply and ask for context.
@@ -327,7 +327,7 @@ For a public-tier rate-limit check, use an account that is not `bsky.team`, has 
 
 1. Record the sent-budget-entry, provider-response, and completed-reply counts after the first public mention has completed.
 2. Mention the bot publicly again from the same account and wait through a poll and job cycle.
-3. Confirm the second invocation becomes `deferred_rate` until the rolling 24-hour window opens. There must be no additional Claude request and no second bot reply until that window expires.
+3. Confirm the second first-ask becomes a limit-notice reply (`limit_notice_kind = actor_rate`) with no additional Claude request. A follow-up that replies to the bot does not use another actor daily slot; a fourth research admission in the same thread root in one rolling day becomes a thread-rate notice instead of researching.
 
 ## Rollback
 

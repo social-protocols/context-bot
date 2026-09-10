@@ -24,6 +24,7 @@ defmodule ContextBot.SettingsTest do
     assert settings.actor_hourly_limit == 2
     assert settings.actor_daily_limit == 5
     assert settings.actor_daily_limit_public == 1
+    assert settings.thread_daily_limit == 3
     assert settings.global_hourly_limit == 10
     assert settings.global_daily_limit == 50
     assert settings.max_pending == 25
@@ -251,6 +252,15 @@ defmodule ContextBot.SettingsTest do
 
     assert_raise ArgumentError, ~r/ACTOR_DAILY_LIMIT_PUBLIC/, fn ->
       Settings.load(actor_daily_limit_public: 0)
+    end
+  end
+
+  test "loads the per-thread daily research limit from environment and options" do
+    assert Settings.load(%{"THREAD_DAILY_LIMIT" => "5"}).thread_daily_limit == 5
+    assert Settings.load(thread_daily_limit: 2).thread_daily_limit == 2
+
+    assert_raise ArgumentError, ~r/THREAD_DAILY_LIMIT/, fn ->
+      Settings.load(thread_daily_limit: 0)
     end
   end
 

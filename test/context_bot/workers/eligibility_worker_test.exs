@@ -327,6 +327,66 @@ defmodule ContextBot.Workers.EligibilityWorkerTest do
              Repo.all(Oban.Job)
   end
 
+  test "posts a thread-rate notice when the thread daily cap is reached" do
+    root_uri = "at://did:plc:rootactoraaaaaaaaaaaaaa/app.bsky.feed.post/viral-root"
+    rkey = "3mzzzznoticeth"
+
+    for index <- 1..3 do
+      invocation(
+        "thread-prior-#{index}",
+        :complete,
+        %{
+          admitted_at: DateTime.add(@now, -index, :hour),
+          completed_at: @now,
+          root_uri: root_uri
+        },
+        "did:plc:threadactor#{index}aaaaaaaaaaaa"
+      )
+    end
+
+    invocation =
+      invocation("worker-thread-notice", :received, %{
+        raw_notification: %{
+          "uri" => "at://#{@actor_did}/app.bsky.feed.post/worker-thread-notice",
+          "cid" => "bafyworker-thread-notice",
+          "record" => %{
+            "reply" => %{
+              "parent" => %{
+                "uri" => "at://did:plc:humanparentaaaaaaaaaaaa/app.bsky.feed.post/parent",
+                "cid" => "bafyparent"
+              },
+              "root" => %{"uri" => root_uri, "cid" => "bafyroot"}
+            }
+          }
+        }
+      })
+
+    Process.put(
+      {GateStub, :result},
+      {:eligible, :public, %{"actor_did" => @actor_did, "source" => "public"}}
+    )
+
+    configure(
+      settings(bot_did: "did:plc:contextbot123"),
+      eligibility: GateStub,
+      limit_notice: LimitNotice,
+      intent_builder: &Intent.build/5,
+      tid_generator: fn _timestamp -> rkey end
+    )
+
+    assert :ok = perform(invocation)
+
+    persisted = Repo.reload!(invocation)
+    assert persisted.status == :reply_ready
+    assert persisted.admitted_at == nil
+    assert persisted.limit_notice_kind == :thread_rate
+    assert persisted.selected_reply == LimitNotice.thread_rate_text(persisted.defer_until)
+    refute persisted.selected_reply =~ "@"
+
+    assert [%Oban.Job{worker: "ContextBot.Workers.ReplyWorker", queue: "reply"}] =
+             Repo.all(Oban.Job)
+  end
+
   test "does not use the actor-limit notice for a global rate deferral" do
     for index <- 1..10 do
       invocation(
