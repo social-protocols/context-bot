@@ -1,6 +1,11 @@
 defmodule ContextBot.StandardSite.PageCopy do
   @moduledoc """
-  Builds Standard Reader title, description, and responding-to copy from the invoking post.
+  Builds Standard Reader title, card description, and responding-to copy.
+
+  Title is a short topic headline. Description is Context Bot's compact reply
+  (`selected_reply`), capped for a Reader card. Responding-to copy keeps the
+  existing sentence (handles/links) and, when `asked_text` is present, a
+  Markdown blockquote of the invoking post.
 
   New full-response documents only. Existing published records are not rewritten
   by the publication path.
@@ -81,28 +86,30 @@ defmodule ContextBot.StandardSite.PageCopy do
     end
   end
 
-  @doc "Optional excerpt: invocation text as written, capped for a Reader card."
+  @doc "Optional excerpt: compact reply (`selected_reply`), capped for a Reader card."
   @spec description(content()) :: String.t() | nil
   def description(content) when is_map(content) do
-    case asked_text(content) do
-      "" ->
-        nil
-
-      asked ->
+    case optional_text(content, :selected_reply) do
+      reply when is_binary(reply) and reply != "" ->
         cap = min(@description_card_graphemes, @description_lexicon_graphemes)
-        truncate_graphemes(asked, cap)
+        truncate_graphemes(reply, cap)
+
+      _missing ->
+        nil
     end
   end
 
   @doc """
-  One responding-to line placed after the compact Summary and before the
-  research writeup.
+  Responding-to sentence plus an optional invoking-post blockquote, placed
+  before the research writeup.
 
   Uses a public bsky.app **post** URL for the invocation and, when the
   invocation is a reply with a parseable parent URI, for the parent. Handles
   from thread or notification records are preferred in both the link text and
   the profile segment; a missing handle falls back to the AT-URI repo. A
-  missing or unusable parent uses the root sentence. Create must not fail.
+  missing or unusable parent uses the root sentence. When `asked_text` is
+  nonempty, a Markdown blockquote of that text follows the sentence after a
+  blank line. Create must not fail.
   """
   @spec asked_markdown(content()) :: String.t()
   def asked_markdown(content) when is_map(content) do
@@ -111,20 +118,28 @@ defmodule ContextBot.StandardSite.PageCopy do
     invoker = actor_ref(field(content, :invoker_handle), invocation_uri)
     parent = actor_ref(field(content, :parent_handle), parent_uri)
 
-    cond do
-      match?({_, url} when is_binary(url), invoker) and
-          match?({_, url} when is_binary(url), parent) ->
-        {invoker_label, invoker_url} = invoker
-        {parent_label, parent_url} = parent
+    sentence =
+      cond do
+        match?({_, url} when is_binary(url), invoker) and
+            match?({_, url} when is_binary(url), parent) ->
+          {invoker_label, invoker_url} = invoker
+          {parent_label, parent_url} = parent
 
-        "Responding to [@#{invoker_label}](#{invoker_url})'s reply to [@#{parent_label}](#{parent_url})'s post."
+          "Responding to [@#{invoker_label}](#{invoker_url})'s reply to [@#{parent_label}](#{parent_url})'s post."
 
-      match?({_, url} when is_binary(url), invoker) ->
-        {invoker_label, invoker_url} = invoker
-        "Responding to [@#{invoker_label}](#{invoker_url})'s post."
+        match?({_, url} when is_binary(url), invoker) ->
+          {invoker_label, invoker_url} = invoker
+          "Responding to [@#{invoker_label}](#{invoker_url})'s post."
 
-      true ->
-        ""
+        true ->
+          ""
+      end
+
+    case {sentence, asked_text(content)} do
+      {"", ""} -> ""
+      {line, ""} -> line
+      {"", asked} -> blockquote(asked)
+      {line, asked} -> line <> "\n\n" <> blockquote(asked)
     end
   end
 
@@ -243,6 +258,12 @@ defmodule ContextBot.StandardSite.PageCopy do
       text when is_binary(text) -> String.trim(text)
       _missing -> ""
     end
+  end
+
+  defp blockquote(text) do
+    text
+    |> String.split("\n")
+    |> Enum.map_join("\n", &("> " <> &1))
   end
 
   defp optional_text(content, key) do
