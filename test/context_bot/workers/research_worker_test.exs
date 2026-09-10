@@ -56,6 +56,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
   alias ContextBot.LimitNoticeRecorder
   alias ContextBot.Research.{Drafts, ReplyLimits, Request}
   alias ContextBot.Settings
+  alias ContextBot.StandardSite.PageCopy
   alias ContextBot.Workers.ResearchWorker
   alias ContextBot.Workers.ResearchWorkerTest.{AnthropicClient, Runner}
   alias ContextBot.Workflow.{Invocation, Store}
@@ -349,7 +350,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     original = String.duplicate("a", 340)
     shortened = String.duplicate("a", 280) <> ReplyLimits.continuation_ellipsis()
     writeup = Drafts.format("Mostly True?", original) <> "\n\nThorough markdown writeup."
-    card_cap = ContextBot.StandardSite.PageCopy.description_max_graphemes()
+    card_cap = PageCopy.description_max_graphemes()
 
     invocation = invocation("compact-source-writeup", :thread_ready)
 
