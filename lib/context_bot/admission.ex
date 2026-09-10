@@ -7,8 +7,8 @@ defmodule ContextBot.Admission do
 
   import Ecto.Query
 
-  alias ContextBot.{Repo, Settings}
   alias ContextBot.Mentions.Subject
+  alias ContextBot.{Repo, Settings}
   alias ContextBot.Workflow.Invocation
   alias Ecto.Changeset
 
