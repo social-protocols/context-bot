@@ -5,7 +5,8 @@ defmodule ContextBot.StandardSite.PageCopy do
   Title is a short topic headline. Description is Context Bot's compact reply
   (`selected_reply`), capped for a Reader card. Responding-to copy keeps the
   existing sentence (handles/links) and, when `asked_text` is present, a
-  Markdown blockquote of the invoking post.
+  Markdown blockquote of the invoking post. Invocation text is HTML-escaped
+  and markdown-neutralized so a crafted Bluesky post cannot inject markup.
 
   New full-response documents only. Existing published records are not rewritten
   by the publication path.
@@ -22,6 +23,10 @@ defmodule ContextBot.StandardSite.PageCopy do
   @description_card_graphemes 300
   @description_lexicon_graphemes 3_000
   @fallback_title "Context request"
+  # Punctuation that opens markdown constructs. `[` is enough to kill links
+  # and images, so `!` `(` `)` stay readable. HTML specials are entity-encoded
+  # instead: a backslash before `<` still becomes a raw `<` in HTML output.
+  @markdown_specials ["\\", "`", "*", "_", "[", "]", "#", "|"]
 
   @type content :: %{optional(atom()) => term()}
   @type settings :: Settings.t() | map()
@@ -109,7 +114,8 @@ defmodule ContextBot.StandardSite.PageCopy do
   the profile segment; a missing handle falls back to the AT-URI repo. A
   missing or unusable parent uses the root sentence. When `asked_text` is
   nonempty, a Markdown blockquote of that text follows the sentence after a
-  blank line. Create must not fail.
+  blank line. The invocation text is escaped so HTML and markdown in the
+  post cannot inject into the Reader page. Create must not fail.
   """
   @spec asked_markdown(content()) :: String.t()
   def asked_markdown(content) when is_map(content) do
@@ -262,8 +268,31 @@ defmodule ContextBot.StandardSite.PageCopy do
 
   defp blockquote(text) do
     text
+    |> String.replace("\r\n", "\n")
+    |> String.replace("\r", "\n")
     |> String.split("\n")
-    |> Enum.map_join("\n", &("> " <> &1))
+    |> Enum.map_join("\n", &("> " <> neutralize_asked_line(&1)))
+  end
+
+  defp neutralize_asked_line(line) do
+    line
+    |> html_escape()
+    |> escape_markdown()
+  end
+
+  defp html_escape(text) do
+    text
+    |> String.replace("&", "&amp;")
+    |> String.replace("<", "&lt;")
+    |> String.replace(">", "&gt;")
+    |> String.replace("\"", "&quot;")
+    |> String.replace("'", "&#39;")
+  end
+
+  defp escape_markdown(text) do
+    Enum.reduce(@markdown_specials, text, fn char, acc ->
+      String.replace(acc, char, "\\" <> char)
+    end)
   end
 
   defp optional_text(content, key) do
