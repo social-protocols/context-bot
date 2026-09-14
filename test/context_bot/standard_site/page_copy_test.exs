@@ -207,6 +207,21 @@ defmodule ContextBot.StandardSite.PageCopyTest do
       refute description == "Americans are getting sicker, but the FDA-cutlink is unverified."
     end
 
+    test "inserts a space when both sides are a letter or digit after the ellipsis strip" do
+      part1 = "See the FDA…"
+      part2 = "…cutlink remains. (full response)"
+
+      description =
+        PageCopy.description(%{
+          asked_text: @bird_invocation,
+          selected_reply: part1,
+          text_part2: part2
+        })
+
+      assert description == "See the FDA cutlink remains."
+      refute description == "See the FDAcutlink remains."
+    end
+
     test "inserts a space when part2 starts with punctuation after the ellipsis strip" do
       part1 = "See the factors…"
       part2 = "…(motivation, incentive) that remain. (full response)"
