@@ -4,8 +4,10 @@ defmodule ContextBot.StandardSite.PageCopy do
 
   Title is a short topic headline. Description is the full compact: prefer
   `compact_source` when present, otherwise join published part1 and part2 by
-  stripping continuation ellipses and a trailing ` (full response)`. Truncate
-  only to the lexicon max when needed. There is no tighter card cap.
+  stripping continuation ellipses, inserting a space before punctuation when
+  needed (`factors…` / `…(motivation`), and stripping a trailing
+  ` (full response)`. Truncate only to the lexicon max when needed. There is
+  no tighter card cap.
   Responding-to copy keeps the existing sentence (handles/links) and, when
   `asked_text` is present, a Markdown blockquote of the invoking post.
   Invocation text is HTML-escaped and markdown-neutralized so a crafted
@@ -99,7 +101,9 @@ defmodule ContextBot.StandardSite.PageCopy do
 
   Prefers `compact_source` when present. Otherwise joins `selected_reply`/`text`
   with optional `text_part2`/`selected_reply_part2` by stripping a trailing
-  continuation ellipsis from part 1, a leading one from part 2, and a trailing
+  continuation ellipsis from part 1, a leading one from part 2, inserting a
+  space when part 1 then ends in a letter or digit and part 2 starts with
+  punctuation (inv 58 `factors…` / `…(motivation`), and stripping a trailing
   `Post.link_suffix/0`.
   """
   @spec description(content()) :: String.t() | nil
@@ -175,14 +179,28 @@ defmodule ContextBot.StandardSite.PageCopy do
 
   defp join_compact_parts(part1, part2)
        when is_binary(part1) and part1 != "" and is_binary(part2) and part2 != "" do
-    part1
-    |> strip_trailing_ellipsis()
-    |> Kernel.<>(strip_leading_ellipsis(part2))
+    left = strip_trailing_ellipsis(part1)
+    right = strip_leading_ellipsis(part2)
+
+    left
+    |> maybe_space_before_punctuation(right)
     |> strip_trailing_link_suffix()
   end
 
   defp join_compact_parts(part1, _part2) when is_binary(part1) and part1 != "", do: part1
   defp join_compact_parts(_part1, _part2), do: nil
+
+  defp maybe_space_before_punctuation(left, right) do
+    if letter_or_digit_end?(left) and punctuation_start?(right) do
+      left <> " " <> right
+    else
+      left <> right
+    end
+  end
+
+  defp letter_or_digit_end?(text), do: Regex.match?(~r/[\p{L}\p{N}]\z/u, text)
+
+  defp punctuation_start?(text), do: Regex.match?(~r/\A\p{P}/u, text)
 
   defp strip_trailing_ellipsis(text) do
     cond do
