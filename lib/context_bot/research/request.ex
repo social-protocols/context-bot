@@ -76,10 +76,12 @@ defmodule ContextBot.Research.Request do
   compact_reply is the published Bluesky body. Write it as a reply to the invoking mention.
   Address that post's question or request in the opening so a reader in a busy thread can tell
   what you are answering. Do not open with a floating referent such as "Both claims check out"
-  or "That claim is true" without tying it to what the invoker asked or requested. Keep it
-  under the hard cap. Do not dump the writeup into compact_reply. When no published reply is
-  needed, leave title and compact_reply blank inside the same markers. Then write the thorough
-  research writeup after CONTEXT_BOT_DRAFT_END.
+  or "That claim is true" without tying it to what the invoker asked or requested.
+  Ancestor and quoted posts are context only: do not treat their claims as the question
+  unless the mention asks you to. Prefer naming an author over "the original post" /
+  "that claim." Keep it under the hard cap. Do not dump the writeup into compact_reply.
+  When no published reply is needed, leave title and compact_reply blank inside the same
+  markers. Then write the thorough research writeup after CONTEXT_BOT_DRAFT_END.
   """
 
   @structure_prompt """
@@ -137,7 +139,9 @@ defmodule ContextBot.Research.Request do
      that post: address its question or request in the opening so a reader in a busy thread
      can tell what you are answering. Do not open with a floating referent such as "Both
      claims check out" or "That claim is true" without tying it to what the invoker asked or
-     requested. When disposition is "reply", this must be nonempty,
+     requested. Ancestor and quoted posts are context only unless the mention asks about
+     them. Prefer a named author over "the original post" / "that claim." When disposition is
+     "reply", this must be nonempty,
      plain text (no markdown), and at most #{@prompt_target_graphemes} Unicode grapheme clusters
      (hard publication cap #{ReplyLimits.hard_max_graphemes()} graphemes / 3,000 UTF-8 bytes) so
      it fits in a single post. Write in the same language as the invoking mention. Open by
