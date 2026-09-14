@@ -194,12 +194,10 @@ defmodule ContextBot.StandardSite.PageCopy do
   defp join_compact_parts(_part1, _part2), do: nil
 
   defp maybe_restore_join_space(left, right) do
-    cond do
-      letter_or_digit_end?(left) and letter_or_digit_start?(right) ->
-        left <> " " <> right
-
-      true ->
-        maybe_space_before_punctuation(left, right)
+    if letter_or_digit_end?(left) and letter_or_digit_start?(right) do
+      left <> " " <> right
+    else
+      maybe_space_before_punctuation(left, right)
     end
   end
 
