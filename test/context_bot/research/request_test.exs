@@ -793,9 +793,19 @@ defmodule ContextBot.Research.RequestTest do
     assert prompt =~ "Write it as a reply to the invoking mention"
     assert prompt =~ "Both claims check out"
     assert prompt =~ "floating referent"
+
+    assert prompt =~
+             "Ancestor and quoted posts are context only: do not treat their claims as the question unless the mention asks you to."
+
+    assert prompt =~ "Prefer naming an author over \"the original post\" / \"that claim.\""
     assert structure =~ "Write it as a reply to"
     assert structure =~ "Both claims check out"
     assert structure =~ "floating referent"
+
+    assert structure =~
+             "Ancestor and quoted posts are context only unless the mention asks about them."
+
+    assert structure =~ "Prefer a named author over \"the original post\" / \"that claim.\""
     assert compact =~ "reply to the invoking mention"
     assert compact =~ "Both claims check out"
     assert compact =~ "floating referent"
