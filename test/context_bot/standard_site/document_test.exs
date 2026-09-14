@@ -428,17 +428,21 @@ defmodule ContextBot.StandardSite.DocumentTest do
       analysis_at = match_at(markdown, "# Research Analysis")
       block = responding_block(markdown)
 
-      assert responding_at < quote_at
-      assert quote_at < analysis_at
+      assert quote_at < responding_at
+      assert responding_at < analysis_at
       refute markdown =~ "## Asked"
       refute markdown =~ "## Summary"
       refute block =~ "What bird is that?"
 
       assert block ==
-               "Responding to [@alice.test](https://bsky.app/profile/alice.test/post/3k123)'s reply to [@bob.test](https://bsky.app/profile/bob.test/post/3parentrkey12)'s post."
+               caption(
+                 "Responding to [@alice.test](https://bsky.app/profile/alice.test/post/3k123)'s reply to [@bob.test](https://bsky.app/profile/bob.test/post/3parentrkey12)'s post."
+               )
+
+      assert markdown =~ "> What bird is that?\n\n#{block}\n\n# Research Analysis"
     end
 
-    test "places responding-to first, then writeup, continue link, and metadata" do
+    test "places the invocation quote first, then writeup, continue link, and metadata" do
       markdown = Document.format_markdown(@content)
       responding_at = match_at(markdown, "Responding to")
       quote_at = match_at(markdown, "> What bird is that?")
@@ -450,8 +454,8 @@ defmodule ContextBot.StandardSite.DocumentTest do
 
       refute markdown =~ "## Summary"
       refute markdown =~ @content.selected_reply
-      assert responding_at < quote_at
-      assert quote_at < analysis_at
+      assert quote_at < responding_at
+      assert responding_at < analysis_at
       assert analysis_at < continue_at
       assert continue_at < metadata_at
       assert href =~ "https://claude.ai/new?q="
@@ -499,7 +503,9 @@ defmodule ContextBot.StandardSite.DocumentTest do
       block = responding_block(markdown)
 
       assert block ==
-               "Responding to [@alice.test](https://bsky.app/profile/alice.test/post/3k123)'s post."
+               caption(
+                 "Responding to [@alice.test](https://bsky.app/profile/alice.test/post/3k123)'s post."
+               )
 
       assert markdown =~ "> What bird is that?"
       refute markdown =~ "## Asked"
@@ -599,10 +605,12 @@ defmodule ContextBot.StandardSite.DocumentTest do
     end
   end
 
+  defp caption(sentence), do: "<small><em>#{sentence}</em></small>"
+
   defp responding_block(markdown) do
     markdown
     |> String.split("\n")
-    |> Enum.find("", &String.starts_with?(&1, "Responding to "))
+    |> Enum.find("", &String.contains?(&1, "Responding to "))
   end
 
   defp continue_href(markdown) do

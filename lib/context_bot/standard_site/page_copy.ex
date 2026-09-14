@@ -8,10 +8,11 @@ defmodule ContextBot.StandardSite.PageCopy do
   needed (`factors…` / `…(motivation`), and stripping a trailing
   ` (full response)`. Truncate only to the lexicon max when needed. There is
   no tighter card cap.
-  Responding-to copy keeps the existing sentence (handles/links) and, when
-  `asked_text` is present, a Markdown blockquote of the invoking post.
-  Invocation text is HTML-escaped and markdown-neutralized so a crafted
-  Bluesky post cannot inject markup.
+  Responding-to copy keeps the existing sentence (handles/links). When
+  `asked_text` is present, the invoking post is a Markdown blockquote first
+  and the sentence sits under it as a `<small><em>` caption. Invocation text
+  is HTML-escaped and markdown-neutralized so a crafted Bluesky post cannot
+  inject markup.
 
   New full-response documents only. Existing published records are not rewritten
   by the publication path.
@@ -118,17 +119,18 @@ defmodule ContextBot.StandardSite.PageCopy do
   end
 
   @doc """
-  Responding-to sentence plus an optional invoking-post blockquote, placed
-  before the research writeup.
+  Invoking-post blockquote plus a responding-to caption, placed before the
+  research writeup.
 
   Uses a public bsky.app **post** URL for the invocation and, when the
   invocation is a reply with a parseable parent URI, for the parent. Handles
   from thread or notification records are preferred in both the link text and
   the profile segment; a missing handle falls back to the AT-URI repo. A
   missing or unusable parent uses the root sentence. When `asked_text` is
-  nonempty, a Markdown blockquote of that text follows the sentence after a
-  blank line. The invocation text is escaped so HTML and markdown in the
-  post cannot inject into the Reader page. Create must not fail.
+  nonempty, that text is a Markdown blockquote first. The responding-to
+  sentence follows as a `<small><em>` caption after one blank line. The
+  invocation text is escaped so HTML and markdown in the post cannot inject
+  into the Reader page. Create must not fail.
   """
   @spec asked_markdown(content()) :: String.t()
   def asked_markdown(content) when is_map(content) do
@@ -156,9 +158,9 @@ defmodule ContextBot.StandardSite.PageCopy do
 
     case {sentence, asked_text(content)} do
       {"", ""} -> ""
-      {line, ""} -> line
+      {line, ""} -> caption(line)
       {"", asked} -> blockquote(asked)
-      {line, asked} -> line <> "\n\n" <> blockquote(asked)
+      {line, asked} -> blockquote(asked) <> "\n\n" <> caption(line)
     end
   end
 
@@ -346,6 +348,8 @@ defmodule ContextBot.StandardSite.PageCopy do
       _missing -> ""
     end
   end
+
+  defp caption(sentence), do: "<small><em>#{sentence}</em></small>"
 
   defp blockquote(text) do
     text

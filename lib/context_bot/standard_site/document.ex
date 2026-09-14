@@ -4,8 +4,9 @@ defmodule ContextBot.StandardSite.Document do
 
   New documents use a short topic summary as Reader `title`, Context Bot's
   compact reply as `description`, and open the Markpub body with the
-  responding-to line plus an invoking-post blockquote, then the research
-  writeup. The compact reply is not repeated as a Summary section. The Claude
+  invoking-post blockquote, a small italic responding-to caption under it,
+  then the research writeup. The compact reply is not repeated as a Summary
+  section. The Claude
   continue link sits immediately before the production metadata. After the
   part-1 Bluesky reply is published, `bskyPostRef` is a typed strongRef of
   that reply so off-platform comments attach there. Existing published
@@ -226,8 +227,8 @@ defmodule ContextBot.StandardSite.Document do
 
   New documents also include a `claude.ai/new?q=` continue link whose starter
   prompt names this document's Standard Reader URL. The writeup and system
-  prompt are not copied into the query string. The responding-to line and
-  invoking-post blockquote sit first. The compact reply is the Reader
+  prompt are not copied into the query string. The invoking-post blockquote
+  sits first, then the responding-to caption. The compact reply is the Reader
   `description` and is not repeated in the page body. The continue link sits
   immediately before the production metadata.
   """

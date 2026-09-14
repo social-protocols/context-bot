@@ -232,9 +232,9 @@ defmodule ContextBot.StandardSite.PageCopyTest do
 
       assert markdown ==
                """
-               Responding to [@jonathanwarden.com](https://bsky.app/profile/jonathanwarden.com/post/3muajo3wxyz)'s post.
-
                > #{@launch_invocation}
+
+               #{caption("Responding to [@jonathanwarden.com](https://bsky.app/profile/jonathanwarden.com/post/3muajo3wxyz)'s post.")}
                """
                |> String.trim()
 
@@ -254,9 +254,9 @@ defmodule ContextBot.StandardSite.PageCopyTest do
 
       assert markdown ==
                """
-               Responding to [@jonathanwarden.com](https://bsky.app/profile/jonathanwarden.com/post/3muajo3wxyz)'s reply to [@moultano.bsky.social](https://bsky.app/profile/moultano.bsky.social/post/3parentrkey12)'s post.
-
                > #{@bird_invocation}
+
+               #{caption("Responding to [@jonathanwarden.com](https://bsky.app/profile/jonathanwarden.com/post/3muajo3wxyz)'s reply to [@moultano.bsky.social](https://bsky.app/profile/moultano.bsky.social/post/3parentrkey12)'s post.")}
                """
                |> String.trim()
 
@@ -275,10 +275,10 @@ defmodule ContextBot.StandardSite.PageCopyTest do
 
       assert markdown ==
                """
-               Responding to [@jonathanwarden.com](https://bsky.app/profile/jonathanwarden.com/post/3muajo3wxyz)'s post.
-
                > First line.
                > Second line.
+
+               #{caption("Responding to [@jonathanwarden.com](https://bsky.app/profile/jonathanwarden.com/post/3muajo3wxyz)'s post.")}
                """
                |> String.trim()
     end
@@ -293,9 +293,9 @@ defmodule ContextBot.StandardSite.PageCopyTest do
 
       assert markdown ==
                """
-               Responding to [@did:plc:alice](https://bsky.app/profile/did:plc:alice/post/3muajo3wxyz)'s reply to [@did:plc:bob](https://bsky.app/profile/did:plc:bob/post/3parentrkey12)'s post.
-
                > #{@bird_invocation}
+
+               #{caption("Responding to [@did:plc:alice](https://bsky.app/profile/did:plc:alice/post/3muajo3wxyz)'s reply to [@did:plc:bob](https://bsky.app/profile/did:plc:bob/post/3parentrkey12)'s post.")}
                """
                |> String.trim()
     end
@@ -311,9 +311,9 @@ defmodule ContextBot.StandardSite.PageCopyTest do
 
       assert markdown ==
                """
-               Responding to [@alice.test](https://bsky.app/profile/alice.test/post/3muajo3wxyz)'s post.
-
                > #{@bird_invocation}
+
+               #{caption("Responding to [@alice.test](https://bsky.app/profile/alice.test/post/3muajo3wxyz)'s post.")}
                """
                |> String.trim()
 
@@ -330,9 +330,11 @@ defmodule ContextBot.StandardSite.PageCopyTest do
         })
 
       assert markdown ==
-               "Responding to [@alice.test](https://bsky.app/profile/alice.test/post/3muajo3wxyz)'s post."
+               caption(
+                 "Responding to [@alice.test](https://bsky.app/profile/alice.test/post/3muajo3wxyz)'s post."
+               )
 
-      refute markdown =~ ">"
+      refute markdown =~ ~r/^> /m
     end
 
     test "does not fail when the invocation URI is missing" do
@@ -552,6 +554,8 @@ defmodule ContextBot.StandardSite.PageCopyTest do
       refute message =~ "LENGTH_REPAIR"
     end
   end
+
+  defp caption(sentence), do: "<small><em>#{sentence}</em></small>"
 
   defp mention_facet(first, last, did) do
     %{

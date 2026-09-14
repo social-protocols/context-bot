@@ -293,7 +293,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     refute responding =~ "@getcontext.bot What bird is that?"
 
     assert responding ==
-             "Responding to [@did:plc:actor](https://bsky.app/profile/did:plc:actor/post/full-response-compact)'s reply to [@did:plc:bob](https://bsky.app/profile/did:plc:bob/post/3parentrkey12)'s post."
+             "<small><em>Responding to [@did:plc:actor](https://bsky.app/profile/did:plc:actor/post/full-response-compact)'s reply to [@did:plc:bob](https://bsky.app/profile/did:plc:bob/post/3parentrkey12)'s post.</em></small>"
 
     assert markdown =~ "Thorough markdown writeup."
     assert markdown =~ Request.system_prompt_id()
@@ -1150,7 +1150,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
   defp responding_block(markdown) do
     markdown
     |> String.split("\n")
-    |> Enum.find("", &String.starts_with?(&1, "Responding to "))
+    |> Enum.find("", &String.contains?(&1, "Responding to "))
   end
 
   defp restore_env(module, :missing), do: Application.delete_env(:context_bot, module)
