@@ -439,7 +439,14 @@ defmodule ContextBot.Workers.ResearchWorker do
       },
       parameters: projection.parameters
     }
+    |> maybe_put_content(:compact_source, Map.get(result, :compact_source))
+    |> maybe_put_content(:text_part2, Map.get(result, :text_part2))
   end
+
+  defp maybe_put_content(content, key, value) when is_binary(value) and value != "",
+    do: Map.put(content, key, value)
+
+  defp maybe_put_content(content, _key, _value), do: content
 
   defp fail_standard_site(invocation, collection, reason) do
     Operations.log_standard_site(invocation, collection: collection, reason: reason)

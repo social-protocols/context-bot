@@ -1,12 +1,26 @@
 defmodule ContextBot.StandardSite.PageCopy do
   @moduledoc """
-  Builds Standard Reader title, description, and responding-to copy from the invoking post.
+  Builds Standard Reader title, card description, and responding-to copy.
+
+  Title is a short topic headline. Description is the full compact: prefer
+  `compact_source` when present, otherwise join published part1 and part2 by
+  stripping continuation ellipses, inserting a space when a pack-boundary
+  join would glue letter/digit to letter, digit, or punctuation
+  (`FDA…` / `…cutlink`, `factors…` / `…(motivation`), and stripping a
+  trailing ` (full response)`. Truncate only to the lexicon max when needed.
+  There is no tighter card cap.
+  Responding-to copy keeps the existing sentence (handles/links). When
+  `asked_text` is present, the invoking post is a Markdown blockquote first
+  and the sentence sits under it as a `<small><em>` caption. Invocation text
+  is HTML-escaped and markdown-neutralized so a crafted Bluesky post cannot
+  inject markup.
 
   New full-response documents only. Existing published records are not rewritten
   by the publication path.
   """
 
-  alias ContextBot.ATProto.ATURI
+  alias ContextBot.ATProto.{ATURI, Post}
+  alias ContextBot.Research.ReplyLimits
   alias ContextBot.Settings
   alias ContextBot.Workflow.Invocation
 
@@ -14,9 +28,12 @@ defmodule ContextBot.StandardSite.PageCopy do
   @title_max_graphemes 80
   @title_max_words 12
   @title_lexicon_graphemes 500
-  @description_card_graphemes 300
   @description_lexicon_graphemes 3_000
   @fallback_title "Context request"
+  # Punctuation that opens markdown constructs. `[` is enough to kill links
+  # and images, so `!` `(` `)` stay readable. HTML specials are entity-encoded
+  # instead: a backslash before `<` still becomes a raw `<` in HTML output.
+  @markdown_specials ["\\", "`", "*", "_", "[", "]", "#", "|"]
 
   @type content :: %{optional(atom()) => term()}
   @type settings :: Settings.t() | map()
@@ -28,9 +45,9 @@ defmodule ContextBot.StandardSite.PageCopy do
           parent_handle: String.t() | nil
         }
 
-  @doc "Card-length cap for `description`. The lexicon hard cap is 3000 graphemes."
+  @doc "Lexicon hard cap for `description` (3000 graphemes). There is no tighter card cap."
   @spec description_max_graphemes() :: pos_integer()
-  def description_max_graphemes, do: @description_card_graphemes
+  def description_max_graphemes, do: @description_lexicon_graphemes
 
   @doc """
   Extracts the invoking-post text as written, optional parent URI, and handles.
@@ -81,28 +98,40 @@ defmodule ContextBot.StandardSite.PageCopy do
     end
   end
 
-  @doc "Optional excerpt: invocation text as written, capped for a Reader card."
+  @doc """
+  Optional excerpt: the full compact, truncated only to the lexicon max.
+
+  Prefers `compact_source` when present. Otherwise joins `selected_reply`/`text`
+  with optional `text_part2`/`selected_reply_part2` by stripping a trailing
+  continuation ellipsis from part 1, a leading one from part 2, inserting a
+  space when part 1 then ends in a letter or digit and part 2 starts with a
+  letter or digit (`FDA…` / `…cutlink`) or punctuation (inv 58 `factors…` /
+  `…(motivation`), and stripping a trailing `Post.link_suffix/0`.
+  """
   @spec description(content()) :: String.t() | nil
   def description(content) when is_map(content) do
-    case asked_text(content) do
-      "" ->
-        nil
+    case description_source(content) do
+      reply when is_binary(reply) and reply != "" ->
+        truncate_graphemes(reply, @description_lexicon_graphemes)
 
-      asked ->
-        cap = min(@description_card_graphemes, @description_lexicon_graphemes)
-        truncate_graphemes(asked, cap)
+      _missing ->
+        nil
     end
   end
 
   @doc """
-  One responding-to line placed after the compact Summary and before the
+  Invoking-post blockquote plus a responding-to caption, placed before the
   research writeup.
 
   Uses a public bsky.app **post** URL for the invocation and, when the
   invocation is a reply with a parseable parent URI, for the parent. Handles
   from thread or notification records are preferred in both the link text and
   the profile segment; a missing handle falls back to the AT-URI repo. A
-  missing or unusable parent uses the root sentence. Create must not fail.
+  missing or unusable parent uses the root sentence. When `asked_text` is
+  nonempty, that text is a Markdown blockquote first. The responding-to
+  sentence follows as a `<small><em>` caption after one blank line. The
+  invocation text is escaped so HTML and markdown in the post cannot inject
+  into the Reader page. Create must not fail.
   """
   @spec asked_markdown(content()) :: String.t()
   def asked_markdown(content) when is_map(content) do
@@ -111,22 +140,108 @@ defmodule ContextBot.StandardSite.PageCopy do
     invoker = actor_ref(field(content, :invoker_handle), invocation_uri)
     parent = actor_ref(field(content, :parent_handle), parent_uri)
 
-    cond do
-      match?({_, url} when is_binary(url), invoker) and
-          match?({_, url} when is_binary(url), parent) ->
-        {invoker_label, invoker_url} = invoker
-        {parent_label, parent_url} = parent
+    sentence =
+      cond do
+        match?({_, url} when is_binary(url), invoker) and
+            match?({_, url} when is_binary(url), parent) ->
+          {invoker_label, invoker_url} = invoker
+          {parent_label, parent_url} = parent
 
-        "Responding to [@#{invoker_label}](#{invoker_url})'s reply to [@#{parent_label}](#{parent_url})'s post."
+          "Responding to [@#{invoker_label}](#{invoker_url})'s reply to [@#{parent_label}](#{parent_url})'s post."
 
-      match?({_, url} when is_binary(url), invoker) ->
-        {invoker_label, invoker_url} = invoker
-        "Responding to [@#{invoker_label}](#{invoker_url})'s post."
+        match?({_, url} when is_binary(url), invoker) ->
+          {invoker_label, invoker_url} = invoker
+          "Responding to [@#{invoker_label}](#{invoker_url})'s post."
 
-      true ->
-        ""
+        true ->
+          ""
+      end
+
+    case {sentence, asked_text(content)} do
+      {"", ""} -> ""
+      {line, ""} -> caption(line)
+      {"", asked} -> blockquote(asked)
+      {line, asked} -> blockquote(asked) <> "\n\n" <> caption(line)
     end
   end
+
+  defp description_source(content) do
+    case optional_text(content, :compact_source) do
+      source when is_binary(source) and source != "" ->
+        source
+
+      _missing ->
+        part1 = optional_text(content, :selected_reply) || optional_text(content, :text)
+
+        part2 =
+          optional_text(content, :text_part2) || optional_text(content, :selected_reply_part2)
+
+        join_compact_parts(part1, part2)
+    end
+  end
+
+  defp join_compact_parts(part1, part2)
+       when is_binary(part1) and part1 != "" and is_binary(part2) and part2 != "" do
+    left = strip_trailing_ellipsis(part1)
+    right = strip_leading_ellipsis(part2)
+
+    left
+    |> maybe_restore_join_space(right)
+    |> strip_trailing_link_suffix()
+  end
+
+  defp join_compact_parts(part1, _part2) when is_binary(part1) and part1 != "", do: part1
+  defp join_compact_parts(_part1, _part2), do: nil
+
+  defp maybe_restore_join_space(left, right) do
+    if letter_or_digit_end?(left) and letter_or_digit_start?(right) do
+      left <> " " <> right
+    else
+      maybe_space_before_punctuation(left, right)
+    end
+  end
+
+  defp maybe_space_before_punctuation(left, right) do
+    if letter_or_digit_end?(left) and punctuation_start?(right) do
+      left <> " " <> right
+    else
+      left <> right
+    end
+  end
+
+  defp letter_or_digit_end?(text), do: Regex.match?(~r/[\p{L}\p{N}]\z/u, text)
+
+  defp letter_or_digit_start?(text), do: Regex.match?(~r/\A[\p{L}\p{N}]/u, text)
+
+  defp punctuation_start?(text), do: Regex.match?(~r/\A\p{P}/u, text)
+
+  defp strip_trailing_ellipsis(text) do
+    cond do
+      String.ends_with?(text, ReplyLimits.continuation_ellipsis()) ->
+        String.replace_suffix(text, ReplyLimits.continuation_ellipsis(), "")
+
+      String.ends_with?(text, "...") ->
+        String.replace_suffix(text, "...", "")
+
+      true ->
+        text
+    end
+  end
+
+  defp strip_leading_ellipsis(text) do
+    cond do
+      String.starts_with?(text, ReplyLimits.continuation_ellipsis()) ->
+        String.replace_prefix(text, ReplyLimits.continuation_ellipsis(), "")
+
+      String.starts_with?(text, "...") ->
+        String.replace_prefix(text, "...", "")
+
+      true ->
+        text
+    end
+  end
+
+  defp strip_trailing_link_suffix(text), do: String.replace_suffix(text, Post.link_suffix(), "")
 
   defp invocation_record(invocation) do
     thread = field(invocation, :raw_thread)
@@ -243,6 +358,37 @@ defmodule ContextBot.StandardSite.PageCopy do
       text when is_binary(text) -> String.trim(text)
       _missing -> ""
     end
+  end
+
+  defp caption(sentence), do: "<small><em>#{sentence}</em></small>"
+
+  defp blockquote(text) do
+    text
+    |> String.replace("\r\n", "\n")
+    |> String.replace("\r", "\n")
+    |> String.split("\n")
+    |> Enum.map_join("\n", &("> " <> neutralize_asked_line(&1)))
+  end
+
+  defp neutralize_asked_line(line) do
+    line
+    |> html_escape()
+    |> escape_markdown()
+  end
+
+  defp html_escape(text) do
+    text
+    |> String.replace("&", "&amp;")
+    |> String.replace("<", "&lt;")
+    |> String.replace(">", "&gt;")
+    |> String.replace("\"", "&quot;")
+    |> String.replace("'", "&#39;")
+  end
+
+  defp escape_markdown(text) do
+    Enum.reduce(@markdown_specials, text, fn char, acc ->
+      String.replace(acc, char, "\\" <> char)
+    end)
   end
 
   defp optional_text(content, key) do

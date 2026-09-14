@@ -2,9 +2,11 @@ defmodule ContextBot.StandardSite.Document do
   @moduledoc """
   Builds and publishes Standard.site document records containing full research responses.
 
-  New documents use a short topic summary as Reader `title`, the invoking-post
-  text as written as `description`, and open the Markpub body with the compact
-  Summary, then a responding-to line and the research writeup. The Claude
+  New documents use a short topic summary as Reader `title`, Context Bot's
+  compact reply as `description`, and open the Markpub body with the
+  invoking-post blockquote, a small italic responding-to caption under it,
+  then the research writeup. The compact reply is not repeated as a Summary
+  section. The Claude
   continue link sits immediately before the production metadata. After the
   part-1 Bluesky reply is published, `bskyPostRef` is a typed strongRef of
   that reply so off-platform comments attach there. Existing published
@@ -57,7 +59,9 @@ defmodule ContextBot.StandardSite.Document do
           optional(:invoker_handle) => String.t() | nil,
           optional(:parent_handle) => String.t() | nil,
           optional(:document_title) => String.t() | nil,
-          optional(:document_reader_url) => String.t()
+          optional(:document_reader_url) => String.t(),
+          optional(:compact_source) => String.t(),
+          optional(:text_part2) => String.t()
         }
 
   @type result ::
@@ -223,9 +227,10 @@ defmodule ContextBot.StandardSite.Document do
 
   New documents also include a `claude.ai/new?q=` continue link whose starter
   prompt names this document's Standard Reader URL. The writeup and system
-  prompt are not copied into the query string. The compact Summary sits first.
-  The responding-to line follows and does not repeat the invocation text. The
-  continue link sits immediately before the production metadata.
+  prompt are not copied into the query string. The invoking-post blockquote
+  sits first, then the responding-to caption. The compact reply is the Reader
+  `description` and is not repeated in the page body. The continue link sits
+  immediately before the production metadata.
   """
   @spec format_markdown(document_content()) :: String.t()
   def format_markdown(
@@ -241,12 +246,6 @@ defmodule ContextBot.StandardSite.Document do
     :ok = validate_public_inputs(content)
 
     """
-    ## Summary
-
-    #{selected_reply}
-
-    ---
-
     #{PageCopy.asked_markdown(content)}
 
     # Research Analysis

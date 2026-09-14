@@ -17,6 +17,7 @@ defmodule ContextBot.Reply.FollowerPostTest do
   @publication_cid "bafyreigpgh2c7uvtnjdwnjua4f6gu4dsr4g4pjh2qhmmactp72yunpdz7e"
   @mirror_url_id 33
   @asked "@getcontext.bot Is there evidence the FDA cuts are causing Americans to get sicker?"
+  @compact "Americans are getting sicker, but the FDA-cut link is unverified."
   @title "FDA cuts and rising illness: what's verified"
 
   setup do
@@ -60,7 +61,7 @@ defmodule ContextBot.Reply.FollowerPostTest do
              "external" => %{
                "uri" => @reader_url,
                "title" => @title <> " · Context Bot",
-               "description" => @asked,
+               "description" => @compact,
                "associatedRefs" => [
                  %{"uri" => @document_uri, "cid" => @document_cid},
                  %{"uri" => @publication_uri, "cid" => @publication_cid}
@@ -83,7 +84,7 @@ defmodule ContextBot.Reply.FollowerPostTest do
 
     assert external["uri"] == @reader_url
     assert external["title"] == @title <> " · Context Bot"
-    assert external["description"] == @asked
+    assert external["description"] == @compact
     refute Map.has_key?(external, "associatedRefs")
   end
 
@@ -216,7 +217,7 @@ defmodule ContextBot.Reply.FollowerPostTest do
           current_cid: "bafy-invocation",
           root_uri: @root_uri,
           root_cid: @root_cid,
-          selected_reply: "Americans are getting sicker, but the FDA-cut link is unverified.",
+          selected_reply: @compact,
           reply_validation: %{"document_title" => @title},
           raw_notification: %{"record" => %{"text" => @asked}},
           reply_record: linked_reply(@reader_url),

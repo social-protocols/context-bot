@@ -120,47 +120,128 @@ defmodule ContextBot.StandardSite.PageCopyTest do
   end
 
   describe "description/1" do
-    test "keeps the launch invocation intact, including @getcontext.bot" do
+    test "uses the compact reply, not the launch invocation" do
+      reply = "Hello! I'm @getcontext.bot."
+
       assert PageCopy.description(%{
                asked_text: @launch_invocation,
-               selected_reply: "Hello! I'm @getcontext.bot."
-             }) == @launch_invocation
+               selected_reply: reply
+             }) == reply
 
       description =
         PageCopy.description(%{
           asked_text: @launch_invocation,
-          selected_reply: "Hello! I'm @getcontext.bot."
+          selected_reply: reply
         })
 
       assert description =~ "@getcontext.bot"
+      refute description == @launch_invocation
       refute description =~ "launched ."
       refute description =~ "Claude. , say"
     end
 
-    test "keeps @getcontext.bot what bird is that? as written" do
+    test "uses the compact reply for the bird question" do
+      reply = "That's a Himalayan Monal in breeding plumage."
+
       assert PageCopy.description(%{
                asked_text: @bird_invocation,
-               selected_reply: "That's a Himalayan Monal in breeding plumage."
+               selected_reply: reply
+             }) == reply
+
+      refute PageCopy.description(%{
+               asked_text: @bird_invocation,
+               selected_reply: reply
              }) == @bird_invocation
     end
 
-    test "truncates only when the raw text exceeds the card grapheme cap" do
-      asked = String.duplicate("字", PageCopy.description_max_graphemes() + 20)
-
-      description = PageCopy.description(%{asked_text: asked, selected_reply: "unused"})
-
-      assert String.length(description) == PageCopy.description_max_graphemes()
-      assert String.starts_with?(asked, description)
+    test "description_max_graphemes/0 is the lexicon max, not a 300 card cap" do
+      assert PageCopy.description_max_graphemes() == 3_000
+      refute PageCopy.description_max_graphemes() == 300
     end
 
-    test "returns nil when there is no invocation text" do
-      assert PageCopy.description(%{asked_text: "", selected_reply: "That's a Himalayan Monal."}) ==
-               nil
+    test "keeps a compact longer than 300 when it is under the lexicon max" do
+      reply = String.duplicate("字", 340)
+
+      assert PageCopy.description(%{asked_text: @bird_invocation, selected_reply: reply}) == reply
+    end
+
+    test "truncates only when the compact reply exceeds the lexicon grapheme max" do
+      reply = String.duplicate("字", PageCopy.description_max_graphemes() + 20)
+
+      description = PageCopy.description(%{asked_text: @bird_invocation, selected_reply: reply})
+
+      assert String.length(description) == PageCopy.description_max_graphemes()
+      assert String.starts_with?(reply, description)
+    end
+
+    test "returns nil when there is no compact reply" do
+      assert PageCopy.description(%{asked_text: @bird_invocation, selected_reply: ""}) == nil
+      assert PageCopy.description(%{asked_text: @bird_invocation}) == nil
+    end
+
+    test "prefers compact_source over a Bluesky-shortened selected_reply" do
+      original = "Americans are getting sicker, but the FDA-cut link is unverified."
+      part1 = "Americans are getting sicker, but the FDA-cut…"
+      part2 = "…link is unverified. (full response)"
+
+      assert PageCopy.description(%{
+               asked_text: @bird_invocation,
+               selected_reply: part1,
+               compact_source: original,
+               text_part2: part2
+             }) == original
+    end
+
+    test "joins published part1 and part2 without ellipses or the link suffix" do
+      part1 = "Americans are getting sicker, but the FDA-cut…"
+      part2 = "…link is unverified. (full response)"
+
+      description =
+        PageCopy.description(%{
+          asked_text: @bird_invocation,
+          selected_reply: part1,
+          text_part2: part2
+        })
+
+      assert description == "Americans are getting sicker, but the FDA-cut link is unverified."
+      refute description == "Americans are getting sicker, but the FDA-cutlink is unverified."
+    end
+
+    test "inserts a space when both sides are a letter or digit after the ellipsis strip" do
+      part1 = "See the FDA…"
+      part2 = "…cutlink remains. (full response)"
+
+      description =
+        PageCopy.description(%{
+          asked_text: @bird_invocation,
+          selected_reply: part1,
+          text_part2: part2
+        })
+
+      assert description == "See the FDA cutlink remains."
+      refute description == "See the FDAcutlink remains."
+    end
+
+    test "inserts a space when part2 starts with punctuation after the ellipsis strip" do
+      part1 = "See the factors…"
+      part2 = "…(motivation, incentive) that remain. (full response)"
+
+      assert PageCopy.description(%{
+               asked_text: @bird_invocation,
+               selected_reply: part1,
+               text_part2: part2
+             }) == "See the factors (motivation, incentive) that remain."
+
+      refute PageCopy.description(%{
+               asked_text: @bird_invocation,
+               selected_reply: part1,
+               text_part2: part2
+             }) == "See the factors(motivation, incentive) that remain."
     end
   end
 
   describe "asked_markdown/1" do
-    test "renders a root responding-to line with handle post URLs and no invocation text" do
+    test "renders a root responding-to line with handle post URLs and a blockquote of the invocation" do
       markdown =
         PageCopy.asked_markdown(%{
           asked_text: @launch_invocation,
@@ -169,10 +250,14 @@ defmodule ContextBot.StandardSite.PageCopyTest do
         })
 
       assert markdown ==
-               "Responding to [@jonathanwarden.com](https://bsky.app/profile/jonathanwarden.com/post/3muajo3wxyz)'s post."
+               """
+               > #{@launch_invocation}
+
+               #{caption("Responding to [@jonathanwarden.com](https://bsky.app/profile/jonathanwarden.com/post/3muajo3wxyz)'s post.")}
+               """
+               |> String.trim()
 
       refute markdown =~ "## Asked"
-      refute markdown =~ @launch_invocation
       refute markdown =~ "Invoking post"
     end
 
@@ -187,10 +272,34 @@ defmodule ContextBot.StandardSite.PageCopyTest do
         })
 
       assert markdown ==
-               "Responding to [@jonathanwarden.com](https://bsky.app/profile/jonathanwarden.com/post/3muajo3wxyz)'s reply to [@moultano.bsky.social](https://bsky.app/profile/moultano.bsky.social/post/3parentrkey12)'s post."
+               """
+               > #{@bird_invocation}
+
+               #{caption("Responding to [@jonathanwarden.com](https://bsky.app/profile/jonathanwarden.com/post/3muajo3wxyz)'s reply to [@moultano.bsky.social](https://bsky.app/profile/moultano.bsky.social/post/3parentrkey12)'s post.")}
+               """
+               |> String.trim()
 
       refute markdown =~ "## Asked"
-      refute markdown =~ @bird_invocation
+    end
+
+    test "prefixes each line of a multiline invocation as a blockquote" do
+      asked = "First line.\nSecond line."
+
+      markdown =
+        PageCopy.asked_markdown(%{
+          asked_text: asked,
+          invocation_uri: @invocation_uri,
+          invoker_handle: "jonathanwarden.com"
+        })
+
+      assert markdown ==
+               """
+               > First line.
+               > Second line.
+
+               #{caption("Responding to [@jonathanwarden.com](https://bsky.app/profile/jonathanwarden.com/post/3muajo3wxyz)'s post.")}
+               """
+               |> String.trim()
     end
 
     test "falls back to the AT-URI repo when a handle is missing" do
@@ -202,7 +311,12 @@ defmodule ContextBot.StandardSite.PageCopyTest do
         })
 
       assert markdown ==
-               "Responding to [@did:plc:alice](https://bsky.app/profile/did:plc:alice/post/3muajo3wxyz)'s reply to [@did:plc:bob](https://bsky.app/profile/did:plc:bob/post/3parentrkey12)'s post."
+               """
+               > #{@bird_invocation}
+
+               #{caption("Responding to [@did:plc:alice](https://bsky.app/profile/did:plc:alice/post/3muajo3wxyz)'s reply to [@did:plc:bob](https://bsky.app/profile/did:plc:bob/post/3parentrkey12)'s post.")}
+               """
+               |> String.trim()
     end
 
     test "uses the root sentence when the parent URI is missing or unusable" do
@@ -215,11 +329,31 @@ defmodule ContextBot.StandardSite.PageCopyTest do
         })
 
       assert markdown ==
-               "Responding to [@alice.test](https://bsky.app/profile/alice.test/post/3muajo3wxyz)'s post."
+               """
+               > #{@bird_invocation}
+
+               #{caption("Responding to [@alice.test](https://bsky.app/profile/alice.test/post/3muajo3wxyz)'s post.")}
+               """
+               |> String.trim()
 
       refute markdown =~ "Parent"
       refute markdown =~ "not-an-at-uri"
-      refute markdown =~ @bird_invocation
+    end
+
+    test "omits the blockquote when asked_text is empty" do
+      markdown =
+        PageCopy.asked_markdown(%{
+          asked_text: "",
+          invocation_uri: @invocation_uri,
+          invoker_handle: "alice.test"
+        })
+
+      assert markdown ==
+               caption(
+                 "Responding to [@alice.test](https://bsky.app/profile/alice.test/post/3muajo3wxyz)'s post."
+               )
+
+      refute markdown =~ ~r/^> /m
     end
 
     test "does not fail when the invocation URI is missing" do
@@ -229,9 +363,57 @@ defmodule ContextBot.StandardSite.PageCopyTest do
           invoker_handle: "alice.test"
         })
 
-      assert is_binary(markdown)
+      assert markdown == "> #{@bird_invocation}"
       refute markdown =~ "## Asked"
-      refute markdown =~ @bird_invocation
+    end
+
+    test "escapes HTML so a script tag cannot inject into the Reader page" do
+      markdown =
+        PageCopy.asked_markdown(%{
+          asked_text: ~S|<script>alert(1)</script> <img src=x onerror="alert(1)">|,
+          invocation_uri: @invocation_uri,
+          invoker_handle: "alice.test"
+        })
+
+      refute markdown =~ "<script>"
+      refute markdown =~ "<img"
+      refute markdown =~ ~S|onerror="|
+      assert markdown =~ "&lt;script&gt;"
+      assert markdown =~ "&lt;img"
+      assert markdown =~ "&quot;"
+    end
+
+    test "neutralizes a markdown link so javascript and quoted hrefs cannot inject" do
+      markdown =
+        PageCopy.asked_markdown(%{
+          asked_text:
+            ~S|[x](javascript:alert(1)) [y](https://example.com/" onmouseover="alert(1))|,
+          invocation_uri: @invocation_uri,
+          invoker_handle: "alice.test"
+        })
+
+      refute markdown =~ ~r/(?<!\\)\[x\]\(/
+      refute markdown =~ ~r/(?<!\\)\[y\]\(/
+      refute markdown =~ ~S|" onmouseover="|
+      assert markdown =~ "\\[x\\](javascript:alert(1))"
+      assert markdown =~ "&quot;"
+      assert markdown =~ "onmouseover="
+    end
+
+    test "neutralizes headings, images, and emphasis in the invocation" do
+      markdown =
+        PageCopy.asked_markdown(%{
+          asked_text: "# Injected\n![pic](https://evil.test/x)\n**bold**",
+          invocation_uri: @invocation_uri,
+          invoker_handle: "alice.test"
+        })
+
+      refute markdown =~ ~r/^# /m
+      refute markdown =~ ~r/(?<!\\)!\[pic\]\(/
+      refute markdown =~ "**bold**"
+      assert markdown =~ "> \\# Injected"
+      assert markdown =~ "> !\\[pic\\](https://evil.test/x)"
+      assert markdown =~ "> \\*\\*bold\\*\\*"
     end
   end
 
@@ -391,6 +573,8 @@ defmodule ContextBot.StandardSite.PageCopyTest do
       refute message =~ "LENGTH_REPAIR"
     end
   end
+
+  defp caption(sentence), do: "<small><em>#{sentence}</em></small>"
 
   defp mention_facet(first, last, did) do
     %{

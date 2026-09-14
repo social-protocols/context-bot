@@ -280,18 +280,20 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert doc_record["$type"] == "site.standard.document"
     assert doc_record["textContent"] == "Thorough markdown writeup."
     assert doc_record["title"] == "What Is That Bird?"
-    assert doc_record["description"] == "@getcontext.bot What bird is that?"
+    assert doc_record["description"] == "Frozen concise context."
     refute doc_record["title"] =~ "Context on"
-    refute doc_record["description"] == "What bird is that?"
+    refute doc_record["description"] == "@getcontext.bot What bird is that?"
 
     markdown = doc_record["content"]["text"]["markdown"]
     responding = responding_block(markdown)
 
     refute markdown =~ "## Asked"
+    refute markdown =~ "## Summary"
+    assert markdown =~ "> @getcontext.bot What bird is that?"
     refute responding =~ "@getcontext.bot What bird is that?"
 
     assert responding ==
-             "Responding to [@did:plc:actor](https://bsky.app/profile/did:plc:actor/post/full-response-compact)'s reply to [@did:plc:bob](https://bsky.app/profile/did:plc:bob/post/3parentrkey12)'s post."
+             "<small><em>Responding to [@did:plc:actor](https://bsky.app/profile/did:plc:actor/post/full-response-compact)'s reply to [@did:plc:bob](https://bsky.app/profile/did:plc:bob/post/3parentrkey12)'s post.</em></small>"
 
     assert markdown =~ "Thorough markdown writeup."
     assert markdown =~ Request.system_prompt_id()
@@ -343,7 +345,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
              "https://standard-reader.app/a/#{@bot_did}/#{doc_rkey}"
   end
 
-  test "Reader Summary keeps the untruncated compact_source when Bluesky text is shortened" do
+  test "Reader description uses compact_source, not the Bluesky-shortened text" do
     original = String.duplicate("a", 340)
     shortened = String.duplicate("a", 280) <> ReplyLimits.continuation_ellipsis()
     writeup = Drafts.format("Mostly True?", original) <> "\n\nThorough markdown writeup."
@@ -375,11 +377,50 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert_received {:standard_site_put, "site.standard.document", _doc_rkey, doc_record}
 
     markdown = doc_record["content"]["text"]["markdown"]
-    [_, summary_and_rest] = String.split(markdown, "## Summary\n\n", parts: 2)
-    [summary, _rest] = String.split(summary_and_rest, "\n\n---", parts: 2)
-    assert summary == original
-    refute String.contains?(summary, ReplyLimits.continuation_ellipsis())
+    refute markdown =~ "## Summary"
+    refute markdown =~ ReplyLimits.continuation_ellipsis()
+    assert doc_record["description"] == original
+    refute String.contains?(doc_record["description"], ReplyLimits.continuation_ellipsis())
     assert persisted.reply_record["text"] == shortened <> " (full response)"
+  end
+
+  test "Reader description joins published part1 and part2 when compact_source is absent" do
+    part1 = "Americans are getting sicker, but the FDA-cut…"
+    part2 = "…link is unverified. (full response)"
+    writeup = "Thorough markdown writeup."
+
+    invocation = invocation("joined-split-writeup", :thread_ready)
+
+    configure_runner(
+      {:ok,
+       runner_result()
+       |> Map.put(:text, part1)
+       |> Map.put(:text_part2, part2)
+       |> Map.put(:full_response, writeup)
+       |> Map.put(:document_title, "Mostly True?")}
+    )
+
+    {:ok, agent} = Agent.start_link(fn -> ["3mjoin1rkey1111", "3mjoin2rkey2222"] end)
+
+    configure_worker(
+      atproto_client: FakeStandardSiteTrackingClient,
+      tid_generator: fn _timestamp ->
+        Agent.get_and_update(agent, fn [head | tail] -> {head, tail} end)
+      end
+    )
+
+    assert :ok = perform(invocation)
+
+    assert_received {:standard_site_put, "site.standard.publication", "context-bot", _pub}
+    assert_received {:standard_site_put, "site.standard.document", _prompt_rkey, _prompt}
+    assert_received {:standard_site_put, "site.standard.document", _structure_rkey, _structure}
+    assert_received {:standard_site_put, "site.standard.document", _doc_rkey, doc_record}
+
+    assert doc_record["description"] ==
+             "Americans are getting sicker, but the FDA-cut link is unverified."
+
+    refute String.contains?(doc_record["description"], ReplyLimits.continuation_ellipsis())
+    refute String.contains?(doc_record["description"], "full response")
   end
 
   test "published Standard.site writeup strips CONTEXT_BOT_DRAFT while sqlite keeps it" do
@@ -1109,7 +1150,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
   defp responding_block(markdown) do
     markdown
     |> String.split("\n")
-    |> Enum.find("", &String.starts_with?(&1, "Responding to "))
+    |> Enum.find("", &String.contains?(&1, "Responding to "))
   end
 
   defp restore_env(module, :missing), do: Application.delete_env(:context_bot, module)
