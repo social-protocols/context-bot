@@ -417,7 +417,7 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert_received {:standard_site_put, "site.standard.document", _doc_rkey, doc_record}
 
     assert doc_record["description"] ==
-             "Americans are getting sicker, but the FDA-cutlink is unverified."
+             "Americans are getting sicker, but the FDA-cut link is unverified."
 
     refute String.contains?(doc_record["description"], ReplyLimits.continuation_ellipsis())
     refute String.contains?(doc_record["description"], "full response")

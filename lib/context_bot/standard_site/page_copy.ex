@@ -4,10 +4,11 @@ defmodule ContextBot.StandardSite.PageCopy do
 
   Title is a short topic headline. Description is the full compact: prefer
   `compact_source` when present, otherwise join published part1 and part2 by
-  stripping continuation ellipses, inserting a space before punctuation when
-  needed (`factors…` / `…(motivation`), and stripping a trailing
-  ` (full response)`. Truncate only to the lexicon max when needed. There is
-  no tighter card cap.
+  stripping continuation ellipses, inserting a space when a pack-boundary
+  join would glue letter/digit to letter, digit, or punctuation
+  (`FDA-cut…` / `…link`, `factors…` / `…(motivation`), and stripping a
+  trailing ` (full response)`. Truncate only to the lexicon max when needed.
+  There is no tighter card cap.
   Responding-to copy keeps the existing sentence (handles/links). When
   `asked_text` is present, the invoking post is a Markdown blockquote first
   and the sentence sits under it as a `<small><em>` caption. Invocation text
@@ -103,9 +104,9 @@ defmodule ContextBot.StandardSite.PageCopy do
   Prefers `compact_source` when present. Otherwise joins `selected_reply`/`text`
   with optional `text_part2`/`selected_reply_part2` by stripping a trailing
   continuation ellipsis from part 1, a leading one from part 2, inserting a
-  space when part 1 then ends in a letter or digit and part 2 starts with
-  punctuation (inv 58 `factors…` / `…(motivation`), and stripping a trailing
-  `Post.link_suffix/0`.
+  space when part 1 then ends in a letter or digit and part 2 starts with a
+  letter, digit, or punctuation (pack-boundary `FDA-cut…` / `…link`, inv 58
+  `factors…` / `…(motivation`), and stripping a trailing `Post.link_suffix/0`.
   """
   @spec description(content()) :: String.t() | nil
   def description(content) when is_map(content) do
@@ -185,15 +186,15 @@ defmodule ContextBot.StandardSite.PageCopy do
     right = strip_leading_ellipsis(part2)
 
     left
-    |> maybe_space_before_punctuation(right)
+    |> maybe_restore_join_space(right)
     |> strip_trailing_link_suffix()
   end
 
   defp join_compact_parts(part1, _part2) when is_binary(part1) and part1 != "", do: part1
   defp join_compact_parts(_part1, _part2), do: nil
 
-  defp maybe_space_before_punctuation(left, right) do
-    if letter_or_digit_end?(left) and punctuation_start?(right) do
+  defp maybe_restore_join_space(left, right) do
+    if letter_or_digit_end?(left) and letter_digit_or_punctuation_start?(right) do
       left <> " " <> right
     else
       left <> right
@@ -202,7 +203,8 @@ defmodule ContextBot.StandardSite.PageCopy do
 
   defp letter_or_digit_end?(text), do: Regex.match?(~r/[\p{L}\p{N}]\z/u, text)
 
-  defp punctuation_start?(text), do: Regex.match?(~r/\A\p{P}/u, text)
+  defp letter_digit_or_punctuation_start?(text),
+    do: Regex.match?(~r/\A[\p{L}\p{N}\p{P}]/u, text)
 
   defp strip_trailing_ellipsis(text) do
     cond do

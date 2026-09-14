@@ -306,7 +306,7 @@ defmodule ContextBot.StandardSite.DocumentTest do
       assert_received {:document_put, record}
 
       assert record["description"] ==
-               "Americans are getting sicker, but the FDA-cutlink is unverified."
+               "Americans are getting sicker, but the FDA-cut link is unverified."
 
       refute record["description"] =~ "…"
       refute record["description"] =~ "full response"

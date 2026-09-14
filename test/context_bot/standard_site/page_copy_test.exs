@@ -196,11 +196,15 @@ defmodule ContextBot.StandardSite.PageCopyTest do
       part1 = "Americans are getting sicker, but the FDA-cut…"
       part2 = "…link is unverified. (full response)"
 
-      assert PageCopy.description(%{
-               asked_text: @bird_invocation,
-               selected_reply: part1,
-               text_part2: part2
-             }) == "Americans are getting sicker, but the FDA-cutlink is unverified."
+      description =
+        PageCopy.description(%{
+          asked_text: @bird_invocation,
+          selected_reply: part1,
+          text_part2: part2
+        })
+
+      assert description == "Americans are getting sicker, but the FDA-cut link is unverified."
+      refute description == "Americans are getting sicker, but the FDA-cutlink is unverified."
     end
 
     test "inserts a space when part2 starts with punctuation after the ellipsis strip" do
