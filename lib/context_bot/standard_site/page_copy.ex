@@ -3,10 +3,11 @@ defmodule ContextBot.StandardSite.PageCopy do
   Builds Standard Reader title, card description, and responding-to copy.
 
   Title is a short topic headline. Description is Context Bot's compact reply
-  (`selected_reply`), capped for a Reader card. Responding-to copy keeps the
-  existing sentence (handles/links) and, when `asked_text` is present, a
-  Markdown blockquote of the invoking post. Invocation text is HTML-escaped
-  and markdown-neutralized so a crafted Bluesky post cannot inject markup.
+  (`selected_reply`), truncated only to the lexicon max when needed. There is
+  no tighter card cap. Responding-to copy keeps the existing sentence
+  (handles/links) and, when `asked_text` is present, a Markdown blockquote of
+  the invoking post. Invocation text is HTML-escaped and markdown-neutralized
+  so a crafted Bluesky post cannot inject markup.
 
   New full-response documents only. Existing published records are not rewritten
   by the publication path.
@@ -20,7 +21,6 @@ defmodule ContextBot.StandardSite.PageCopy do
   @title_max_graphemes 80
   @title_max_words 12
   @title_lexicon_graphemes 500
-  @description_card_graphemes 300
   @description_lexicon_graphemes 3_000
   @fallback_title "Context request"
   # Punctuation that opens markdown constructs. `[` is enough to kill links
@@ -38,9 +38,9 @@ defmodule ContextBot.StandardSite.PageCopy do
           parent_handle: String.t() | nil
         }
 
-  @doc "Card-length cap for `description`. The lexicon hard cap is 3000 graphemes."
+  @doc "Lexicon hard cap for `description` (3000 graphemes). There is no tighter card cap."
   @spec description_max_graphemes() :: pos_integer()
-  def description_max_graphemes, do: @description_card_graphemes
+  def description_max_graphemes, do: @description_lexicon_graphemes
 
   @doc """
   Extracts the invoking-post text as written, optional parent URI, and handles.
@@ -91,13 +91,12 @@ defmodule ContextBot.StandardSite.PageCopy do
     end
   end
 
-  @doc "Optional excerpt: compact reply (`selected_reply`), capped for a Reader card."
+  @doc "Optional excerpt: compact reply (`selected_reply`), truncated only to the lexicon max."
   @spec description(content()) :: String.t() | nil
   def description(content) when is_map(content) do
     case optional_text(content, :selected_reply) do
       reply when is_binary(reply) and reply != "" ->
-        cap = min(@description_card_graphemes, @description_lexicon_graphemes)
-        truncate_graphemes(reply, cap)
+        truncate_graphemes(reply, @description_lexicon_graphemes)
 
       _missing ->
         nil

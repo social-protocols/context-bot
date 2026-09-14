@@ -154,7 +154,18 @@ defmodule ContextBot.StandardSite.PageCopyTest do
              }) == @bird_invocation
     end
 
-    test "truncates only when the compact reply exceeds the card grapheme cap" do
+    test "description_max_graphemes/0 is the lexicon max, not a 300 card cap" do
+      assert PageCopy.description_max_graphemes() == 3_000
+      refute PageCopy.description_max_graphemes() == 300
+    end
+
+    test "keeps a compact longer than 300 when it is under the lexicon max" do
+      reply = String.duplicate("字", 340)
+
+      assert PageCopy.description(%{asked_text: @bird_invocation, selected_reply: reply}) == reply
+    end
+
+    test "truncates only when the compact reply exceeds the lexicon grapheme max" do
       reply = String.duplicate("字", PageCopy.description_max_graphemes() + 20)
 
       description = PageCopy.description(%{asked_text: @bird_invocation, selected_reply: reply})
