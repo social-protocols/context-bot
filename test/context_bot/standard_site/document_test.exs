@@ -285,6 +285,33 @@ defmodule ContextBot.StandardSite.DocumentTest do
       refute record["description"] == asked
     end
 
+    test "joins published part1 and part2 into the Reader description" do
+      part1 = "Americans are getting sicker, but the FDA-cut…"
+      part2 = "…link is unverified. (full response)"
+
+      content =
+        @content
+        |> Map.put(:selected_reply, part1)
+        |> Map.put(:text_part2, part2)
+
+      assert {:ok, _result} =
+               Document.create(
+                 TrackingDocClient,
+                 @repo,
+                 @publication_uri,
+                 content,
+                 @created_at
+               )
+
+      assert_received {:document_put, record}
+
+      assert record["description"] ==
+               "Americans are getting sicker, but the FDA-cutlink is unverified."
+
+      refute record["description"] =~ "…"
+      refute record["description"] =~ "full response"
+    end
+
     test "published document body has no CONTEXT_BOT_DRAFT markers" do
       essay = "This is the full research response with detailed analysis."
       writeup = Drafts.format("What Is That Bird?", "A Himalayan Monal.") <> "\n\n" <> essay

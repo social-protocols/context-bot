@@ -384,6 +384,45 @@ defmodule ContextBot.Workers.ResearchWorkerTest do
     assert persisted.reply_record["text"] == shortened <> " (full response)"
   end
 
+  test "Reader description joins published part1 and part2 when compact_source is absent" do
+    part1 = "Americans are getting sicker, but the FDA-cut…"
+    part2 = "…link is unverified. (full response)"
+    writeup = "Thorough markdown writeup."
+
+    invocation = invocation("joined-split-writeup", :thread_ready)
+
+    configure_runner(
+      {:ok,
+       runner_result()
+       |> Map.put(:text, part1)
+       |> Map.put(:text_part2, part2)
+       |> Map.put(:full_response, writeup)
+       |> Map.put(:document_title, "Mostly True?")}
+    )
+
+    {:ok, agent} = Agent.start_link(fn -> ["3mjoin1rkey1111", "3mjoin2rkey2222"] end)
+
+    configure_worker(
+      atproto_client: FakeStandardSiteTrackingClient,
+      tid_generator: fn _timestamp ->
+        Agent.get_and_update(agent, fn [head | tail] -> {head, tail} end)
+      end
+    )
+
+    assert :ok = perform(invocation)
+
+    assert_received {:standard_site_put, "site.standard.publication", "context-bot", _pub}
+    assert_received {:standard_site_put, "site.standard.document", _prompt_rkey, _prompt}
+    assert_received {:standard_site_put, "site.standard.document", _structure_rkey, _structure}
+    assert_received {:standard_site_put, "site.standard.document", _doc_rkey, doc_record}
+
+    assert doc_record["description"] ==
+             "Americans are getting sicker, but the FDA-cutlink is unverified."
+
+    refute String.contains?(doc_record["description"], ReplyLimits.continuation_ellipsis())
+    refute String.contains?(doc_record["description"], "full response")
+  end
+
   test "published Standard.site writeup strips CONTEXT_BOT_DRAFT while sqlite keeps it" do
     essay = "Thorough markdown writeup."
     writeup = Drafts.format("Mostly True?", "A Himalayan Monal.") <> "\n\n" <> essay

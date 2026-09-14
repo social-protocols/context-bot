@@ -2,18 +2,21 @@ defmodule ContextBot.StandardSite.PageCopy do
   @moduledoc """
   Builds Standard Reader title, card description, and responding-to copy.
 
-  Title is a short topic headline. Description is Context Bot's compact reply
-  (`selected_reply`), truncated only to the lexicon max when needed. There is
-  no tighter card cap. Responding-to copy keeps the existing sentence
-  (handles/links) and, when `asked_text` is present, a Markdown blockquote of
-  the invoking post. Invocation text is HTML-escaped and markdown-neutralized
-  so a crafted Bluesky post cannot inject markup.
+  Title is a short topic headline. Description is the full compact: prefer
+  `compact_source` when present, otherwise join published part1 and part2 by
+  stripping continuation ellipses and a trailing ` (full response)`. Truncate
+  only to the lexicon max when needed. There is no tighter card cap.
+  Responding-to copy keeps the existing sentence (handles/links) and, when
+  `asked_text` is present, a Markdown blockquote of the invoking post.
+  Invocation text is HTML-escaped and markdown-neutralized so a crafted
+  Bluesky post cannot inject markup.
 
   New full-response documents only. Existing published records are not rewritten
   by the publication path.
   """
 
-  alias ContextBot.ATProto.ATURI
+  alias ContextBot.ATProto.{ATURI, Post}
+  alias ContextBot.Research.ReplyLimits
   alias ContextBot.Settings
   alias ContextBot.Workflow.Invocation
 
@@ -91,10 +94,17 @@ defmodule ContextBot.StandardSite.PageCopy do
     end
   end
 
-  @doc "Optional excerpt: compact reply (`selected_reply`), truncated only to the lexicon max."
+  @doc """
+  Optional excerpt: the full compact, truncated only to the lexicon max.
+
+  Prefers `compact_source` when present. Otherwise joins `selected_reply`/`text`
+  with optional `text_part2`/`selected_reply_part2` by stripping a trailing
+  continuation ellipsis from part 1, a leading one from part 2, and a trailing
+  `Post.link_suffix/0`.
+  """
   @spec description(content()) :: String.t() | nil
   def description(content) when is_map(content) do
-    case optional_text(content, :selected_reply) do
+    case description_source(content) do
       reply when is_binary(reply) and reply != "" ->
         truncate_graphemes(reply, @description_lexicon_graphemes)
 
@@ -147,6 +157,60 @@ defmodule ContextBot.StandardSite.PageCopy do
       {line, asked} -> line <> "\n\n" <> blockquote(asked)
     end
   end
+
+  defp description_source(content) do
+    case optional_text(content, :compact_source) do
+      source when is_binary(source) and source != "" ->
+        source
+
+      _missing ->
+        part1 = optional_text(content, :selected_reply) || optional_text(content, :text)
+
+        part2 =
+          optional_text(content, :text_part2) || optional_text(content, :selected_reply_part2)
+
+        join_compact_parts(part1, part2)
+    end
+  end
+
+  defp join_compact_parts(part1, part2)
+       when is_binary(part1) and part1 != "" and is_binary(part2) and part2 != "" do
+    part1
+    |> strip_trailing_ellipsis()
+    |> Kernel.<>(strip_leading_ellipsis(part2))
+    |> strip_trailing_link_suffix()
+  end
+
+  defp join_compact_parts(part1, _part2) when is_binary(part1) and part1 != "", do: part1
+  defp join_compact_parts(_part1, _part2), do: nil
+
+  defp strip_trailing_ellipsis(text) do
+    cond do
+      String.ends_with?(text, ReplyLimits.continuation_ellipsis()) ->
+        String.replace_suffix(text, ReplyLimits.continuation_ellipsis(), "")
+
+      String.ends_with?(text, "...") ->
+        String.replace_suffix(text, "...", "")
+
+      true ->
+        text
+    end
+  end
+
+  defp strip_leading_ellipsis(text) do
+    cond do
+      String.starts_with?(text, ReplyLimits.continuation_ellipsis()) ->
+        String.replace_prefix(text, ReplyLimits.continuation_ellipsis(), "")
+
+      String.starts_with?(text, "...") ->
+        String.replace_prefix(text, "...", "")
+
+      true ->
+        text
+    end
+  end
+
+  defp strip_trailing_link_suffix(text), do: String.replace_suffix(text, Post.link_suffix(), "")
 
   defp invocation_record(invocation) do
     thread = field(invocation, :raw_thread)

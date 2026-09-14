@@ -58,7 +58,9 @@ defmodule ContextBot.StandardSite.Document do
           optional(:invoker_handle) => String.t() | nil,
           optional(:parent_handle) => String.t() | nil,
           optional(:document_title) => String.t() | nil,
-          optional(:document_reader_url) => String.t()
+          optional(:document_reader_url) => String.t(),
+          optional(:compact_source) => String.t(),
+          optional(:text_part2) => String.t()
         }
 
   @type result ::

@@ -178,6 +178,30 @@ defmodule ContextBot.StandardSite.PageCopyTest do
       assert PageCopy.description(%{asked_text: @bird_invocation, selected_reply: ""}) == nil
       assert PageCopy.description(%{asked_text: @bird_invocation}) == nil
     end
+
+    test "prefers compact_source over a Bluesky-shortened selected_reply" do
+      original = "Americans are getting sicker, but the FDA-cut link is unverified."
+      part1 = "Americans are getting sicker, but the FDA-cut…"
+      part2 = "…link is unverified. (full response)"
+
+      assert PageCopy.description(%{
+               asked_text: @bird_invocation,
+               selected_reply: part1,
+               compact_source: original,
+               text_part2: part2
+             }) == original
+    end
+
+    test "joins published part1 and part2 without ellipses or the link suffix" do
+      part1 = "Americans are getting sicker, but the FDA-cut…"
+      part2 = "…link is unverified. (full response)"
+
+      assert PageCopy.description(%{
+               asked_text: @bird_invocation,
+               selected_reply: part1,
+               text_part2: part2
+             }) == "Americans are getting sicker, but the FDA-cutlink is unverified."
+    end
   end
 
   describe "asked_markdown/1" do
