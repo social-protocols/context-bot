@@ -7,7 +7,10 @@ defmodule ContextBot.Research.Pricing do
   to, the duration-specific counts.
   """
 
+  # Sonnet 5.5 lists the same $2/$10 and cache rates as Sonnet 5.
+  # Keep the existing table as the default; the 5.5 alias is optional.
   @version "sonnet-5-2026-07-28"
+  @sonnet_5_5_version "sonnet-5-5-2026-09-28"
 
   @enforce_keys [
     :version,
@@ -43,9 +46,15 @@ defmodule ContextBot.Research.Pricing do
         }
 
   @spec current() :: t()
-  def current do
+  def current, do: rates(@version)
+
+  @spec fetch(String.t()) :: {:ok, t()} | {:error, :unknown_pricing_version}
+  def fetch(version) when version in [@version, @sonnet_5_5_version], do: {:ok, rates(version)}
+  def fetch(_version), do: {:error, :unknown_pricing_version}
+
+  defp rates(version) do
     %__MODULE__{
-      version: @version,
+      version: version,
       input: {2, 1},
       cache_write_5m: {5, 2},
       cache_write_1h: {4, 1},
@@ -55,10 +64,6 @@ defmodule ContextBot.Research.Pricing do
       max_context_tokens: 1_000_000
     }
   end
-
-  @spec fetch(String.t()) :: {:ok, t()} | {:error, :unknown_pricing_version}
-  def fetch(@version), do: {:ok, current()}
-  def fetch(_version), do: {:error, :unknown_pricing_version}
 
   @spec fetch!(String.t()) :: t()
   def fetch!(version) do

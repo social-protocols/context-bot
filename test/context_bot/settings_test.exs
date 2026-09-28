@@ -275,6 +275,24 @@ defmodule ContextBot.SettingsTest do
     end
   end
 
+  test "accepts Sonnet 5.5 as the research model with Sonnet 5 pricing" do
+    default_pricing =
+      Settings.load(%{"ANTHROPIC_MODEL_ID" => "claude-sonnet-5-5"})
+
+    assert default_pricing.anthropic_model_id == "claude-sonnet-5-5"
+    assert default_pricing.anthropic_structure_model_id == "claude-sonnet-5-5"
+    assert default_pricing.anthropic_pricing_version == "sonnet-5-2026-07-28"
+    assert default_pricing.anthropic_effort == :medium
+
+    aliased =
+      Settings.load(%{
+        "ANTHROPIC_MODEL_ID" => "claude-sonnet-5-5",
+        "ANTHROPIC_PRICING_VERSION" => "sonnet-5-5-2026-09-28"
+      })
+
+    assert aliased.anthropic_pricing_version == "sonnet-5-5-2026-09-28"
+  end
+
   test "defaults the structure-phase model to the research model" do
     defaulted = Settings.load(%{"ANTHROPIC_TITLE_MODEL_ID" => "claude-haiku-4-5"})
     assert defaulted.anthropic_model_id == "claude-sonnet-5"
