@@ -47,7 +47,7 @@ defmodule ContextBot.MixProject do
       {:phoenix, "~> 1.8.9"},
       {:phoenix_ecto, "~> 4.5"},
       {:ecto_sql, "~> 3.13"},
-      {:ecto_sqlite3, "~> 0.24.1"},
+      {:ecto_sqlite3, "~> 0.25.0"},
       {:req, "~> 0.7.1"},
       {:finch, "~> 0.23.0"},
       {:mint, "~> 1.10"},
