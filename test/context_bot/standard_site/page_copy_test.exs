@@ -415,6 +415,25 @@ defmodule ContextBot.StandardSite.PageCopyTest do
       assert markdown =~ "> !\\[pic\\](https://evil.test/x)"
       assert markdown =~ "> \\*\\*bold\\*\\*"
     end
+
+    test "keeps an apostrophe in the invoking-post blockquote" do
+      asked = "@getcontext.bot what's the source of this quote?"
+
+      markdown =
+        PageCopy.asked_markdown(%{
+          asked_text: asked,
+          invocation_uri: @invocation_uri,
+          invoker_handle: "alice.test"
+        })
+
+      [blockquote_line | _] = String.split(markdown, "\n")
+
+      assert blockquote_line == "> #{asked}"
+      assert String.contains?(blockquote_line, "what's")
+      refute String.contains?(blockquote_line, "&#39;")
+      refute String.contains?(blockquote_line, "\\#39")
+      refute String.contains?(blockquote_line, "&\\#39")
+    end
   end
 
   describe "subject/2" do
