@@ -96,17 +96,18 @@ The POC is direct-mention-only, not proactive moderation. It has no UI and does 
 
 ## Environment
 
-Devbox plus direnv is the mandatory development environment. Devbox supplies Elixir 1.20, Erlang/OTP 28, SQLite, `just`, Fly, Bitwarden CLI, Docker CLI, and code-quality tools.
+On a laptop, Devbox plus direnv is the development environment. Devbox supplies Elixir 1.20, Erlang/OTP 28, SQLite, `just`, Fly, Bitwarden CLI, Docker CLI, and code-quality tools.
 
 - In a human terminal, run `direnv allow` once per checkout or worktree, then use `just ...`.
-- In automated or non-interactive shells, always run `direnv exec . <command>` so the Devbox environment is applied.
+- In automated or non-interactive laptop shells, use `direnv exec . <command>` so the Devbox environment is applied.
+- Cloud VMs have no direnv and run `just` directly; the toolchain comes from `.cursor/Dockerfile`.
 - Do not assume globally installed Elixir, Erlang, SQLite, Fly, Bitwarden, Docker client, or quality tools.
 - A host Docker daemon is required only for local image builds.
-- Cursor cloud agents boot from `.cursor/Dockerfile` (hexpm Elixir/OTP, not Nix). Keep that image aligned with the non-Beam packages in `devbox.json`. Do not replace the Devbox+direnv human workflow.
+- Cursor cloud agents boot from `.cursor/Dockerfile` (hexpm Elixir/OTP, not Nix). Keep that image aligned with the non-Beam packages in `devbox.json`. Do not replace the Devbox+direnv laptop workflow.
 
 ## Isolated worktrees
 
-Use an isolated worktree for substantial feature or implementation-plan work:
+Laptop path for substantial feature or implementation-plan work:
 
 ```bash
 git worktree add .worktrees/my-feature -b feature/my-feature main
@@ -136,7 +137,7 @@ Cursor cloud agents set `core.hooksPath=.githooks` during environment setup. The
 
 ## Cursor Cloud specific instructions
 
-After boot, rebase a feature branch onto `origin/main` before editing. Do not assume start’s fetch has finished if you need `origin/main` immediately — wait for it, or fetch once if refs are stale. Do not assume the VM checkout or Cursor Build snapshot is current. Fetch and rebase again before opening or updating a PR if `main` has moved.
+`.cursor/session-start.sh` already fetches, fast-forwards trunk, and rebases a feature branch onto `origin/main` (aborts on conflict). Start is detached, so wait for it if you need `origin/main` immediately. Do not assume the VM checkout or Cursor Build snapshot is current. Rebase by hand only if start failed.
 
 ## Commands
 
