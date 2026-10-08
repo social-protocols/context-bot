@@ -74,7 +74,7 @@ If this repo has `.githooks`, environment setup must set `core.hooksPath=.githoo
 
 ## Incomplete work
 
-The Bot that owns this repo owns open PRs, CI, merge conflicts, and drafts. Check at the weekday 8:56 Europe/Madrid run and whenever a signal arrives. Act without waiting to be nudged. Stay silent if nothing is new.
+The Bot that owns this repo owns open PRs, CI, merge conflicts, and drafts. Check at the weekday 8:56 America/Denver run and whenever a signal arrives. Act without waiting to be nudged. Stay silent if nothing is new.
 
 When trunk moves: rebase remaining **non-parked** feature/`cursor/*` PRs. Skip PRs Jonathan has parked (do not nag, do not rebase).
 
