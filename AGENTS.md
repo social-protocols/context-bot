@@ -140,7 +140,7 @@ After boot, rebase a feature branch onto `origin/main` before editing. Do not as
 
 ## Commands
 
-Commands are `just` recipes. Run `just check` before claiming done (on a laptop, `direnv exec . just check`). Secrets only via `secrets.sh` in the recipes that need them.
+Commands are `just` recipes. Run `just check` before claiming done (on a laptop, `direnv exec . just check`). Secrets only via `secrets.sh` in the recipes that need them. Never make direnv exec the only documented way; cloud VMs have no direnv.
 
 | Command | Purpose |
 |---|---|
