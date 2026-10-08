@@ -12,8 +12,8 @@ defmodule ContextBot.StandardSite.PageCopy do
   Responding-to copy keeps the existing sentence (handles/links). When
   `asked_text` is present, the invoking post is a Markdown blockquote first
   and the sentence sits under it as a `<small><em>` caption. Invocation text
-  is HTML-escaped and markdown-neutralized so a crafted Bluesky post cannot
-  inject markup.
+  is HTML-escaped (`&` `<` `>` `"`) and markdown-neutralized so a crafted
+  Bluesky post cannot inject markup. Apostrophes stay as `'`.
 
   New full-response documents only. Existing published records are not rewritten
   by the publication path.
@@ -31,8 +31,10 @@ defmodule ContextBot.StandardSite.PageCopy do
   @description_lexicon_graphemes 3_000
   @fallback_title "Context request"
   # Punctuation that opens markdown constructs. `[` is enough to kill links
-  # and images, so `!` `(` `)` stay readable. HTML specials are entity-encoded
-  # instead: a backslash before `<` still becomes a raw `<` in HTML output.
+  # and images, so `!` `(` `)` stay readable. HTML specials `&` `<` `>` `"`
+  # are entity-encoded instead: a backslash before `<` still becomes a raw
+  # `<` in HTML output. Apostrophe is left as `'`; encoding it as `&#39;`
+  # would let markdown `#` escaping turn the entity into `&\#39;`.
   @markdown_specials ["\\", "`", "*", "_", "[", "]", "#", "|"]
 
   @type content :: %{optional(atom()) => term()}
@@ -382,7 +384,6 @@ defmodule ContextBot.StandardSite.PageCopy do
     |> String.replace("<", "&lt;")
     |> String.replace(">", "&gt;")
     |> String.replace("\"", "&quot;")
-    |> String.replace("'", "&#39;")
   end
 
   defp escape_markdown(text) do
