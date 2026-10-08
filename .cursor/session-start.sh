@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
-# Install as .cursor/session-start.sh; environment.json "start" → that path.
+# Canonical copy: repo-setup/templates/session-start.sh in johnwarden/agents.
+# Install as .cursor/session-start.sh and set environment.json "start" to that
+# path. Cursor runs start on every Cloud Agent boot (detached).
 # Optional .cursor/trunk: one line naming the integration branch (default main).
+# A feature branch that was already pushed is rebased here, so push it with
+# --force-with-lease afterwards.
+# Allowed variant (do not change this default): a repo with no single trunk may
+# ship a fetch-only start (no ff/rebase) when .cursor/trunk is absent, if it
+# documents why.
 set -u
 if [[ -d .githooks ]]; then
   git config core.hooksPath .githooks
@@ -22,6 +29,7 @@ git fetch origin --prune || {
 branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
 
 if [[ "$branch" == "$trunk" ]]; then
+  # Fast-forward only. Never a merge commit.
   git merge --ff-only "origin/${trunk}" || echo "WARN: could not ff-only ${trunk} to origin/${trunk}" >&2
 elif [[ "$branch" != "HEAD" ]]; then
   if ! git rebase "origin/${trunk}"; then

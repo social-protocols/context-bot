@@ -10,6 +10,7 @@
     "bitwarden-cli":                                               "latest",
     "docker-client":                                               "latest",
     "git":                                                         "latest",
+    "bash":                                                        "latest",
     "jq":                                                          "latest",
     "curl":                                                        "latest",
     "shellcheck":                                                  "latest",

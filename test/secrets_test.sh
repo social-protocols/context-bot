@@ -2,6 +2,7 @@
 # Test scenarios intentionally isolate environment changes in subshells.
 # shellcheck disable=SC2030,SC2031
 set -euo pipefail
+shopt -s inherit_errexit
 
 # `just` intentionally loads a developer's ignored `.env`; tests must not inherit those names.
 unset FLY_API_TOKEN SECRET_KEY_BASE BOT_APP_PASSWORD ANTHROPIC_API_KEY

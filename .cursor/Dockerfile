@@ -3,8 +3,8 @@
 # tag instead of Nix.
 #
 # Non-Beam counterparts on PATH: just, flyctl, bitwarden-cli (bw),
-# docker-client (docker), git, jq, curl, shellcheck, shfmt, flock,
-# coreutils, sqlite-interactive (sqlite3).
+# docker-client (docker), git, bash (already on Debian), jq, curl,
+# shellcheck, shfmt, flock, coreutils, sqlite-interactive (sqlite3).
 
 FROM hexpm/elixir:1.20.2-erlang-28.5.0.3-debian-trixie-20260713-slim
 
