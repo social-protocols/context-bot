@@ -479,8 +479,11 @@ defmodule ContextBot.Research.Request do
 
   No web tools. JSON schema is disposition/title/compact_reply only.
   Sonnet 5 turns adaptive thinking on when `thinking` is omitted, so
-  structure sends `thinking.type=disabled`. No `output_config.effort`.
-  Title rewrite stays on Haiku and still omits `thinking`.
+  structure sends `thinking.type=disabled`. Sonnet 5.5 400s that value
+  and uses `thinking.type=between_tools` as the lowest setting instead.
+  Structure stays effort-free: `between_tools` accepts omitted effort
+  and rejects `xhigh`/`max`; research effort is unchanged. Title rewrite
+  stays on Haiku and still omits `thinking`.
   """
   @spec structure(structure_config()) :: map()
   def structure(%{
@@ -497,7 +500,7 @@ defmodule ContextBot.Research.Request do
       "max_tokens" => max_tokens,
       "stream" => false,
       "cache_control" => %{"type" => "ephemeral"},
-      "thinking" => %{"type" => "disabled"},
+      "thinking" => structure_thinking(model_id),
       "output_config" => %{
         "format" => %{
           "type" => "json_schema",
@@ -534,7 +537,7 @@ defmodule ContextBot.Research.Request do
       "max_tokens" => max_tokens,
       "stream" => false,
       "cache_control" => %{"type" => "ephemeral"},
-      "thinking" => %{"type" => "disabled"},
+      "thinking" => structure_thinking(model_id),
       "output_config" => %{
         "format" => %{
           "type" => "json_schema",
@@ -574,6 +577,14 @@ defmodule ContextBot.Research.Request do
   end
 
   def structure_repair_request?(_request), do: false
+
+  defp structure_thinking(model_id) do
+    %{"type" => if(sonnet_5_5?(model_id), do: "between_tools", else: "disabled")}
+  end
+
+  defp sonnet_5_5?(model_id) when is_binary(model_id) do
+    String.starts_with?(model_id, "claude-sonnet-5-5")
+  end
 
   defp structure_user_message(thread_text, writeup, citations) do
     structure_body(thread_text, writeup, citations, nil)
