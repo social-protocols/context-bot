@@ -49,7 +49,7 @@ defmodule ContextBot.MixProject do
       {:ecto_sql, "~> 3.13"},
       {:ecto_sqlite3, "~> 0.25.0"},
       {:req, "~> 0.7.1"},
-      {:finch, "~> 0.23.0"},
+      {:finch, "~> 0.24.0"},
       {:mint, "~> 1.10"},
       {:oban, "~> 2.24.0"},
       {:telemetry_metrics, "~> 1.0"},
