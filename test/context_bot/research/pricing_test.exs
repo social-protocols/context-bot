@@ -127,6 +127,28 @@ defmodule ContextBot.Research.PricingTest do
     end
   end
 
+  test "prices Sonnet 5.5 with the same rates as Sonnet 5" do
+    sonnet_5 = Pricing.fetch!("sonnet-5-2026-07-28")
+    sonnet_5_5 = Pricing.fetch!("sonnet-5-5-2026-09-28")
+
+    assert sonnet_5.input == {2, 1}
+    assert sonnet_5.output == {10, 1}
+    assert sonnet_5.cache_write_5m == {5, 2}
+    assert sonnet_5.cache_write_1h == {4, 1}
+    assert sonnet_5.cache_read == {1, 5}
+    assert sonnet_5.web_search == {10_000, 1}
+    assert sonnet_5.max_context_tokens == 1_000_000
+
+    assert sonnet_5_5.version == "sonnet-5-5-2026-09-28"
+    assert sonnet_5_5.input == sonnet_5.input
+    assert sonnet_5_5.output == sonnet_5.output
+    assert sonnet_5_5.cache_write_5m == sonnet_5.cache_write_5m
+    assert sonnet_5_5.cache_write_1h == sonnet_5.cache_write_1h
+    assert sonnet_5_5.cache_read == sonnet_5.cache_read
+    assert sonnet_5_5.web_search == sonnet_5.web_search
+    assert sonnet_5_5.max_context_tokens == sonnet_5.max_context_tokens
+  end
+
   test "carries a provider-side context ceiling for conservative request exposure" do
     pricing = Pricing.fetch!("sonnet-5-2026-07-28")
 

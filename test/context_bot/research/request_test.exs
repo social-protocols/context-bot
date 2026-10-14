@@ -693,6 +693,40 @@ defmodule ContextBot.Research.RequestTest do
     refute Jason.encode!(request) =~ "minLength"
   end
 
+  test "structure and structure_repair use between_tools on Sonnet 5.5 and stay effort-free" do
+    for model_id <- ["claude-sonnet-5-5", "claude-sonnet-5-5-20260929"] do
+      structure = Request.structure(structure_args(model_id))
+      repair = Request.structure_repair(structure_args(model_id, max_tokens: 256))
+
+      assert structure["model"] == model_id
+      assert structure["thinking"] == %{"type" => "between_tools"}
+      refute Map.has_key?(structure["thinking"], "display")
+      refute Map.has_key?(structure["thinking"], "budget_tokens")
+      refute Map.has_key?(structure, "tools")
+      refute Map.has_key?(structure, "effort")
+      refute Map.has_key?(structure["output_config"], "effort")
+      refute Jason.encode!(structure) =~ "disabled"
+      refute Jason.encode!(structure) =~ "adaptive"
+
+      assert repair["model"] == model_id
+      assert repair["thinking"] == %{"type" => "between_tools"}
+      refute Map.has_key?(repair["output_config"], "effort")
+      refute Jason.encode!(repair) =~ "disabled"
+    end
+  end
+
+  test "structure keeps disabled thinking on Sonnet 5, including dated pins" do
+    for model_id <- ["claude-sonnet-5", "claude-sonnet-5-20260715"] do
+      structure = Request.structure(structure_args(model_id))
+      repair = Request.structure_repair(structure_args(model_id, max_tokens: 256))
+
+      assert structure["thinking"] == %{"type" => "disabled"}
+      assert repair["thinking"] == %{"type" => "disabled"}
+      refute Jason.encode!(structure) =~ "between_tools"
+      refute Jason.encode!(repair) =~ "between_tools"
+    end
+  end
+
   test "structure user turn includes code-measured draft counts when drafts parse" do
     alias ContextBot.Research.{Drafts, ReplyLimits}
 
@@ -989,6 +1023,16 @@ defmodule ContextBot.Research.RequestTest do
       max_web_fetch_content_tokens: 10_000,
       web_search_tool_type: "web_search_20260318",
       web_fetch_tool_type: "web_fetch_20260318"
+    }
+  end
+
+  defp structure_args(model_id, opts \\ []) do
+    %{
+      model_id: model_id,
+      max_tokens: Keyword.get(opts, :max_tokens, 1_024),
+      writeup: "Cited writeup.",
+      citations: [],
+      canonical_thread: @canonical_thread.text
     }
   end
 end
