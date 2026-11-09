@@ -78,7 +78,9 @@ Human progress is written to stdout. Application logs are structured JSON Lines 
 default; set `CONTEXT_BOT_LOG_PATH` to an absolute path to append those logs to a file instead. Log
 metadata is strictly allowlisted and never includes post text, prompts, responses, headers, or
 credentials. The ordinary research defaults use medium effort, at most 4,096 output tokens, two web
-searches, two web fetches, 10,000 fetched-content tokens, and one tool continuation. Server-side tool
+searches, two web fetches, 10,000 fetched-content tokens, and one tool continuation.
+A Sonnet 5 vs Sonnet 5.5 dry-run A/B is `ANTHROPIC_MODEL_ID=claude-sonnet-5-5` with the same
+`ANTHROPIC_EFFORT=medium` and existing Sonnet 5 pricing; do not change the default model. Server-side tool
 content can still contribute substantially to Anthropic input billing even when it is excluded from
 the returned response, so the printed settled cost—not visible response length—is authoritative.
 
